@@ -3458,6 +3458,22 @@ describe('BrowserWindow module', () => {
         expect(w.getSize()).to.deep.equal(size);
       });
     });
+
+    describe('"defaultFontFamily" option', () => {
+      it('can change the standard font family', async () => {
+        const w = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            defaultFontFamily: {
+              standard: 'Impact'
+            }
+          }
+        });
+        await w.loadFile(path.join(fixtures, 'pages', 'content.html'));
+        const fontFamily = await w.webContents.executeJavaScript("window.getComputedStyle(document.getElementsByTagName('p')[0])['font-family']", true);
+        expect(fontFamily).to.equal('Impact');
+      });
+    });
   });
 
   describe('beforeunload handler', function () {
@@ -5201,6 +5217,22 @@ describe('BrowserWindow module', () => {
         w.previewFile(__filename);
         w.closeFilePreview();
       }).to.not.throw();
+    });
+
+    it('should not call BrowserWindow show event', async () => {
+      const w = new BrowserWindow({ show: false });
+      const shown = emittedOnce(w, 'show');
+      w.show();
+      await shown;
+
+      let showCalled = false;
+      w.on('show', () => {
+        showCalled = true;
+      });
+
+      w.previewFile(__filename);
+      await delay(500);
+      expect(showCalled).to.equal(false, 'should not have called show twice');
     });
   });
 

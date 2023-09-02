@@ -128,8 +128,6 @@ Emitted when the user wants to open a URL with the application. Your application
 `Info.plist` file must define the URL scheme within the `CFBundleURLTypes` key, and
 set `NSPrincipalClass` to `AtomApplication`.
 
-You should call `event.preventDefault()` if you want to handle this event.
-
 As with the `open-file` event, be sure to register a listener for the `open-url`
 event early in your application startup to detect if the the application being
 is being opened to handle a URL. If you register the listener in response to a
@@ -750,14 +748,21 @@ This API can be used for purposes such as deciding what language to present the 
 
 Here are some examples of return values of the various language and locale APIs with different configurations:
 
-* For Windows, where the application locale is German, the regional format is Finnish (Finland), and the preferred system languages from most to least preferred are French (Canada), English (US), Simplified Chinese (China), Finnish, and Spanish (Latin America):
-  * `app.getLocale()` returns `'de'`
-  * `app.getSystemLocale()` returns `'fi-FI'`
-  * `app.getPreferredSystemLanguages()` returns `['fr-CA', 'en-US', 'zh-Hans-CN', 'fi', 'es-419']`
-* On macOS, where the application locale is German, the region is Finland, and the preferred system languages from most to least preferred are French (Canada), English (US), Simplified Chinese, and Spanish (Latin America):
-  * `app.getLocale()` returns `'de'`
-  * `app.getSystemLocale()` returns `'fr-FI'`
-  * `app.getPreferredSystemLanguages()` returns `['fr-CA', 'en-US', 'zh-Hans-FI', 'es-419']`
+On Windows, given application locale is German, the regional format is Finnish (Finland), and the preferred system languages from most to least preferred are French (Canada), English (US), Simplified Chinese (China), Finnish, and Spanish (Latin America):
+
+```js
+app.getLocale() // 'de'
+app.getSystemLocale() // 'fi-FI'
+app.getPreferredSystemLanguages() // ['fr-CA', 'en-US', 'zh-Hans-CN', 'fi', 'es-419']
+```
+
+On macOS, given the application locale is German, the region is Finland, and the preferred system languages from most to least preferred are French (Canada), English (US), Simplified Chinese, and Spanish (Latin America):
+
+```js
+app.getLocale() // 'de'
+app.getSystemLocale() // 'fr-FI'
+app.getPreferredSystemLanguages() // ['fr-CA', 'en-US', 'zh-Hans-FI', 'es-419']
+```
 
 Both the available languages and regions and the possible return values differ between the two operating systems.
 
