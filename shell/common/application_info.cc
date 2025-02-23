@@ -39,8 +39,7 @@ std::string GetApplicationUserAgent() {
   if (!base::RemoveChars(browser->GetName(), " ", &name))
     name = browser->GetName();
   if (name == ELECTRON_PRODUCT_NAME) {
-    user_agent = "Chrome/" CHROME_VERSION_STRING " " ELECTRON_PRODUCT_NAME
-                 "/" ELECTRON_VERSION_STRING;
+    user_agent = "Chrome/" CHROME_VERSION_STRING;
   } else {
     user_agent = absl::StrFormat(
         "%s/%s Chrome/%s " ELECTRON_PRODUCT_NAME "/" ELECTRON_VERSION_STRING,
