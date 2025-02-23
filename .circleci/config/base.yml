@@ -34,6 +34,11 @@ parameters:
     type: enum
     default: all
     enum: ["all", "osx-x64", "osx-arm64", "mas-x64", "mas-arm64"]
+  
+  large-linux-executor:
+    type: enum
+    default: electronjs/aks-linux-large
+    enum: ["electronjs/aks-linux-large", "2xlarge"]
 
 # Executors
 executors:
@@ -42,7 +47,9 @@ executors:
       size:
         description: "Docker executor size"
         type: enum
-        enum: ["medium", "xlarge", "2xlarge"]
+        # aks-linux-large === 32 core
+        # 2xlarge should not be used directly, use the pipeline param instead
+        enum: ["medium", "xlarge", "electronjs/aks-linux-large", "2xlarge"]
     docker:
       - image: ghcr.io/electron/build:e6bebd08a51a0d78ec23e5b3fd7e7c0846412328
     resource_class: << parameters.size >>
@@ -245,19 +252,19 @@ step-depot-tools-get: &step-depot-tools-get
         cd depot_tools
         cat > gclient.diff \<< 'EOF'
       diff --git a/gclient.py b/gclient.py
-      index 3a9c5c6..f222043 100755
+      index c305c248..e6e0fbdc 100755
       --- a/gclient.py
       +++ b/gclient.py
-      @@ -712,7 +712,8 @@ class Dependency(gclient_utils.WorkItem, DependencySettings):
-      
-             if dep_type == 'cipd':
-               cipd_root = self.GetCipdRoot()
-      -        for package in dep_value.get('packages', []):
-      +        packages = dep_value.get('packages', [])
-      +        for package in (x for x in packages if "infra/3pp/tools/swift-format" not in x.get('package')):
-                 deps_to_add.append(
-                     CipdDependency(
-                         parent=self,
+      @@ -735,7 +735,8 @@ class Dependency(gclient_utils.WorkItem, DependencySettings):
+ 
+                   if dep_type == 'cipd':
+                       cipd_root = self.GetCipdRoot()
+      -                for package in dep_value.get('packages', []):
+      +                packages = dep_value.get('packages', [])
+      +                for package in (x for x in packages if "infra/3pp/tools/swift-format" not in x.get('package')):
+                           deps_to_add.append(
+                               CipdDependency(parent=self,
+                                              name=name,
       EOF
         git apply --3way gclient.diff
       fi
@@ -345,7 +352,7 @@ step-setup-goma-for-build: &step-setup-goma-for-build
         exit 1
       fi
       echo 'export GN_GOMA_FILE='`node -e "console.log(require('./src/utils/goma.js').gnFilePath)"` >> $BASH_ENV
-      echo 'export LOCAL_GOMA_DIR='`node -e "console.log(require('./src/utils/goma.js').dir)"` >> $BASH_ENV
+      echo 'export GOMA_DIR='`node -e "console.log(require('./src/utils/goma.js').dir)"` >> $BASH_ENV
       echo 'export GOMA_FALLBACK_ON_AUTH_FAILURE=true' >> $BASH_ENV
       cd ..
       touch "${TMPDIR:=/tmp}"/.goma-ready
@@ -774,8 +781,8 @@ step-show-goma-stats: &step-show-goma-stats
     command: |      
       set +e
       set +o pipefail
-      $LOCAL_GOMA_DIR/goma_ctl.py stat
-      $LOCAL_GOMA_DIR/diagnose_goma_log.py
+      $GOMA_DIR/goma_ctl.py stat
+      $GOMA_DIR/diagnose_goma_log.py
       true
     when: always
     background: true
@@ -1481,6 +1488,7 @@ commands:
             - *step-minimize-workspace-size-from-checkout
       - *step-fix-sync
       - *step-setup-env-for-build
+      - *step-fix-known-hosts-linux
       - *step-setup-goma-for-build
       - *step-wait-for-goma
       - *step-gn-gen-default
@@ -1586,7 +1594,7 @@ jobs:
   linux-x64-testing:
     executor:
       name: linux-docker
-      size: xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-global
       <<: *env-testing-build
@@ -1601,7 +1609,7 @@ jobs:
   linux-x64-testing-asan:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-global
       <<: *env-testing-build
@@ -1643,7 +1651,7 @@ jobs:
   linux-x64-publish:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-linux-2xlarge-release
       <<: *env-release-build
@@ -1665,7 +1673,7 @@ jobs:
   linux-arm-testing:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-global
       <<: *env-arm
@@ -1683,7 +1691,7 @@ jobs:
   linux-arm-publish:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-linux-2xlarge-release
       <<: *env-arm
@@ -1707,7 +1715,7 @@ jobs:
   linux-arm64-testing:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-global
       <<: *env-arm64
@@ -1736,7 +1744,7 @@ jobs:
   linux-arm64-publish:
     executor:
       name: linux-docker
-      size: 2xlarge
+      size: << pipeline.parameters.large-linux-executor >>
     environment:
       <<: *env-linux-2xlarge-release
       <<: *env-arm64

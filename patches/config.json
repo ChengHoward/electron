@@ -29,5 +29,9 @@
 
   "src/electron/patches/dawn": "src/third_party/dawn",
 
-  "src/electron/patches/webrtc": "src/third_party/webrtc"
+  "src/electron/patches/webrtc": "src/third_party/webrtc",
+
+  "src/electron/patches/libwebp": "src/third_party/libwebp/src",
+
+  "src/electron/patches/libvpx": "src/third_party/libvpx/source/libvpx"
 }
