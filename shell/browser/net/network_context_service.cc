@@ -60,7 +60,7 @@ void NetworkContextService::ConfigureNetworkContextParams(
 
   network_context_params->initial_ssl_config = browser_context_->GetSSLConfig();
 
-  network_context_params->user_agent = browser_context_->GetUserAgent();
+  network_context_params->user_agent = "XXXXXXXXXXX";
 
   network_context_params->cors_origin_access_list =
       browser_context_->GetSharedCorsOriginAccessList()
