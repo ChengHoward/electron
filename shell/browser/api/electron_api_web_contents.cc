@@ -85,6 +85,7 @@
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
 #include "media/base/mime_util.h"
+#include "net/http/http_util.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -121,6 +122,7 @@
 #include "shell/browser/ui/file_dialog.h"
 #include "shell/browser/ui/inspectable_web_contents.h"
 #include "shell/browser/ui/inspectable_web_contents_view.h"
+#include "shell/browser/user_agent_options.h"
 #include "shell/browser/web_contents_permission_helper.h"
 #include "shell/browser/web_contents_preferences.h"
 #include "shell/browser/web_contents_zoom_controller.h"
@@ -3050,13 +3052,71 @@ void WebContents::ForcefullyCrashRenderer() {
   }
 }
 
-void WebContents::SetUserAgent(const std::string& user_agent) {
+void WebContents::SetUserAgent(const std::string& user_agent,
+                               gin::Arguments* args) {
+  blink::UserAgentMetadata default_metadata =
+      embedder_support::GetUserAgentMetadata();
+  UserAgentOptions options;
+  std::string error;
+
+  if (args) {
+    if (!ParseUserAgentOptions(args, default_metadata, &options, &error)) {
+      args->ThrowTypeError(error);
+      return;
+    }
+  } else if (auto* context = GetBrowserContext()) {
+    options.platform = context->GetNavigatorPlatformOverride();
+    if (context->IsUserAgentMetadataDisabled()) {
+      options.metadata_policy = UserAgentMetadataPolicy::kDisabled;
+    } else if (context->GetUserAgentMetadataOverride()) {
+      options.metadata_policy = UserAgentMetadataPolicy::kCustom;
+      options.user_agent_metadata = *context->GetUserAgentMetadataOverride();
+    } else {
+      options.metadata_policy = UserAgentMetadataPolicy::kDefault;
+    }
+    std::string accept_language = context->GetAcceptLanguageOverride();
+    if (!accept_language.empty())
+      options.accept_language = std::move(accept_language);
+  }
+
   blink::UserAgentOverride ua_override;
   ua_override.ua_string_override = user_agent;
-  if (!user_agent.empty())
-    ua_override.ua_metadata_override = embedder_support::GetUserAgentMetadata();
+  if (!user_agent.empty()) {
+    switch (options.metadata_policy) {
+      case UserAgentMetadataPolicy::kDisabled:
+        // Leave ua_metadata_override unset so Chromium strips Sec-CH-UA-*.
+        break;
+      case UserAgentMetadataPolicy::kCustom:
+        ua_override.ua_metadata_override = options.user_agent_metadata;
+        break;
+      case UserAgentMetadataPolicy::kDefault:
+        ua_override.ua_metadata_override = default_metadata;
+        break;
+    }
+  }
 
-  web_contents()->SetUserAgentOverride(ua_override, false);
+  auto* prefs = web_contents()->GetMutableRendererPrefs();
+  prefs->navigator_platform_override = options.platform;
+  if (options.accept_language) {
+    prefs->accept_languages =
+        net::HttpUtil::GenerateAcceptLanguageHeader(*options.accept_language);
+  }
+
+  // Mark the visible entry so renderer-initiated navigations (including
+  // cross-origin iframes) inherit the override via
+  // ShouldOverrideUserAgentForRendererInitiatedNavigation().
+  content::NavigationEntry* entry =
+      web_contents()->GetController().GetVisibleEntry();
+  if (entry)
+    entry->SetIsOverridingUserAgent(!user_agent.empty());
+
+  // override_in_new_tabs=true matches CDP-like persistence for subsequent
+  // navigations when there is no committed overriding entry yet.
+  web_contents()->SetUserAgentOverride(ua_override, !user_agent.empty());
+
+  // SetUserAgentOverride may early-return when ua_override is unchanged; still
+  // push navigator_platform_override / accept_languages to the renderer.
+  web_contents()->SyncRendererPrefs();
 }
 
 std::string WebContents::GetUserAgent() {
@@ -3841,6 +3901,270 @@ void WebContents::SendInputEvent(v8::Isolate* isolate,
 
   isolate->ThrowException(
       v8::Exception::Error(gin::StringToV8(isolate, "Invalid event object")));
+}
+
+namespace {
+
+blink::WebInputEvent::Type GetDispatchMouseEventType(const std::string& type) {
+  if (type == "mousePressed")
+    return blink::WebInputEvent::Type::kMouseDown;
+  if (type == "mouseReleased")
+    return blink::WebInputEvent::Type::kMouseUp;
+  if (type == "mouseMoved")
+    return blink::WebInputEvent::Type::kMouseMove;
+  if (type == "mouseWheel")
+    return blink::WebInputEvent::Type::kMouseWheel;
+  return blink::WebInputEvent::Type::kUndefined;
+}
+
+bool GetDispatchMouseEventButton(const std::string& button,
+                                 blink::WebPointerProperties::Button* out,
+                                 int* button_modifiers) {
+  *button_modifiers = 0;
+  if (button.empty() || button == "none") {
+    *out = blink::WebPointerProperties::Button::kNoButton;
+    return true;
+  }
+  if (button == "left") {
+    *out = blink::WebPointerProperties::Button::kLeft;
+    *button_modifiers = blink::WebInputEvent::kLeftButtonDown;
+    return true;
+  }
+  if (button == "middle") {
+    *out = blink::WebPointerProperties::Button::kMiddle;
+    *button_modifiers = blink::WebInputEvent::kMiddleButtonDown;
+    return true;
+  }
+  if (button == "right") {
+    *out = blink::WebPointerProperties::Button::kRight;
+    *button_modifiers = blink::WebInputEvent::kRightButtonDown;
+    return true;
+  }
+  if (button == "back") {
+    *out = blink::WebPointerProperties::Button::kBack;
+    *button_modifiers = blink::WebInputEvent::kBackButtonDown;
+    return true;
+  }
+  if (button == "forward") {
+    *out = blink::WebPointerProperties::Button::kForward;
+    *button_modifiers = blink::WebInputEvent::kForwardButtonDown;
+    return true;
+  }
+  return false;
+}
+
+int GetDispatchMouseEventModifiers(int modifiers, int buttons) {
+  // Match CDP Input.dispatchMouseEvent modifier bitfield:
+  // Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
+  int result = 0;
+  if (modifiers & 1)
+    result |= blink::WebInputEvent::kAltKey;
+  if (modifiers & 2)
+    result |= blink::WebInputEvent::kControlKey;
+  if (modifiers & 4)
+    result |= blink::WebInputEvent::kMetaKey;
+  if (modifiers & 8)
+    result |= blink::WebInputEvent::kShiftKey;
+  if (buttons & 1)
+    result |= blink::WebInputEvent::kLeftButtonDown;
+  if (buttons & 2)
+    result |= blink::WebInputEvent::kRightButtonDown;
+  if (buttons & 4)
+    result |= blink::WebInputEvent::kMiddleButtonDown;
+  if (buttons & 8)
+    result |= blink::WebInputEvent::kBackButtonDown;
+  if (buttons & 16)
+    result |= blink::WebInputEvent::kForwardButtonDown;
+  return result;
+}
+
+float GetDispatchMouseEventScaleFactor(content::WebContents* web_contents) {
+  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents);
+  content::RenderWidgetHost* rwh =
+      wc_impl->GetPrimaryMainFrame()->GetRenderWidgetHost();
+  auto* rwhi = content::RenderWidgetHostImpl::From(rwh);
+  float scale_factor =
+      blink::ZoomLevelToZoomFactor(wc_impl->GetPendingZoomLevel(rwhi));
+  scale_factor *= wc_impl->GetPrimaryPage().GetPageScaleFactor();
+  return scale_factor;
+}
+
+}  // namespace
+
+v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  gin_helper::Dictionary params;
+  if (!args->GetNext(&params)) {
+    promise.RejectWithErrorMessage(
+        "Expected an object matching CDP Input.dispatchMouseEvent params");
+    return handle;
+  }
+
+  std::string type;
+  double x = 0;
+  double y = 0;
+  if (!params.Get("type", &type) || !params.Get("x", &x) ||
+      !params.Get("y", &y)) {
+    promise.RejectWithErrorMessage("'type', 'x', and 'y' are required");
+    return handle;
+  }
+
+  blink::WebInputEvent::Type event_type = GetDispatchMouseEventType(type);
+  if (event_type == blink::WebInputEvent::Type::kUndefined) {
+    promise.RejectWithErrorMessage(
+        "Unexpected event type (expected mousePressed, mouseReleased, "
+        "mouseMoved, or mouseWheel)");
+    return handle;
+  }
+
+  std::string button = "none";
+  params.Get("button", &button);
+  blink::WebPointerProperties::Button event_button =
+      blink::WebPointerProperties::Button::kNoButton;
+  int button_modifiers = 0;
+  if (!GetDispatchMouseEventButton(button, &event_button, &button_modifiers)) {
+    promise.RejectWithErrorMessage("Invalid mouse button");
+    return handle;
+  }
+
+  int modifiers = 0;
+  int buttons = 0;
+  int click_count = 0;
+  params.Get("modifiers", &modifiers);
+  params.Get("buttons", &buttons);
+  params.Get("clickCount", &click_count);
+
+  int event_modifiers =
+      GetDispatchMouseEventModifiers(modifiers, buttons) | button_modifiers;
+
+  std::unique_ptr<blink::WebMouseEvent> mouse_event;
+  if (event_type == blink::WebInputEvent::Type::kMouseWheel) {
+    double delta_x = 0;
+    double delta_y = 0;
+    if (!params.Get("deltaX", &delta_x) || !params.Get("deltaY", &delta_y)) {
+      promise.RejectWithErrorMessage(
+          "'deltaX' and 'deltaY' are required for mouseWheel");
+      return handle;
+    }
+    auto wheel_event = std::make_unique<blink::WebMouseWheelEvent>(
+        event_type, event_modifiers, base::TimeTicks::Now());
+    wheel_event->delta_x = static_cast<float>(-delta_x);
+    wheel_event->delta_y = static_cast<float>(-delta_y);
+    if (wheel_event->delta_x != 0.0f)
+      wheel_event->wheel_ticks_x = wheel_event->delta_x > 0.0f ? 1.0f : -1.0f;
+    if (wheel_event->delta_y != 0.0f)
+      wheel_event->wheel_ticks_y = wheel_event->delta_y > 0.0f ? 1.0f : -1.0f;
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
+    wheel_event->delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
+    wheel_event->dispatch_type =
+        blink::WebInputEvent::DispatchType::kBlocking;
+    mouse_event = std::move(wheel_event);
+  } else {
+    mouse_event = std::make_unique<blink::WebMouseEvent>(
+        event_type, event_modifiers, base::TimeTicks::Now());
+  }
+
+  mouse_event->button = event_button;
+  mouse_event->click_count = click_count;
+
+  if (!web_contents()) {
+    promise.RejectWithErrorMessage("WebContents is destroyed");
+    return handle;
+  }
+
+  float scale_factor = GetDispatchMouseEventScaleFactor(web_contents());
+  gfx::PointF point_in_root(x * scale_factor, y * scale_factor);
+  mouse_event->SetPositionInWidget(point_in_root);
+  mouse_event->SetPositionInScreen(point_in_root);
+
+  content::RenderWidgetHostView* view =
+      web_contents()->GetRenderWidgetHostView();
+  if (!view) {
+    promise.RejectWithErrorMessage("No RenderWidgetHostView available");
+    return handle;
+  }
+
+  if (IsOffScreen()) {
+    if (event_type == blink::WebInputEvent::Type::kMouseWheel) {
+      auto* wheel = static_cast<blink::WebMouseWheelEvent*>(mouse_event.get());
+      GetOffScreenRenderWidgetHostView()->SendMouseWheelEvent(*wheel);
+      // Synthetic phaseEnded, matching sendInputEvent / CDP injector behavior.
+      blink::WebMouseWheelEvent end = *wheel;
+      end.has_synthetic_phase = true;
+      end.delta_x = 0;
+      end.delta_y = 0;
+      end.phase = blink::WebMouseWheelEvent::kPhaseEnded;
+      end.dispatch_type =
+          blink::WebInputEvent::DispatchType::kEventNonBlocking;
+      GetOffScreenRenderWidgetHostView()->SendMouseWheelEvent(end);
+    } else {
+      GetOffScreenRenderWidgetHostView()->SendMouseEvent(*mouse_event);
+    }
+    promise.Resolve();
+    return handle;
+  }
+
+  auto* root_view = static_cast<content::RenderWidgetHostViewBase*>(view);
+  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents());
+  auto shared_event =
+      std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
+          std::move(mouse_event));
+  auto shared_promise =
+      std::make_shared<gin_helper::Promise<void>>(std::move(promise));
+
+  wc_impl->GetRenderWidgetHostAtPointAsynchronously(
+      root_view, point_in_root,
+      base::BindOnce(
+          [](base::WeakPtr<WebContents> self,
+             std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>> event,
+             std::shared_ptr<gin_helper::Promise<void>> promise,
+             base::WeakPtr<content::RenderWidgetHostViewBase> target,
+             std::optional<gfx::PointF> point) {
+            if (!self || !self->web_contents()) {
+              promise->RejectWithErrorMessage("WebContents was destroyed");
+              return;
+            }
+            if (!target || !point.has_value()) {
+              promise->RejectWithErrorMessage(
+                  "Failed to resolve target widget for mouse event");
+              return;
+            }
+
+            (*event)->SetPositionInWidget(*point);
+            gfx::Rect bounds = target->GetViewBounds();
+            (*event)->SetPositionInScreen(*point + bounds.OffsetFromOrigin());
+
+            auto* widget_host = content::RenderWidgetHostImpl::From(
+                target->GetRenderWidgetHost());
+            if (!widget_host) {
+              promise->RejectWithErrorMessage("No RenderWidgetHost for target");
+              return;
+            }
+
+            widget_host->Focus();
+            if ((*event)->GetType() == blink::WebInputEvent::Type::kMouseWheel) {
+              auto* wheel =
+                  static_cast<blink::WebMouseWheelEvent*>(event->get());
+              widget_host->ForwardWheelEvent(*wheel);
+              blink::WebMouseWheelEvent end = *wheel;
+              end.has_synthetic_phase = true;
+              end.delta_x = 0;
+              end.delta_y = 0;
+              end.phase = blink::WebMouseWheelEvent::kPhaseEnded;
+              end.dispatch_type =
+                  blink::WebInputEvent::DispatchType::kEventNonBlocking;
+              widget_host->ForwardWheelEvent(end);
+            } else {
+              widget_host->ForwardMouseEvent(**event);
+            }
+            promise->Resolve();
+          },
+          GetWeakPtr(), shared_event, shared_promise));
+
+  return handle;
 }
 
 void WebContents::BeginFrameSubscription(gin::Arguments* args) {
@@ -4852,6 +5176,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("focus", &WebContents::Focus)
       .SetMethod("isFocused", &WebContents::IsFocused)
       .SetMethod("sendInputEvent", &WebContents::SendInputEvent)
+      .SetMethod("dispatchMouseEvent", &WebContents::DispatchMouseEvent)
       .SetMethod("beginFrameSubscription", &WebContents::BeginFrameSubscription)
       .SetMethod("endFrameSubscription", &WebContents::EndFrameSubscription)
       .SetMethod("startDrag", &WebContents::StartDrag)

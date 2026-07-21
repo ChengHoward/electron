@@ -2133,6 +2133,81 @@ describe('session module', () => {
       expect(headers!['user-agent']).to.equal(userAgent);
       expect(headers!['accept-language']).to.equal('en-US,fr;q=0.9,de;q=0.8');
     });
+
+    it('applies setUserAgent to cross-origin iframe requests', async () => {
+      const userAgent = 'iframe-ua-agent';
+      const ses = session.fromPartition('' + Math.random());
+      ses.setUserAgent(userAgent);
+
+      let iframeUserAgent: string | undefined;
+      const server = http.createServer((req, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        if (req.url === '/iframe') {
+          iframeUserAgent = req.headers['user-agent'];
+          res.end('<html><body>iframe</body></html>');
+          return;
+        }
+        res.end('');
+      });
+      const { url } = await listen(server);
+      // Chromium treats localhost and 127.0.0.1 as separate origins.
+      const crossOriginIframe = url.replace('127.0.0.1', 'localhost') + '/iframe';
+      const w = new BrowserWindow({ show: false, webPreferences: { session: ses } });
+      await w.loadURL(`data:text/html,<iframe src="${crossOriginIframe}"></iframe>`);
+
+      await waitUntil(() => iframeUserAgent !== undefined);
+      expect(iframeUserAgent).to.equal(userAgent);
+      server.close();
+    });
+
+    it('can override navigator.platform and userAgentMetadata', async () => {
+      const ses = session.fromPartition('' + Math.random());
+      const ua =
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+      ses.setUserAgent(ua, {
+        platform: 'Win32',
+        userAgentMetadata: {
+          brands: [{ brand: 'TestBrand', version: '120' }],
+          platform: 'Windows',
+          platformVersion: '15.0.0',
+          architecture: 'x86',
+          model: '',
+          mobile: false,
+          bitness: '64',
+          wow64: false
+        }
+      });
+      const w = new BrowserWindow({ show: false, webPreferences: { session: ses } });
+      await w.loadURL('data:text/html,ok');
+      const platform = await w.webContents.executeJavaScript('navigator.platform');
+      expect(platform).to.equal('Win32');
+      const brands = await w.webContents.executeJavaScript(
+          'navigator.userAgentData && navigator.userAgentData.brands.map(b => b.brand)');
+      expect(brands).to.include('TestBrand');
+    });
+
+    it('can disable Sec-CH-UA via userAgentMetadata: null', async () => {
+      const ses = session.fromPartition('' + Math.random());
+      ses.setUserAgent('CustomUA/1.0', { userAgentMetadata: null });
+
+      let requestHeaders: Record<string, string> = {};
+      ses.webRequest.onBeforeSendHeaders((details, callback) => {
+        requestHeaders = details.requestHeaders as Record<string, string>;
+        callback({ requestHeaders: details.requestHeaders });
+      });
+
+      const server = http.createServer((req, res) => {
+        res.end('ok');
+      });
+      const { url } = await listen(server);
+      const w = new BrowserWindow({ show: false, webPreferences: { session: ses } });
+      await w.loadURL(url);
+      expect(requestHeaders['User-Agent'] || requestHeaders['user-agent']).to.equal('CustomUA/1.0');
+      const hasSecChUa = Object.keys(requestHeaders).some(
+          (k) => k.toLowerCase().startsWith('sec-ch-ua'));
+      expect(hasSecChUa).to.be.false();
+      server.close();
+    });
   });
 
   describe('session-created event', () => {

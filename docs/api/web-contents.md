@@ -1363,11 +1363,16 @@ win.webContents.on('unresponsive', async () => {
 })
 ```
 
-#### `contents.setUserAgent(userAgent)`
+#### `contents.setUserAgent(userAgent[, options])`
 
 * `userAgent` string
+* `options` [UserAgentOverrideOptions](structures/user-agent-override-options.md) (optional) -
+  Aligned with CDP `Emulation.setUserAgentOverride` (`platform`,
+  `acceptLanguage`, `userAgentMetadata` / Sec-CH-UA-\*).
 
-Overrides the user agent for this web page.
+Overrides the user agent for this web page. See
+[`ses.setUserAgent`](session.md#sessetuseragentuseragent-options) for options
+examples.
 
 #### `contents.getUserAgent()`
 
@@ -2119,6 +2124,46 @@ Sends an input `event` to the page.
 > [!NOTE]
 > The [`BrowserWindow`](browser-window.md) containing the contents needs to be focused for
 `sendInputEvent()` to work.
+
+#### `contents.dispatchMouseEvent(mouseEvent)`
+
+* `mouseEvent` Object - Compatible with CDP `Input.dispatchMouseEvent`
+  * `type` string - `mousePressed`, `mouseReleased`, `mouseMoved`, or `mouseWheel`
+  * `x` number - X in CSS pixels relative to the main frame viewport
+  * `y` number - Y in CSS pixels relative to the main frame viewport
+  * `modifiers` Integer (optional) - Alt=1, Ctrl=2, Meta=4, Shift=8 (default: 0)
+  * `button` string (optional) - `none`, `left`, `middle`, `right`, `back`, `forward` (default: `none`)
+  * `buttons` Integer (optional) - Bitfield of currently pressed buttons (default: 0)
+  * `clickCount` Integer (optional) - Default: 0
+  * `deltaX` number (optional) - Required for `mouseWheel`
+  * `deltaY` number (optional) - Required for `mouseWheel`
+
+Returns `Promise<void>` - Resolves when the event has been forwarded to the
+target render widget (including OOPIF routing).
+
+Dispatches a mouse event through Chromium's input pipeline, matching CDP
+`Input.dispatchMouseEvent` without requiring `webContents.debugger.attach()`.
+
+Unlike DOM `element.click()`, events are trusted (`isTrusted === true`) and
+go through hit-testing / widget routing like a real user click.
+
+```js
+// Equivalent to debugger.sendCommand('Input.dispatchMouseEvent', ...)
+await win.webContents.dispatchMouseEvent({
+  type: 'mousePressed',
+  x: 100,
+  y: 200,
+  button: 'left',
+  clickCount: 1
+})
+await win.webContents.dispatchMouseEvent({
+  type: 'mouseReleased',
+  x: 100,
+  y: 200,
+  button: 'left',
+  clickCount: 1
+})
+```
 
 #### `contents.beginFrameSubscription([onlyDirty ,]callback)`
 

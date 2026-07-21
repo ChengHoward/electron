@@ -513,6 +513,44 @@ void ElectronBrowserContext::SetUserAgent(const std::string& user_agent) {
   user_agent_ = user_agent;
 }
 
+void ElectronBrowserContext::SetNavigatorPlatformOverride(
+    const std::string& platform) {
+  navigator_platform_override_ = platform;
+}
+
+std::string ElectronBrowserContext::GetNavigatorPlatformOverride() const {
+  return navigator_platform_override_;
+}
+
+void ElectronBrowserContext::SetUserAgentMetadataOverride(
+    std::optional<blink::UserAgentMetadata> metadata,
+    bool disabled) {
+  user_agent_metadata_disabled_ = disabled;
+  if (disabled) {
+    user_agent_metadata_override_.reset();
+  } else {
+    user_agent_metadata_override_ = std::move(metadata);
+  }
+}
+
+bool ElectronBrowserContext::IsUserAgentMetadataDisabled() const {
+  return user_agent_metadata_disabled_;
+}
+
+const std::optional<blink::UserAgentMetadata>&
+ElectronBrowserContext::GetUserAgentMetadataOverride() const {
+  return user_agent_metadata_override_;
+}
+
+void ElectronBrowserContext::SetAcceptLanguageOverride(
+    const std::string& accept_language) {
+  accept_language_override_ = accept_language;
+}
+
+std::string ElectronBrowserContext::GetAcceptLanguageOverride() const {
+  return accept_language_override_;
+}
+
 base::FilePath ElectronBrowserContext::GetPath() const {
   return path_;
 }

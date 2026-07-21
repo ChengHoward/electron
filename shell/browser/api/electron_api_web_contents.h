@@ -233,7 +233,8 @@ class WebContents final : public ExclusiveAccessContext,
   std::string GetOrCreateDevToolsTargetId();
   bool IsCrashed() const;
   void ForcefullyCrashRenderer();
-  void SetUserAgent(const std::string& user_agent);
+  void SetUserAgent(const std::string& user_agent,
+                    gin::Arguments* args = nullptr);
   std::string GetUserAgent();
   void InsertCSS(const std::string& css);
   v8::Local<v8::Promise> SavePage(const base::FilePath& full_file_path,
@@ -300,6 +301,9 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Send WebInputEvent to the page.
   void SendInputEvent(v8::Isolate* isolate, v8::Local<v8::Value> input_event);
+
+  // CDP Input.dispatchMouseEvent equivalent without attaching the debugger.
+  v8::Local<v8::Promise> DispatchMouseEvent(gin::Arguments* args);
 
   // Subscribe to the frame updates.
   void BeginFrameSubscription(gin::Arguments* args);

@@ -1736,6 +1736,47 @@ describe('webContents module', () => {
     });
   });
 
+  describe('dispatchMouseEvent(params)', () => {
+    afterEach(closeAllWindows);
+
+    it('dispatches a trusted click without debugger.attach', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<button id="b" style="position:absolute;left:40px;top:40px;width:120px;height:40px">click</button>
+<script>
+  const { ipcRenderer } = require('electron');
+  document.getElementById('b').addEventListener('click', (e) => {
+    ipcRenderer.send('dispatch-mouse-clicked', e.isTrusted, e.type);
+  });
+</script>`);
+
+      const clicked = once(ipcMain, 'dispatch-mouse-clicked');
+      await w.webContents.dispatchMouseEvent({
+        type: 'mousePressed',
+        x: 100,
+        y: 60,
+        button: 'left',
+        clickCount: 1
+      });
+      await w.webContents.dispatchMouseEvent({
+        type: 'mouseReleased',
+        x: 100,
+        y: 60,
+        button: 'left',
+        clickCount: 1
+      });
+      const [, isTrusted, eventType] = await clicked;
+      expect(isTrusted).to.be.true();
+      expect(eventType).to.equal('click');
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+    });
+  });
+
   describe('insertCSS', () => {
     afterEach(closeAllWindows);
     it('supports inserting CSS', async () => {
@@ -2133,6 +2174,36 @@ describe('webContents module', () => {
 
       w.webContents.userAgent = userAgent;
       expect(w.webContents.userAgent).to.equal(userAgent);
+    });
+
+    it('applies setUserAgent to cross-origin iframe requests', async () => {
+      const customUA = 'wc-iframe-ua-agent';
+      let iframeUserAgent: string | undefined;
+      const server = http.createServer((req, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        if (req.url === '/iframe') {
+          iframeUserAgent = req.headers['user-agent'];
+          res.end('<html><body>iframe</body></html>');
+          return;
+        }
+        res.end('');
+      });
+      const { url } = await listen(server);
+      const crossOriginIframe = url.replace('127.0.0.1', 'localhost') + '/iframe';
+      const w = new BrowserWindow({ show: false });
+      w.webContents.setUserAgent(customUA);
+      await w.loadURL(`data:text/html,<iframe src="${crossOriginIframe}"></iframe>`);
+      await waitUntil(() => iframeUserAgent !== undefined);
+      expect(iframeUserAgent).to.equal(customUA);
+      server.close();
+    });
+
+    it('can override navigator.platform via options', async () => {
+      const w = new BrowserWindow({ show: false });
+      w.webContents.setUserAgent('CustomUA/1.0', { platform: 'Win32' });
+      await w.loadURL('data:text/html,ok');
+      const platform = await w.webContents.executeJavaScript('navigator.platform');
+      expect(platform).to.equal('Win32');
     });
   });
 

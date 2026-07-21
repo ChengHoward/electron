@@ -1303,18 +1303,55 @@ session.defaultSession.allowNTLMCredentialsForDomains('*example.com, *foobar.com
 session.defaultSession.allowNTLMCredentialsForDomains('*')
 ```
 
-#### `ses.setUserAgent(userAgent[, acceptLanguages])`
+#### `ses.setUserAgent(userAgent[, options])`
 
 * `userAgent` string
-* `acceptLanguages` string (optional)
+* `options` string | [UserAgentOverrideOptions](structures/user-agent-override-options.md) (optional) -
+  Either a legacy Accept-Language string (e.g. `"en-US,fr,de"`), or an options
+  object aligned with CDP `Emulation.setUserAgentOverride`.
 
-Overrides the `userAgent` and `acceptLanguages` for this session.
+Overrides the user agent for this session. Also applies to existing
+`WebContents` that use this session.
 
-The `acceptLanguages` must be a comma separated ordered list of language codes, for
-example `"en-US,fr,de,ko,zh-CN,ja"`.
+Examples:
 
-This doesn't affect existing `WebContents`, and each `WebContents` can use
-`webContents.setUserAgent` to override the session-wide user agent.
+```js
+// Legacy: UA + Accept-Language
+ses.setUserAgent('MyAgent/1.0', 'en-US,fr,de')
+
+// CDP-style: navigator.platform + Client Hints (Sec-CH-UA-*)
+ses.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', {
+  platform: 'Win32',
+  acceptLanguage: 'en-US',
+  userAgentMetadata: {
+    brands: [
+      { brand: 'Chromium', version: '120' },
+      { brand: 'Google Chrome', version: '120' },
+      { brand: 'Not=A?Brand', version: '99' }
+    ],
+    fullVersionList: [
+      { brand: 'Chromium', version: '120.0.6099.109' },
+      { brand: 'Google Chrome', version: '120.0.6099.109' },
+      { brand: 'Not=A?Brand', version: '10.0.1.4' }
+    ],
+    fullVersion: '120.0.6099.109',
+    platform: 'Windows',
+    platformVersion: '15.0.0',
+    architecture: 'x86',
+    model: '',
+    mobile: false,
+    bitness: '64',
+    wow64: false,
+    formFactors: ['Desktop']
+  }
+})
+
+// Disable Sec-CH-UA-* while keeping the custom User-Agent string
+ses.setUserAgent('MyAgent/1.0', { userAgentMetadata: null })
+```
+
+Each `WebContents` can still call `webContents.setUserAgent` to override
+the session-wide user agent for that page.
 
 #### `ses.isPersistent()`
 

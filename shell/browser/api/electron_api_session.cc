@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -28,6 +29,7 @@
 #include "chrome/common/pref_names.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_url_parameters.h"
+#include "components/embedder_support/user_agent_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/value_map_pref_store.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
@@ -69,6 +71,7 @@
 #include "shell/browser/api/electron_api_net_log.h"
 #include "shell/browser/api/electron_api_protocol.h"
 #include "shell/browser/api/electron_api_service_worker_context.h"
+#include "shell/browser/api/electron_api_web_contents.h"
 #include "shell/browser/api/electron_api_web_frame_main.h"
 #include "shell/browser/api/electron_api_web_request.h"
 #include "shell/browser/browser.h"
@@ -81,6 +84,7 @@
 #include "shell/browser/net/resolve_host_function.h"
 #include "shell/browser/net/resolve_proxy_helper.h"
 #include "shell/browser/session_preferences.h"
+#include "shell/browser/user_agent_options.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/content_converter.h"
 #include "shell/common/gin_converters/file_path_converter.h"
@@ -1017,15 +1021,43 @@ void Session::AllowNTLMCredentialsForDomains(const std::string& domains) {
 
 void Session::SetUserAgent(const std::string& user_agent,
                            gin::Arguments* args) {
+  blink::UserAgentMetadata default_metadata =
+      embedder_support::GetUserAgentMetadata();
+  UserAgentOptions options;
+  std::string error;
+  if (!ParseUserAgentOptions(args, default_metadata, &options, &error)) {
+    args->ThrowTypeError(error);
+    return;
+  }
+
   browser_context_->SetUserAgent(user_agent);
+  browser_context_->SetNavigatorPlatformOverride(options.platform);
+  browser_context_->SetUserAgentMetadataOverride(
+      options.metadata_policy == UserAgentMetadataPolicy::kCustom
+          ? std::make_optional(options.user_agent_metadata)
+          : std::nullopt,
+      options.metadata_policy == UserAgentMetadataPolicy::kDisabled);
+  if (options.accept_language)
+    browser_context_->SetAcceptLanguageOverride(*options.accept_language);
+
   auto* network_context =
       browser_context_->GetDefaultStoragePartition()->GetNetworkContext();
   network_context->SetUserAgent(user_agent);
-
-  std::string accept_lang;
-  if (args->GetNext(&accept_lang)) {
+  if (options.accept_language) {
     network_context->SetAcceptLanguage(
-        net::HttpUtil::GenerateAcceptLanguageHeader(accept_lang));
+        net::HttpUtil::GenerateAcceptLanguageHeader(*options.accept_language));
+  }
+
+  // Broadcast to all WebContents in this session so renderer preferences and
+  // browser-side URLLoaderThrottle overrides stay aligned with CDP behavior.
+  for (auto* contents : WebContents::GetWebContentsList()) {
+    content::WebContents* web_contents = contents->web_contents();
+    if (!web_contents)
+      continue;
+    if (web_contents->GetBrowserContext() == browser_context_.get()) {
+      // Apply stored context options (no gin args) so platform/metadata sync.
+      contents->SetUserAgent(user_agent);
+    }
   }
 }
 

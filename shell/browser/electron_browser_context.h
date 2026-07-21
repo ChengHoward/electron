@@ -23,6 +23,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/ssl_config.mojom.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 
 class PrefService;
 class ValueMapPrefStore;
@@ -90,6 +91,19 @@ class ElectronBrowserContext : public content::BrowserContext {
 
   void SetUserAgent(const std::string& user_agent);
   std::string GetUserAgent() const;
+  void SetNavigatorPlatformOverride(const std::string& platform);
+  std::string GetNavigatorPlatformOverride() const;
+  // |disabled| true: strip Sec-CH-UA-* (no metadata override).
+  // |metadata| set: custom Client Hints metadata.
+  // both unset: use embedder defaults when a custom UA string is applied.
+  void SetUserAgentMetadataOverride(
+      std::optional<blink::UserAgentMetadata> metadata,
+      bool disabled = false);
+  bool IsUserAgentMetadataDisabled() const;
+  const std::optional<blink::UserAgentMetadata>& GetUserAgentMetadataOverride()
+      const;
+  void SetAcceptLanguageOverride(const std::string& accept_language);
+  std::string GetAcceptLanguageOverride() const;
   bool can_use_http_cache() const { return use_cache_; }
   int max_cache_size() const { return max_cache_size_; }
   ResolveProxyHelper* GetResolveProxyHelper();
@@ -216,6 +230,10 @@ class ElectronBrowserContext : public content::BrowserContext {
   std::unique_ptr<ProtocolRegistry> protocol_registry_;
 
   std::optional<std::string> user_agent_;
+  std::string navigator_platform_override_;
+  bool user_agent_metadata_disabled_ = false;
+  std::optional<blink::UserAgentMetadata> user_agent_metadata_override_;
+  std::string accept_language_override_;
   base::FilePath path_;
   bool in_memory_ = false;
   bool use_cache_ = true;
