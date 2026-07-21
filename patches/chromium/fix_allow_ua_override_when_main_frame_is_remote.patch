@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: chuanchuan <example@gmail.com>
+Date: Tue, 21 Jul 2026 07:00:54 +0800
+Subject: fix: allow UA override when main frame is remote
+
+When the top-level frame is a WebRemoteFrame (typical in OOPIF
+renderer processes), ShouldUseUserAgentOverride() previously returned
+false because DocumentLoader/DocumentState are unavailable. That caused
+cross-origin iframes to ignore RendererPreferences.user_agent_override
+set by Electron webContents.setUserAgent().
+
+Return true in that case so OOPIF frames use the synced custom UA.
+
+Related: https://crbug.com/426555
+Electron issues: https://github.com/electron/electron/issues/40374
+https://github.com/electron/electron/issues/40990
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+index 93016ac2f07a76112a407eade082e439f65d4d6d..581399001d56dbca9ef0dbe88ff0d61920294c76 100644
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -4873,7 +4873,7 @@ bool RenderFrameImpl::ShouldUseUserAgentOverride() const {
+   // Temporarily return early and fix properly as part of
+   // https://crbug.com/426555.
+   if (web_view->MainFrame()->IsWebRemoteFrame())
+-    return false;
++    return true;
+   const WebLocalFrame* main_frame = web_view->MainFrame()->ToWebLocalFrame();
+ 
+   WebDocumentLoader* document_loader = main_frame->GetDocumentLoader();
