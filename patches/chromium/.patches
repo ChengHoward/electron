@@ -194,3 +194,5 @@ cherry-pick-46c64c0bd343.patch
 cherry-pick-e06257242608.patch
 cherry-pick-8c6eb64fa8b5.patch
 fix_restore_snap-compatible_dbusmenu_object_path.patch
+fix_allow_ua_override_when_main_frame_is_remote.patch
+feat_navigator_platform_override_in_renderer_preferences.patch

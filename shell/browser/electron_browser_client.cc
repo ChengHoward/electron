@@ -112,6 +112,7 @@
 #include "shell/browser/net/proxying_websocket.h"
 #include "shell/browser/net/system_network_context_manager.h"
 #include "shell/browser/net/url_loader_factory_gate.h"
+#include "shell/browser/net/user_agent_url_loader_throttle.h"
 #include "shell/browser/network_hints_handler_impl.h"
 #include "shell/browser/notifications/notification_presenter.h"
 #include "shell/browser/notifications/platform_notification_service.h"
@@ -786,7 +787,7 @@ ElectronBrowserClient::GetExtraCreateNewWindowReplyData(
     content::RenderFrameHost* new_window_main_frame,
     const GURL& target_url) {
   // A window.open() popup's synchronous about:blank fires
-  // DidCreateScriptContext — and runs the preload — before any async push can
+  // DidCreateScriptContext 鈥?and runs the preload 鈥?before any async push can
   // land. We've just run setWindowOpenHandler so the popup's WebContents has
   // its (possibly overridden) preload set; attach it to the reply.
   //
@@ -807,7 +808,7 @@ ElectronBrowserClient::GetExtraCreateNewWindowReplyData(
     ScopedAllowBlockingForElectron allow_blocking;
     data = renderer_startup_data::BuildForFrame(new_window_main_frame);
   }
-  // Opaque blob — Chromium can't depend on Electron's mojom types.
+  // Opaque blob 鈥?Chromium can't depend on Electron's mojom types.
   return mojo_base::BigBuffer(mojom::RendererStartupData::Serialize(&data));
 }
 
@@ -817,7 +818,7 @@ ElectronBrowserClient::GetServiceWorkerStartupData(
     const GURL& scope) {
   // Only the service-worker preload realm consumes this, and it's only created
   // when SW preloads are registered. Skip the asar reads + serialization
-  // otherwise — this runs on every service worker start.
+  // otherwise 鈥?this runs on every service worker start.
   auto* session_prefs = SessionPreferences::FromBrowserContext(browser_context);
   if (!session_prefs || !session_prefs->HasServiceWorkerPreloadScript())
     return std::nullopt;
@@ -2026,6 +2027,17 @@ ElectronBrowserClient::CreateURLLoaderThrottles(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>> result;
+
+  // Align with CDP EmulationHandler::ApplyOverrides: force User-Agent on every
+  // request (including cross-origin iframe / OOPIF) when a WebContents override
+  // is configured via setUserAgent.
+  if (content::WebContents* web_contents = wc_getter.Run()) {
+    const std::string& ua =
+        web_contents->GetUserAgentOverride().ua_string_override;
+    if (!ua.empty()) {
+      result.push_back(std::make_unique<UserAgentURLLoaderThrottle>(ua));
+    }
+  }
 
 #if BUILDFLAG(ENABLE_PLUGINS) && BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
   result.push_back(std::make_unique<PluginResponseInterceptorURLLoaderThrottle>(

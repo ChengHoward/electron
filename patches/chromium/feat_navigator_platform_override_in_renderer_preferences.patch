@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: chuanchuan <example@gmail.com>
+Date: Tue, 21 Jul 2026 08:31:42 +0800
+Subject: feat: navigator_platform_override in RendererPreferences
+
+Plumb CDP-style platform override through RendererPreferences so
+Electron setUserAgent can set navigator.platform without DevTools.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+index a42179970119cd5bd209277cdaf56f6b38fa19bb..a789ee55317b6bebb41632db22b2a0e6f43da232 100644
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -73,6 +73,9 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
+   if (!data.ReadUserAgentOverride(&out->user_agent_override))
+     return false;
+ 
++  if (!data.ReadNavigatorPlatformOverride(&out->navigator_platform_override))
++    return false;
++
+   if (!data.ReadAcceptLanguages(&out->accept_languages))
+     return false;
+ 
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+index 08d068cc0af4e78fc1902a3a8417157c8e5b2529..2052177a45af4d7a09bde0f03df559f8733c974c 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -64,6 +64,8 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
+   uint16_t webrtc_udp_max_port{0};
+   std::vector<std::string> webrtc_local_ips_allowed_urls;
+   UserAgentOverride user_agent_override;
++  // Override for navigator.platform. Empty means no override.
++  std::string navigator_platform_override;
+   std::string accept_languages;
+   bool send_subresource_notification{false};
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+index 11270bb1e2293560f1cc405049df4fe5c38d1fd5..e844bf07cc851452aab9aaead0e314a38c476c08 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -175,6 +175,11 @@ struct BLINK_COMMON_EXPORT
+     return data.user_agent_override;
+   }
+ 
++  static const std::string& navigator_platform_override(
++      const ::blink::RendererPreferences& data) {
++    return data.navigator_platform_override;
++  }
++
+   static const std::string& accept_languages(
+       const ::blink::RendererPreferences& data) {
+     return data.accept_languages;
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+index aa6d396335d3348562ca517761723470342833a8..ca95628b577e460b15364a8dbe62e13c595e6045 100644
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -122,6 +122,10 @@ struct RendererPreferences {
+   // being overridden for the current navigation.
+   UserAgentOverride user_agent_override;
+ 
++  // Override for navigator.platform (CDP Emulation.setUserAgentOverride
++  // `platform`). Empty means no override.
++  string navigator_platform_override;
++
+   // The accept-languages of the browser, comma-separated.
+   string accept_languages;
+ 
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+index 4fbdeefcbeeb0e764fc1b0f22a4563abfe752052..b8a5f6f3fb5c8854c9a7501ad9b0b8df464cc629 100644
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -3637,6 +3637,11 @@ void WebViewImpl::UpdateRendererPreferences(
+     }
+   }
+ 
++  if (GetPage()) {
++    GetPage()->GetSettings().SetNavigatorPlatformOverride(
++        String::FromUtf8(renderer_preferences_.navigator_platform_override));
++  }
++
+   GetSettings()->SetCaretBrowsingEnabled(
+       renderer_preferences_.caret_browsing_enabled);
+ 
