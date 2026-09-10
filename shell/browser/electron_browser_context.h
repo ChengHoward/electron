@@ -93,6 +93,8 @@ class ElectronBrowserContext : public content::BrowserContext {
   std::string GetUserAgent() const;
   void SetNavigatorPlatformOverride(const std::string& platform);
   std::string GetNavigatorPlatformOverride() const;
+  void SetHideChrome(bool hide_chrome);
+  bool GetHideChrome() const;
   // |disabled| true: strip Sec-CH-UA-* (no metadata override).
   // |metadata| set: custom Client Hints metadata.
   // both unset: use embedder defaults when a custom UA string is applied.
@@ -231,6 +233,7 @@ class ElectronBrowserContext : public content::BrowserContext {
 
   std::optional<std::string> user_agent_;
   std::string navigator_platform_override_;
+  bool hide_chrome_ = false;
   bool user_agent_metadata_disabled_ = false;
   std::optional<blink::UserAgentMetadata> user_agent_metadata_override_;
   std::string accept_language_override_;

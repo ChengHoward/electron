@@ -38,6 +38,30 @@ interface ElectronFrameStartup {
   SetStartupData(RendererStartupData data);
 };
 
+// Element info from Blink C++ (pierces closed shadow). backend_node_id matches
+// CDP DOM BackendNodeId / blink::Node::GetDomNodeId().
+struct DomElementInfo {
+  int32 backend_node_id;
+  string tag_name;
+  // Bounds relative to the local RenderWidget (same space as BoundsInWidget).
+  gfx.mojom.Rect bounds;
+  // CSS pixels relative to the main-frame viewport (Input.dispatchMouseEvent).
+  double x;
+  double y;
+  double width;
+  double height;
+};
+
+// Box model in CSS pixels relative to the main-frame viewport (same space as
+// Input.dispatchMouseEvent x/y).
+struct DomBoxModel {
+  int32 backend_node_id;
+  double x;
+  double y;
+  double width;
+  double height;
+};
+
 interface ElectronRenderer {
   Message(
       bool internal,
@@ -47,6 +71,15 @@ interface ElectronRenderer {
   ReceivePostMessage(string channel, blink.mojom.TransferableMessage message);
 
   TakeHeapSnapshot(handle file) => (bool success);
+
+  // Query in Blink C++. Supports `>>>` pierce combinator; when |pierce| is true
+  // also searches author open/closed shadow roots. Page JS cannot observe this.
+  QuerySelectorDeep(string selector, bool pierce, bool scroll_into_view) =>
+      (bool found, DomElementInfo? info);
+
+  // Resolve blink DomNodeId / CDP backendNodeId to a CSS-pixel box model.
+  GetNodeBoxModel(int32 backend_node_id, bool scroll_into_view) =>
+      (bool found, DomBoxModel? model);
 };
 
 interface ElectronAutofillAgent {

@@ -1032,6 +1032,7 @@ void Session::SetUserAgent(const std::string& user_agent,
 
   browser_context_->SetUserAgent(user_agent);
   browser_context_->SetNavigatorPlatformOverride(options.platform);
+  browser_context_->SetHideChrome(options.hide_chrome);
   browser_context_->SetUserAgentMetadataOverride(
       options.metadata_policy == UserAgentMetadataPolicy::kCustom
           ? std::make_optional(options.user_agent_metadata)

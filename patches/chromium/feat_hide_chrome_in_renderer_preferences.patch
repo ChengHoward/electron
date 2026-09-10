@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: chuanchuan <example@gmail.com>
+Date: Wed, 22 Jul 2026 18:10:00 +0800
+Subject: feat: hide_chrome in RendererPreferences
+
+Plumb Electron setUserAgent({ hideChrome }) through RendererPreferences
+and skip creating window.chrome in webpage extension bindings contexts.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+
+diff --git a/extensions/renderer/native_extension_bindings_system.cc b/extensions/renderer/native_extension_bindings_system.cc
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/extensions/renderer/native_extension_bindings_system.cc
++++ b/extensions/renderer/native_extension_bindings_system.cc
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <string_view>
++#include <tuple>
+ #include <utility>
+ 
+ #include "base/command_line.h"
+@@ -68,6 +69,7 @@
+ #include "third_party/blink/public/web/web_document.h"
+ #include "third_party/blink/public/web/web_frame.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
++#include "third_party/blink/public/web/web_view.h"
+ #include "third_party/blink/public/web/web_origin_trials.h"
+ #include "url/origin.h"
+ #include "v8/include/cppgc/allocation.h"
+@@ -586,6 +588,36 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
+   v8::Isolate* isolate = context->isolate();
+   v8::HandleScope handle_scope(isolate);
+   v8::Local<v8::Context> v8_context = context->v8_context();
++
++  bool is_webpage = false;
++  switch (context->context_type()) {
++    case mojom::ContextType::kUnspecified:
++    case mojom::ContextType::kWebPage:
++    case mojom::ContextType::kPrivilegedWebPage:
++      is_webpage = true;
++      break;
++    case mojom::ContextType::kPrivilegedExtension:
++    case mojom::ContextType::kOffscreenExtension:
++    case mojom::ContextType::kUnprivilegedExtension:
++    case mojom::ContextType::kUserScript:
++    case mojom::ContextType::kContentScript:
++    case mojom::ContextType::kWebUi:
++    case mojom::ContextType::kUntrustedWebUi:
++      is_webpage = false;
++  }
++
++  // Electron: setUserAgent({ hideChrome: true }) — do not expose window.chrome
++  // on webpage-like contexts. Content scripts / extension worlds are untouched.
++  if (is_webpage) {
++    blink::WebLocalFrame* web_frame = context->web_frame();
++    if (web_frame && web_frame->View() &&
++        web_frame->View()->GetRendererPreferences().hide_chrome) {
++      v8::Local<v8::String> chrome_name = gin::StringToSymbol(isolate, "chrome");
++      std::ignore = v8_context->Global()->Delete(v8_context, chrome_name);
++      return;
++    }
++  }
++
+   v8::Local<v8::Object> chrome =
+       GetOrCreateGlobalObjectProperty(v8_context, "chrome");
+   if (chrome.IsEmpty()) {
+@@ -593,22 +625,6 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
+     return;
+   }
+ 
+-  bool is_webpage = false;
+-  switch (context->context_type()) {
+-    case mojom::ContextType::kUnspecified:
+-    case mojom::ContextType::kWebPage:
+-    case mojom::ContextType::kPrivilegedWebPage:
+-      is_webpage = true;
+-      break;
+-    case mojom::ContextType::kPrivilegedExtension:
+-    case mojom::ContextType::kOffscreenExtension:
+-    case mojom::ContextType::kUnprivilegedExtension:
+-    case mojom::ContextType::kUserScript:
+-    case mojom::ContextType::kContentScript:
+-    case mojom::ContextType::kWebUi:
+-    case mojom::ContextType::kUntrustedWebUi:
+-      is_webpage = false;
+-  }
+-
+   std::optional<v8::Local<v8::Object>> browser;
+   // TODO(crbug.com/401226626): Determine if `browser` should be created in
+   // WebUI script contexts, currently it is not.
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -76,6 +76,8 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
+   if (!data.ReadNavigatorPlatformOverride(&out->navigator_platform_override))
+     return false;
+ 
++  out->hide_chrome = data.hide_chrome();
++
+   if (!data.ReadAcceptLanguages(&out->accept_languages))
+     return false;
+ 
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -66,6 +66,8 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
+   UserAgentOverride user_agent_override;
+   // Override for navigator.platform. Empty means no override.
+   std::string navigator_platform_override;
++  // When true, webpage script contexts must not expose window.chrome.
++  bool hide_chrome{false};
+   std::string accept_languages;
+   bool send_subresource_notification{false};
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -180,6 +180,10 @@ struct BLINK_COMMON_EXPORT
+     return data.navigator_platform_override;
+   }
+ 
++  static bool hide_chrome(const ::blink::RendererPreferences& data) {
++    return data.hide_chrome;
++  }
++
+   static const std::string& accept_languages(
+       const ::blink::RendererPreferences& data) {
+     return data.accept_languages;
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -126,6 +126,10 @@ struct RendererPreferences {
+   // `platform`). Empty means no override.
+   string navigator_platform_override;
+ 
++  // When true, webpage script contexts must not expose window.chrome
++  // (Electron setUserAgent hideChrome option).
++  bool hide_chrome = false;
++
+   // The accept-languages of the browser, comma-separated.
+   string accept_languages;
+ 

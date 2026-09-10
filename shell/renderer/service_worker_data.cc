@@ -72,4 +72,19 @@ void ServiceWorkerData::TakeHeapSnapshot(mojo::ScopedHandle file,
   std::move(callback).Run(false);
 }
 
+void ServiceWorkerData::QuerySelectorDeep(const std::string& selector,
+                                          bool pierce,
+                                          bool scroll_into_view,
+                                          QuerySelectorDeepCallback callback) {
+  NOTIMPLEMENTED();
+  std::move(callback).Run(false, nullptr);
+}
+
+void ServiceWorkerData::GetNodeBoxModel(int32_t backend_node_id,
+                                        bool scroll_into_view,
+                                        GetNodeBoxModelCallback callback) {
+  NOTIMPLEMENTED();
+  std::move(callback).Run(false, nullptr);
+}
+
 }  // namespace electron

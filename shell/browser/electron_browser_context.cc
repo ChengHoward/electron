@@ -522,6 +522,14 @@ std::string ElectronBrowserContext::GetNavigatorPlatformOverride() const {
   return navigator_platform_override_;
 }
 
+void ElectronBrowserContext::SetHideChrome(bool hide_chrome) {
+  hide_chrome_ = hide_chrome;
+}
+
+bool ElectronBrowserContext::GetHideChrome() const {
+  return hide_chrome_;
+}
+
 void ElectronBrowserContext::SetUserAgentMetadataOverride(
     std::optional<blink::UserAgentMetadata> metadata,
     bool disabled) {

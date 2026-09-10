@@ -11,13 +11,16 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/containers/id_map.h"
 #include "base/containers/map_util.h"
 #include "base/files/file_util.h"
@@ -26,6 +29,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/task/current_thread.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/unguessable_token.h"
@@ -46,6 +50,8 @@
 #include "content/browser/renderer_host/navigation_controller_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_manager.h"  // nogncheck
+#include "components/input/touch_emulator.h"
+#include "content/browser/renderer_host/input/touch_emulator_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_view_base.h"  // nogncheck
 #include "content/browser/web_contents/web_contents_impl.h"  // nogncheck
@@ -163,6 +169,9 @@
 #include "storage/browser/file_system/isolated_context.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/common/messaging/transferable_message_mojom_traits.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
@@ -170,12 +179,17 @@
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+#include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 #include "third_party/blink/public/mojom/messaging/transferable_message.mojom.h"
 #include "third_party/blink/public/mojom/renderer_preferences.mojom.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/display/screen.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/events/gesture_detection/gesture_provider_config_helper.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/gfx/range/range.h"
+#include "ui/latency/latency_info.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/cocoa/defaults_utils.h"
@@ -3066,6 +3080,7 @@ void WebContents::SetUserAgent(const std::string& user_agent,
     }
   } else if (auto* context = GetBrowserContext()) {
     options.platform = context->GetNavigatorPlatformOverride();
+    options.hide_chrome = context->GetHideChrome();
     if (context->IsUserAgentMetadataDisabled()) {
       options.metadata_policy = UserAgentMetadataPolicy::kDisabled;
     } else if (context->GetUserAgentMetadataOverride()) {
@@ -3097,6 +3112,7 @@ void WebContents::SetUserAgent(const std::string& user_agent,
 
   auto* prefs = web_contents()->GetMutableRendererPrefs();
   prefs->navigator_platform_override = options.platform;
+  prefs->hide_chrome = options.hide_chrome;
   if (options.accept_language) {
     prefs->accept_languages =
         net::HttpUtil::GenerateAcceptLanguageHeader(*options.accept_language);
@@ -3115,7 +3131,7 @@ void WebContents::SetUserAgent(const std::string& user_agent,
   web_contents()->SetUserAgentOverride(ua_override, !user_agent.empty());
 
   // SetUserAgentOverride may early-return when ua_override is unchanged; still
-  // push navigator_platform_override / accept_languages to the renderer.
+  // push navigator_platform_override / hide_chrome / accept_languages.
   web_contents()->SyncRendererPrefs();
 }
 
@@ -3989,6 +4005,151 @@ float GetDispatchMouseEventScaleFactor(content::WebContents* web_contents) {
   return scale_factor;
 }
 
+// Match CDP InputHandler::GetEventTimeTicks — wall-clock seconds since Unix
+// epoch mapped onto the TimeTicks timeline.
+base::TimeTicks GetDispatchMouseEventTimeTicks(
+    const std::optional<double>& timestamp) {
+  if (!timestamp.has_value())
+    return base::TimeTicks::Now();
+  const base::Time event_time =
+      base::Time::UnixEpoch() + base::Seconds(timestamp.value());
+  return base::TimeTicks::Now() - (base::Time::Now() - event_time);
+}
+
+blink::WebPointerProperties::PointerType GetDispatchMouseEventPointerType(
+    const std::string& pointer_type) {
+  if (pointer_type == "pen")
+    return blink::WebPointerProperties::PointerType::kPen;
+  // Default / "mouse" / empty — same as CDP GetPointerType.
+  return blink::WebPointerProperties::PointerType::kMouse;
+}
+
+std::string ValidateDispatchMousePointerProperties(double force,
+                                                   double tangential_pressure,
+                                                   double tilt_x,
+                                                   double tilt_y,
+                                                   int twist) {
+  if (force < 0.0 || force > 1.0)
+    return "'force' should be in the range of [0,1]";
+  if (tangential_pressure < -1.0 || tangential_pressure > 1.0)
+    return "'tangentialPressure' should be in the range of [-1,1]";
+  if (tilt_x < -90.0 || tilt_x > 90.0)
+    return "'tiltX' should be in the range of [-90,90]";
+  if (tilt_y < -90.0 || tilt_y > 90.0)
+    return "'tiltY' should be in the range of [-90,90]";
+  if (twist < 0 || twist > 359)
+    return "'twist' should be in the range of [0,359]";
+  return "";
+}
+
+blink::WebInputEvent::Type GetDispatchKeyEventType(const std::string& type) {
+  if (type == "keyDown")
+    return blink::WebInputEvent::Type::kKeyDown;
+  if (type == "keyUp")
+    return blink::WebInputEvent::Type::kKeyUp;
+  if (type == "char")
+    return blink::WebInputEvent::Type::kChar;
+  if (type == "rawKeyDown")
+    return blink::WebInputEvent::Type::kRawKeyDown;
+  return blink::WebInputEvent::Type::kUndefined;
+}
+
+int GetDispatchKeyEventModifiers(int modifiers,
+                                 bool auto_repeat,
+                                 bool is_keypad,
+                                 int location) {
+  int result = GetDispatchMouseEventModifiers(modifiers, 0);
+  if (auto_repeat)
+    result |= blink::WebInputEvent::kIsAutoRepeat;
+  if (is_keypad)
+    result |= blink::WebInputEvent::kIsKeyPad;
+  if (location & 1)
+    result |= blink::WebInputEvent::kIsLeft;
+  if (location & 2)
+    result |= blink::WebInputEvent::kIsRight;
+  return result;
+}
+
+bool SetDispatchKeyboardEventText(
+    base::span<char16_t, blink::WebKeyboardEvent::kTextLengthCap> to,
+    const std::optional<std::string>& from) {
+  if (!from.has_value())
+    return true;
+  std::u16string text16 = base::UTF8ToUTF16(from.value());
+  if (text16.size() >= to.size())
+    return false;
+  base::span<char16_t> to_text;
+  base::span<char16_t> to_nul;
+  std::tie(to_text, to_nul) = to.split_at(text16.size());
+  to_text.copy_from(text16);
+  to_nul.front() = 0;
+  return true;
+}
+
+blink::WebInputEvent::Type GetDispatchTouchEventType(const std::string& type) {
+  if (type == "touchStart")
+    return blink::WebInputEvent::Type::kTouchStart;
+  if (type == "touchEnd")
+    return blink::WebInputEvent::Type::kTouchEnd;
+  if (type == "touchMove")
+    return blink::WebInputEvent::Type::kTouchMove;
+  if (type == "touchCancel")
+    return blink::WebInputEvent::Type::kTouchCancel;
+  return blink::WebInputEvent::Type::kUndefined;
+}
+
+bool GenerateDispatchTouchPoints(
+    blink::WebTouchEvent* event,
+    blink::WebInputEvent::Type type,
+    const base::flat_map<blink::PointerId, blink::WebTouchPoint>& points,
+    const blink::WebTouchPoint& changing) {
+  event->touches_length = 1;
+  event->touches[0] = changing;
+  for (const auto& it : points) {
+    if (it.first == changing.id)
+      continue;
+    if (event->touches_length == blink::WebTouchEvent::kTouchesLengthCap)
+      return false;
+    event->touches[event->touches_length] = it.second;
+    event->touches[event->touches_length].state =
+        type == blink::WebInputEvent::Type::kTouchCancel
+            ? blink::WebTouchPoint::State::kStateCancelled
+            : blink::WebTouchPoint::State::kStateStationary;
+    event->touches_length++;
+  }
+  if (type == blink::WebInputEvent::Type::kTouchCancel ||
+      type == blink::WebInputEvent::Type::kTouchEnd) {
+    event->touches[0].state = type == blink::WebInputEvent::Type::kTouchCancel
+                                  ? blink::WebTouchPoint::State::kStateCancelled
+                                  : blink::WebTouchPoint::State::kStateReleased;
+    event->SetType(type);
+  } else if (!points.contains(changing.id)) {
+    event->touches[0].state = blink::WebTouchPoint::State::kStatePressed;
+    event->SetType(blink::WebInputEvent::Type::kTouchStart);
+  } else {
+    event->touches[0].state = blink::WebTouchPoint::State::kStateMoved;
+    event->SetType(blink::WebInputEvent::Type::kTouchMove);
+  }
+  return true;
+}
+
+content::RenderWidgetHostImpl* GetFocusedDispatchWidgetHost(
+    content::WebContents* web_contents) {
+  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents);
+  content::RenderWidgetHost* rwh =
+      wc_impl->GetPrimaryMainFrame()->GetRenderWidgetHost();
+  auto* widget_host = content::RenderWidgetHostImpl::From(rwh);
+  if (!widget_host)
+    return nullptr;
+  if (widget_host->delegate()) {
+    content::RenderWidgetHostImpl* focused =
+        widget_host->delegate()->GetFocusedRenderWidgetHost(widget_host);
+    if (focused)
+      return focused;
+  }
+  return widget_host;
+}
+
 }  // namespace
 
 v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
@@ -4040,6 +4201,35 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
   int event_modifiers =
       GetDispatchMouseEventModifiers(modifiers, buttons) | button_modifiers;
 
+  // Optional CDP fields: timestamp / pointerType / pen properties.
+  std::optional<double> timestamp;
+  double timestamp_value = 0;
+  if (params.Get("timestamp", &timestamp_value))
+    timestamp = timestamp_value;
+
+  std::string pointer_type = "mouse";
+  params.Get("pointerType", &pointer_type);
+  if (pointer_type.empty())
+    pointer_type = "mouse";
+  if (pointer_type != "mouse" && pointer_type != "pen") {
+    promise.RejectWithErrorMessage(
+        "Invalid pointerType (expected 'mouse' or 'pen')");
+    return handle;
+  }
+
+  double force = 0;
+  double tangential_pressure = 0;
+  double tilt_x = 0;
+  double tilt_y = 0;
+  int twist = 0;
+  params.Get("force", &force);
+  params.Get("tangentialPressure", &tangential_pressure);
+  params.Get("tiltX", &tilt_x);
+  params.Get("tiltY", &tilt_y);
+  params.Get("twist", &twist);
+
+  base::TimeTicks event_timestamp = GetDispatchMouseEventTimeTicks(timestamp);
+
   std::unique_ptr<blink::WebMouseEvent> mouse_event;
   if (event_type == blink::WebInputEvent::Type::kMouseWheel) {
     double delta_x = 0;
@@ -4050,7 +4240,7 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
       return handle;
     }
     auto wheel_event = std::make_unique<blink::WebMouseWheelEvent>(
-        event_type, event_modifiers, base::TimeTicks::Now());
+        event_type, event_modifiers, event_timestamp);
     wheel_event->delta_x = static_cast<float>(-delta_x);
     wheel_event->delta_y = static_cast<float>(-delta_y);
     if (wheel_event->delta_x != 0.0f)
@@ -4063,12 +4253,24 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
         blink::WebInputEvent::DispatchType::kBlocking;
     mouse_event = std::move(wheel_event);
   } else {
+    std::string validation_error = ValidateDispatchMousePointerProperties(
+        force, tangential_pressure, tilt_x, tilt_y, twist);
+    if (!validation_error.empty()) {
+      promise.RejectWithErrorMessage(validation_error);
+      return handle;
+    }
     mouse_event = std::make_unique<blink::WebMouseEvent>(
-        event_type, event_modifiers, base::TimeTicks::Now());
+        event_type, event_modifiers, event_timestamp);
   }
 
   mouse_event->button = event_button;
   mouse_event->click_count = click_count;
+  mouse_event->pointer_type = GetDispatchMouseEventPointerType(pointer_type);
+  mouse_event->force = static_cast<float>(force);
+  mouse_event->tangential_pressure = static_cast<float>(tangential_pressure);
+  mouse_event->tilt_x = tilt_x;
+  mouse_event->tilt_y = tilt_y;
+  mouse_event->twist = twist;
 
   if (!web_contents()) {
     promise.RejectWithErrorMessage("WebContents is destroyed");
@@ -4164,6 +4366,725 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
           },
           GetWeakPtr(), shared_event, shared_promise));
 
+  return handle;
+}
+
+namespace {
+
+v8::Local<v8::Value> DomElementInfoToV8(
+    v8::Isolate* isolate,
+    const mojom::DomElementInfo& info) {
+  auto dict = gin_helper::Dictionary::CreateEmpty(isolate);
+  dict.Set("backendNodeId", info.backend_node_id);
+  dict.Set("tagName", info.tag_name);
+  dict.Set("x", info.x);
+  dict.Set("y", info.y);
+  dict.Set("width", info.width);
+  dict.Set("height", info.height);
+  auto bounds = gin_helper::Dictionary::CreateEmpty(isolate);
+  bounds.Set("x", info.bounds.x());
+  bounds.Set("y", info.bounds.y());
+  bounds.Set("width", info.bounds.width());
+  bounds.Set("height", info.bounds.height());
+  dict.Set("bounds", bounds);
+  return dict.GetHandle();
+}
+
+v8::Local<v8::Value> DomBoxModelToV8(v8::Isolate* isolate,
+                                     const mojom::DomBoxModel& model) {
+  auto dict = gin_helper::Dictionary::CreateEmpty(isolate);
+  dict.Set("backendNodeId", model.backend_node_id);
+  dict.Set("x", model.x);
+  dict.Set("y", model.y);
+  dict.Set("width", model.width);
+  dict.Set("height", model.height);
+  return dict.GetHandle();
+}
+
+content::RenderFrameHost* GetLiveMainFrame(content::WebContents* contents,
+                                           std::string* error) {
+  if (!contents) {
+    *error = "WebContents is destroyed";
+    return nullptr;
+  }
+  auto* frame_host = contents->GetPrimaryMainFrame();
+  if (!frame_host) {
+    *error = "No primary main frame";
+    return nullptr;
+  }
+  if (!frame_host->IsRenderFrameLive()) {
+    *error = "Render frame is not live";
+    return nullptr;
+  }
+  return frame_host;
+}
+
+}  // namespace
+
+v8::Local<v8::Promise> WebContents::QuerySelectorDeep(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<v8::Local<v8::Value>> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  std::string selector;
+  if (!args->GetNext(&selector) || selector.empty()) {
+    promise.RejectWithErrorMessage("'selector' is required");
+    return handle;
+  }
+
+  bool pierce = true;
+  bool scroll_into_view = false;
+  gin_helper::Dictionary options;
+  if (args->GetNext(&options)) {
+    options.Get("pierce", &pierce);
+    options.Get("scrollIntoView", &scroll_into_view);
+  }
+
+  std::string error;
+  auto* frame_host = GetLiveMainFrame(web_contents(), &error);
+  if (!frame_host) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+
+  auto electron_renderer =
+      std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame_host->GetRemoteInterfaces()->GetInterface(
+      electron_renderer->BindNewPipeAndPassReceiver());
+  auto* raw_ptr = electron_renderer.get();
+  (*raw_ptr)->QuerySelectorDeep(
+      selector, pierce, scroll_into_view,
+      base::BindOnce(
+          [](std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>> ,
+             gin_helper::Promise<v8::Local<v8::Value>> promise, bool found,
+             mojom::DomElementInfoPtr info) {
+            v8::Isolate* isolate = promise.isolate();
+            v8::HandleScope scope(isolate);
+            if (!found || !info) {
+              promise.Resolve(v8::Null(isolate).As<v8::Value>());
+              return;
+            }
+            promise.Resolve(DomElementInfoToV8(isolate, *info));
+          },
+          std::move(electron_renderer), std::move(promise)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::GetNodeBoxModel(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<v8::Local<v8::Value>> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  int32_t backend_node_id = 0;
+  if (!args->GetNext(&backend_node_id) || backend_node_id == 0) {
+    promise.RejectWithErrorMessage("'backendNodeId' is required");
+    return handle;
+  }
+
+  bool scroll_into_view = false;
+  gin_helper::Dictionary options;
+  if (args->GetNext(&options))
+    options.Get("scrollIntoView", &scroll_into_view);
+
+  std::string error;
+  auto* frame_host = GetLiveMainFrame(web_contents(), &error);
+  if (!frame_host) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+
+  auto electron_renderer =
+      std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame_host->GetRemoteInterfaces()->GetInterface(
+      electron_renderer->BindNewPipeAndPassReceiver());
+  auto* raw_ptr = electron_renderer.get();
+  (*raw_ptr)->GetNodeBoxModel(
+      backend_node_id, scroll_into_view,
+      base::BindOnce(
+          [](std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+             gin_helper::Promise<v8::Local<v8::Value>> promise, bool found,
+             mojom::DomBoxModelPtr model) {
+            v8::Isolate* isolate = promise.isolate();
+            v8::HandleScope scope(isolate);
+            if (!found || !model) {
+              promise.Resolve(v8::Null(isolate).As<v8::Value>());
+              return;
+            }
+            promise.Resolve(DomBoxModelToV8(isolate, *model));
+          },
+          std::move(electron_renderer), std::move(promise)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  std::string selector;
+  if (!args->GetNext(&selector) || selector.empty()) {
+    promise.RejectWithErrorMessage("'selector' is required");
+    return handle;
+  }
+
+  bool pierce = true;
+  bool scroll_into_view = true;
+  std::string button = "left";
+  int click_count = 1;
+  int modifiers = 0;
+  gin_helper::Dictionary options;
+  if (args->GetNext(&options)) {
+    options.Get("pierce", &pierce);
+    options.Get("scrollIntoView", &scroll_into_view);
+    options.Get("button", &button);
+    options.Get("clickCount", &click_count);
+    options.Get("modifiers", &modifiers);
+  }
+
+  blink::WebPointerProperties::Button event_button =
+      blink::WebPointerProperties::Button::kNoButton;
+  int button_modifiers = 0;
+  if (!GetDispatchMouseEventButton(button, &event_button, &button_modifiers)) {
+    promise.RejectWithErrorMessage("Invalid mouse button");
+    return handle;
+  }
+
+  if (IsOffScreen()) {
+    promise.RejectWithErrorMessage(
+        "clickSelector is not supported for offscreen webContents");
+    return handle;
+  }
+
+  std::string error;
+  auto* frame_host = GetLiveMainFrame(web_contents(), &error);
+  if (!frame_host) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+
+  auto electron_renderer =
+      std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame_host->GetRemoteInterfaces()->GetInterface(
+      electron_renderer->BindNewPipeAndPassReceiver());
+  auto* raw_ptr = electron_renderer.get();
+  (*raw_ptr)->QuerySelectorDeep(
+      selector, pierce, scroll_into_view,
+      base::BindOnce(
+          [](base::WeakPtr<WebContents> self,
+             std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+             blink::WebPointerProperties::Button event_button,
+             int button_modifiers, int click_count, int modifiers,
+             gin_helper::Promise<void> promise, bool found,
+             mojom::DomElementInfoPtr info) {
+            if (!self || !self->web_contents()) {
+              promise.RejectWithErrorMessage("WebContents was destroyed");
+              return;
+            }
+            if (!found || !info) {
+              promise.RejectWithErrorMessage("No node found for selector");
+              return;
+            }
+            if (info->width <= 0 || info->height <= 0) {
+              promise.RejectWithErrorMessage("Element has empty bounds");
+              return;
+            }
+
+            const double x = info->x + info->width / 2.0;
+            const double y = info->y + info->height / 2.0;
+            const int event_modifiers =
+                GetDispatchMouseEventModifiers(modifiers, 0) | button_modifiers;
+            const base::TimeTicks event_timestamp =
+                GetDispatchMouseEventTimeTicks(std::nullopt);
+            float scale_factor =
+                GetDispatchMouseEventScaleFactor(self->web_contents());
+            gfx::PointF point_in_root(x * scale_factor, y * scale_factor);
+
+            content::RenderWidgetHostView* view =
+                self->web_contents()->GetRenderWidgetHostView();
+            if (!view) {
+              promise.RejectWithErrorMessage(
+                  "No RenderWidgetHostView available");
+              return;
+            }
+
+            auto make_event = [&](blink::WebInputEvent::Type type) {
+              auto event = std::make_unique<blink::WebMouseEvent>(
+                  type, event_modifiers, event_timestamp);
+              event->button = event_button;
+              event->click_count = click_count;
+              event->pointer_type =
+                  blink::WebPointerProperties::PointerType::kMouse;
+              event->SetPositionInWidget(point_in_root);
+              event->SetPositionInScreen(point_in_root);
+              return event;
+            };
+
+            auto* root_view =
+                static_cast<content::RenderWidgetHostViewBase*>(view);
+            auto* wc_impl =
+                static_cast<content::WebContentsImpl*>(self->web_contents());
+            auto shared_promise =
+                std::make_shared<gin_helper::Promise<void>>(std::move(promise));
+            auto shared_pressed =
+                std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
+                    make_event(blink::WebInputEvent::Type::kMouseDown));
+            auto shared_released =
+                std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
+                    make_event(blink::WebInputEvent::Type::kMouseUp));
+
+            wc_impl->GetRenderWidgetHostAtPointAsynchronously(
+                root_view, point_in_root,
+                base::BindOnce(
+                    [](base::WeakPtr<WebContents> self,
+                       std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>>
+                           pressed,
+                       std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>>
+                           released,
+                       std::shared_ptr<gin_helper::Promise<void>> promise,
+                       base::WeakPtr<content::RenderWidgetHostViewBase> target,
+                       std::optional<gfx::PointF> point) {
+                      if (!self || !self->web_contents()) {
+                        promise->RejectWithErrorMessage(
+                            "WebContents was destroyed");
+                        return;
+                      }
+                      if (!target || !point.has_value()) {
+                        promise->RejectWithErrorMessage(
+                            "Failed to resolve target widget for click");
+                        return;
+                      }
+
+                      gfx::Rect bounds = target->GetViewBounds();
+                      for (auto* event_ptr : {pressed->get(), released->get()}) {
+                        event_ptr->SetPositionInWidget(*point);
+                        event_ptr->SetPositionInScreen(*point +
+                                                       bounds.OffsetFromOrigin());
+                      }
+
+                      auto* widget_host = content::RenderWidgetHostImpl::From(
+                          target->GetRenderWidgetHost());
+                      if (!widget_host) {
+                        promise->RejectWithErrorMessage(
+                            "No RenderWidgetHost for target");
+                        return;
+                      }
+
+                      widget_host->Focus();
+                      widget_host->ForwardMouseEvent(**pressed);
+                      widget_host->ForwardMouseEvent(**released);
+                      promise->Resolve();
+                    },
+                    self, shared_pressed, shared_released, shared_promise));
+          },
+          GetWeakPtr(), std::move(electron_renderer), event_button,
+          button_modifiers, click_count, modifiers, std::move(promise)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  gin_helper::Dictionary params;
+  if (!args->GetNext(&params)) {
+    promise.RejectWithErrorMessage(
+        "Expected an object matching CDP Input.dispatchKeyEvent params");
+    return handle;
+  }
+
+  std::string type;
+  if (!params.Get("type", &type)) {
+    promise.RejectWithErrorMessage("'type' is required");
+    return handle;
+  }
+
+  blink::WebInputEvent::Type event_type = GetDispatchKeyEventType(type);
+  if (event_type == blink::WebInputEvent::Type::kUndefined) {
+    promise.RejectWithErrorMessage(
+        "Unexpected event type (expected keyDown, keyUp, char, or rawKeyDown)");
+    return handle;
+  }
+
+  int modifiers = 0;
+  bool auto_repeat = false;
+  bool is_keypad = false;
+  int location = 0;
+  params.Get("modifiers", &modifiers);
+  params.Get("autoRepeat", &auto_repeat);
+  params.Get("isKeypad", &is_keypad);
+  params.Get("location", &location);
+
+  std::optional<double> timestamp;
+  double timestamp_value = 0;
+  if (params.Get("timestamp", &timestamp_value))
+    timestamp = timestamp_value;
+
+  int event_modifiers = GetDispatchKeyEventModifiers(modifiers, auto_repeat,
+                                                     is_keypad, location);
+  input::NativeWebKeyboardEvent event(
+      event_type, event_modifiers, GetDispatchMouseEventTimeTicks(timestamp));
+
+  std::optional<std::string> text;
+  std::optional<std::string> unmodified_text;
+  std::string text_value;
+  std::string unmodified_text_value;
+  if (params.Get("text", &text_value))
+    text = text_value;
+  if (params.Get("unmodifiedText", &unmodified_text_value))
+    unmodified_text = unmodified_text_value;
+
+  if (!SetDispatchKeyboardEventText(event.text, text)) {
+    promise.RejectWithErrorMessage("Invalid 'text' parameter");
+    return handle;
+  }
+  if (!SetDispatchKeyboardEventText(event.unmodified_text, unmodified_text)) {
+    promise.RejectWithErrorMessage("Invalid 'unmodifiedText' parameter");
+    return handle;
+  }
+
+  int windows_virtual_key_code = 0;
+  if (params.Get("windowsVirtualKeyCode", &windows_virtual_key_code))
+    event.windows_key_code = windows_virtual_key_code;
+  int native_virtual_key_code = 0;
+  if (params.Get("nativeVirtualKeyCode", &native_virtual_key_code))
+    event.native_key_code = native_virtual_key_code;
+  bool is_system_key = false;
+  if (params.Get("isSystemKey", &is_system_key))
+    event.is_system_key = is_system_key;
+
+  std::string code;
+  if (params.Get("code", &code)) {
+    event.dom_code =
+        static_cast<int>(ui::KeycodeConverter::CodeStringToDomCode(code));
+  }
+  std::string key;
+  if (params.Get("key", &key)) {
+    event.dom_key =
+        static_cast<int>(ui::KeycodeConverter::KeyStringToDomKey(key));
+  }
+
+  // Match CDP: without a native key event, skip browser shortcut handling.
+  event.skip_if_unhandled = true;
+
+  if (!web_contents()) {
+    promise.RejectWithErrorMessage("WebContents is destroyed");
+    return handle;
+  }
+
+  content::RenderWidgetHostImpl* widget_host =
+      GetFocusedDispatchWidgetHost(web_contents());
+  if (!widget_host) {
+    promise.RejectWithErrorMessage("No RenderWidgetHost available");
+    return handle;
+  }
+
+  std::vector<std::string> commands;
+  params.Get("commands", &commands);
+  std::vector<blink::mojom::EditCommandPtr> edit_commands;
+  edit_commands.reserve(commands.size());
+  for (const std::string& command : commands)
+    edit_commands.push_back(blink::mojom::EditCommand::New(command, ""));
+
+  widget_host->Focus();
+  widget_host->ForwardKeyboardEventWithCommands(event, ui::LatencyInfo(),
+                                                std::move(edit_commands));
+  promise.Resolve();
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  gin_helper::Dictionary params;
+  if (!args->GetNext(&params)) {
+    promise.RejectWithErrorMessage(
+        "Expected an object matching CDP Input.dispatchTouchEvent params");
+    return handle;
+  }
+
+  std::string type;
+  if (!params.Get("type", &type)) {
+    promise.RejectWithErrorMessage("'type' is required");
+    return handle;
+  }
+
+  blink::WebInputEvent::Type event_type = GetDispatchTouchEventType(type);
+  if (event_type == blink::WebInputEvent::Type::kUndefined) {
+    promise.RejectWithErrorMessage(
+        "Unexpected event type (expected touchStart, touchEnd, touchMove, or "
+        "touchCancel)");
+    return handle;
+  }
+
+  v8::Local<v8::Value> touch_points_value;
+  if (!params.Get("touchPoints", &touch_points_value) ||
+      !touch_points_value->IsArray()) {
+    promise.RejectWithErrorMessage("'touchPoints' must be an array");
+    return handle;
+  }
+  v8::Local<v8::Array> touch_points_array =
+      touch_points_value.As<v8::Array>();
+
+  int modifiers = 0;
+  params.Get("modifiers", &modifiers);
+  std::optional<double> timestamp;
+  double timestamp_value = 0;
+  if (params.Get("timestamp", &timestamp_value))
+    timestamp = timestamp_value;
+
+  if ((event_type == blink::WebInputEvent::Type::kTouchStart ||
+       event_type == blink::WebInputEvent::Type::kTouchMove) &&
+      touch_points_array->Length() == 0) {
+    promise.RejectWithErrorMessage(
+        "TouchStart and TouchMove must have at least one touch point.");
+    return handle;
+  }
+  if (event_type == blink::WebInputEvent::Type::kTouchCancel &&
+      touch_points_array->Length() != 0) {
+    promise.RejectWithErrorMessage(
+        "TouchCancel must not have any touch points.");
+    return handle;
+  }
+  if (event_type != blink::WebInputEvent::Type::kTouchStart &&
+      dispatch_touch_points_.empty()) {
+    promise.RejectWithErrorMessage(
+        "Must send a TouchStart first to start a new touch.");
+    return handle;
+  }
+
+  if (!web_contents()) {
+    promise.RejectWithErrorMessage("WebContents is destroyed");
+    return handle;
+  }
+
+  float scale_factor = GetDispatchMouseEventScaleFactor(web_contents());
+  int event_modifiers = GetDispatchMouseEventModifiers(modifiers, 0);
+  base::TimeTicks event_timestamp = GetDispatchMouseEventTimeTicks(timestamp);
+
+  base::flat_map<blink::PointerId, blink::WebTouchPoint> points;
+  size_t with_id = 0;
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  for (uint32_t i = 0; i < touch_points_array->Length(); ++i) {
+    v8::Local<v8::Value> item;
+    if (!touch_points_array->Get(context, i).ToLocal(&item) ||
+        !item->IsObject()) {
+      promise.RejectWithErrorMessage("Invalid touch point");
+      return handle;
+    }
+    gin_helper::Dictionary point_dict(isolate, item.As<v8::Object>());
+    double x = 0;
+    double y = 0;
+    if (!point_dict.Get("x", &x) || !point_dict.Get("y", &y)) {
+      promise.RejectWithErrorMessage("Touch point requires 'x' and 'y'");
+      return handle;
+    }
+
+    int id = static_cast<int>(i);
+    if (point_dict.Get("id", &id))
+      with_id++;
+
+    double force = 1.0;
+    double tangential_pressure = 0;
+    double tilt_x = 0;
+    double tilt_y = 0;
+    int twist = 0;
+    double radius_x = 1.0;
+    double radius_y = 1.0;
+    double rotation_angle = 0;
+    point_dict.Get("force", &force);
+    point_dict.Get("tangentialPressure", &tangential_pressure);
+    point_dict.Get("tiltX", &tilt_x);
+    point_dict.Get("tiltY", &tilt_y);
+    point_dict.Get("twist", &twist);
+    point_dict.Get("radiusX", &radius_x);
+    point_dict.Get("radiusY", &radius_y);
+    point_dict.Get("rotationAngle", &rotation_angle);
+
+    std::string validation_error = ValidateDispatchMousePointerProperties(
+        force, tangential_pressure, tilt_x, tilt_y, twist);
+    if (!validation_error.empty()) {
+      promise.RejectWithErrorMessage(validation_error);
+      return handle;
+    }
+
+    blink::PointerId pointer_id = static_cast<blink::PointerId>(id);
+    blink::WebTouchPoint& point = points[pointer_id];
+    point.id = pointer_id;
+    point.radius_x = static_cast<float>(radius_x);
+    point.radius_y = static_cast<float>(radius_y);
+    point.rotation_angle = static_cast<float>(rotation_angle);
+    point.force = static_cast<float>(force);
+    point.pointer_type = blink::WebPointerProperties::PointerType::kTouch;
+    point.SetPositionInWidget(gfx::PointF(x * scale_factor, y * scale_factor));
+    point.SetPositionInScreen(point.PositionInWidget());
+    point.tilt_x = tilt_x;
+    point.tilt_y = tilt_y;
+    point.tangential_pressure = static_cast<float>(tangential_pressure);
+    point.twist = twist;
+  }
+
+  if (with_id > 0 && with_id < touch_points_array->Length()) {
+    promise.RejectWithErrorMessage(
+        "All or none of the provided TouchPoints must supply ids.");
+    return handle;
+  }
+
+  std::vector<blink::WebTouchEvent> events;
+  bool ok = true;
+  for (auto& id_point : points) {
+    if (dispatch_touch_points_.contains(id_point.first) &&
+        event_type == blink::WebInputEvent::Type::kTouchMove &&
+        dispatch_touch_points_[id_point.first].PositionInWidget() ==
+            id_point.second.PositionInWidget()) {
+      continue;
+    }
+
+    events.emplace_back(event_type, event_modifiers, event_timestamp);
+    ok &= GenerateDispatchTouchPoints(&events.back(), event_type,
+                                      dispatch_touch_points_, id_point.second);
+    if (event_type == blink::WebInputEvent::Type::kTouchStart ||
+        event_type == blink::WebInputEvent::Type::kTouchMove) {
+      dispatch_touch_points_[id_point.first] = id_point.second;
+    } else if (event_type == blink::WebInputEvent::Type::kTouchEnd) {
+      dispatch_touch_points_.erase(id_point.first);
+    }
+  }
+
+  if (touch_points_array->Length() == 0 && !dispatch_touch_points_.empty()) {
+    if (event_type == blink::WebInputEvent::Type::kTouchCancel) {
+      events.emplace_back(event_type, event_modifiers, event_timestamp);
+      ok &= GenerateDispatchTouchPoints(&events.back(), event_type,
+                                        dispatch_touch_points_,
+                                        dispatch_touch_points_.begin()->second);
+      dispatch_touch_points_.clear();
+    } else if (event_type == blink::WebInputEvent::Type::kTouchEnd) {
+      for (auto it = dispatch_touch_points_.begin();
+           it != dispatch_touch_points_.end();) {
+        events.emplace_back(event_type, event_modifiers, event_timestamp);
+        ok &= GenerateDispatchTouchPoints(&events.back(), event_type,
+                                          dispatch_touch_points_, it->second);
+        it = dispatch_touch_points_.erase(it);
+      }
+    }
+  }
+
+  if (!ok) {
+    promise.RejectWithErrorMessage("Exceeded maximum touch points limit");
+    return handle;
+  }
+  if (events.empty()) {
+    promise.Resolve();
+    return handle;
+  }
+
+  content::RenderWidgetHostView* view =
+      web_contents()->GetRenderWidgetHostView();
+  if (!view) {
+    promise.RejectWithErrorMessage("No RenderWidgetHostView available");
+    return handle;
+  }
+
+  auto* root_view = static_cast<content::RenderWidgetHostViewBase*>(view);
+  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents());
+  gfx::PointF point_in_root = events[0].touches[0].PositionInWidget();
+  auto shared_events =
+      std::make_shared<std::vector<blink::WebTouchEvent>>(std::move(events));
+  auto shared_promise =
+      std::make_shared<gin_helper::Promise<void>>(std::move(promise));
+
+  wc_impl->GetRenderWidgetHostAtPointAsynchronously(
+      root_view, point_in_root,
+      base::BindOnce(
+          [](base::WeakPtr<WebContents> self,
+             std::shared_ptr<std::vector<blink::WebTouchEvent>> events,
+             std::shared_ptr<gin_helper::Promise<void>> promise,
+             base::WeakPtr<content::RenderWidgetHostViewBase> target,
+             std::optional<gfx::PointF> point) {
+            if (!self || !self->web_contents()) {
+              promise->RejectWithErrorMessage("WebContents was destroyed");
+              return;
+            }
+            if (!target || !point.has_value()) {
+              promise->RejectWithErrorMessage(
+                  "Failed to resolve target widget for touch event");
+              return;
+            }
+
+            auto* widget_host = content::RenderWidgetHostImpl::From(
+                target->GetRenderWidgetHost());
+            if (!widget_host) {
+              promise->RejectWithErrorMessage("No RenderWidgetHost for target");
+              return;
+            }
+
+            gfx::PointF original = (*events)[0].touches[0].PositionInWidget();
+            gfx::Vector2dF delta = *point - original;
+            for (auto& event : *events) {
+              event.dispatch_type =
+                  event.GetType() == blink::WebInputEvent::Type::kTouchCancel
+                      ? blink::WebInputEvent::DispatchType::kEventNonBlocking
+                      : blink::WebInputEvent::DispatchType::kBlocking;
+              event.moved_beyond_slop_region = true;
+              event.unique_touch_event_id = ui::GetNextTouchEventId();
+              for (unsigned j = 0; j < event.touches_length; j++) {
+                gfx::PointF touch_point = event.touches[j].PositionInWidget();
+                gfx::PointF position_in_widget(touch_point.x() + delta.x(),
+                                               touch_point.y() + delta.y());
+                event.touches[j].SetPositionInWidget(position_in_widget);
+                gfx::Rect bounds = target->GetViewBounds();
+                event.touches[j].SetPositionInScreen(
+                    position_in_widget + bounds.OffsetFromOrigin());
+              }
+            }
+
+            widget_host->Focus();
+            auto* emulator =
+                widget_host->GetTouchEmulator(/*create_if_necessary=*/true);
+            if (!emulator) {
+              promise->RejectWithErrorMessage("Touch emulator unavailable");
+              return;
+            }
+            emulator->Enable(
+                input::TouchEmulator::Mode::kInjectingTouchEvents,
+                ui::GestureProviderConfigType::CURRENT_PLATFORM);
+            for (size_t i = 0; i < events->size(); ++i) {
+              emulator->InjectTouchEvent(
+                  (*events)[i], target.get(),
+                  i + 1 == events->size()
+                      ? base::BindOnce(
+                            [](std::shared_ptr<gin_helper::Promise<void>> p) {
+                              p->Resolve();
+                            },
+                            promise)
+                      : base::OnceClosure());
+            }
+          },
+          GetWeakPtr(), shared_events, shared_promise));
+
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::CancelDragging() {
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  if (!web_contents()) {
+    promise.RejectWithErrorMessage("WebContents is destroyed");
+    return handle;
+  }
+
+  // Without an attached CDP drag controller, end any in-flight system drag on
+  // the focused widget (best-effort equivalent of Input.cancelDragging).
+  content::RenderWidgetHostImpl* widget_host =
+      GetFocusedDispatchWidgetHost(web_contents());
+  if (widget_host)
+    widget_host->DragSourceSystemDragEnded();
+
+  promise.Resolve();
   return handle;
 }
 
@@ -5177,6 +6098,12 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("isFocused", &WebContents::IsFocused)
       .SetMethod("sendInputEvent", &WebContents::SendInputEvent)
       .SetMethod("dispatchMouseEvent", &WebContents::DispatchMouseEvent)
+      .SetMethod("querySelectorDeep", &WebContents::QuerySelectorDeep)
+      .SetMethod("getNodeBoxModel", &WebContents::GetNodeBoxModel)
+      .SetMethod("clickSelector", &WebContents::ClickSelector)
+      .SetMethod("dispatchKeyEvent", &WebContents::DispatchKeyEvent)
+      .SetMethod("dispatchTouchEvent", &WebContents::DispatchTouchEvent)
+      .SetMethod("cancelDragging", &WebContents::CancelDragging)
       .SetMethod("beginFrameSubscription", &WebContents::BeginFrameSubscription)
       .SetMethod("endFrameSubscription", &WebContents::EndFrameSubscription)
       .SetMethod("startDrag", &WebContents::StartDrag)

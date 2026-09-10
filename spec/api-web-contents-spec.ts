@@ -1775,6 +1775,225 @@ describe('webContents module', () => {
       expect(eventType).to.equal('click');
       expect(w.webContents.debugger.isAttached()).to.be.false();
     });
+
+    it('accepts optional pointerType and pen properties', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<div id="t" style="position:absolute;left:40px;top:40px;width:120px;height:40px"></div>
+<script>
+  const { ipcRenderer } = require('electron');
+  document.getElementById('t').addEventListener('pointerdown', (e) => {
+    ipcRenderer.send('dispatch-pen-down', e.isTrusted, e.pointerType, e.pressure, e.tiltX, e.tiltY, e.twist);
+  });
+</script>`);
+
+      const down = once(ipcMain, 'dispatch-pen-down');
+      await w.webContents.dispatchMouseEvent({
+        type: 'mousePressed',
+        x: 100,
+        y: 60,
+        button: 'left',
+        clickCount: 1,
+        pointerType: 'pen',
+        force: 0.6,
+        tiltX: 15,
+        tiltY: -10,
+        twist: 90
+      });
+      const [, isTrusted, pointerType, pressure, tiltX, tiltY, twist] = await down;
+      expect(isTrusted).to.be.true();
+      expect(pointerType).to.equal('pen');
+      expect(pressure).to.be.closeTo(0.6, 0.01);
+      expect(tiltX).to.equal(15);
+      expect(tiltY).to.equal(-10);
+      expect(twist).to.equal(90);
+    });
+  });
+
+  describe('querySelectorDeep / getNodeBoxModel / clickSelector', () => {
+    afterEach(closeAllWindows);
+
+    it('finds elements inside closed shadow roots without debugger', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<div id="host"></div>
+<script>
+  const host = document.getElementById('host');
+  const root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML = '<button id="inner" style="position:absolute;left:40px;top:40px;width:120px;height:40px">go</button>';
+  window.__closedRoot = root;
+</script>`);
+
+      const viaPage = await w.webContents.executeJavaScript(
+        'document.querySelector("#inner")');
+      expect(viaPage).to.equal(null);
+
+      const el = await w.webContents.querySelectorDeep('#inner');
+      expect(el).to.not.equal(null);
+      expect(el.backendNodeId).to.be.a('number').that.is.above(0);
+      expect(el.tagName.toLowerCase()).to.equal('button');
+      expect(el.width).to.be.above(0);
+      expect(el.height).to.be.above(0);
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+
+      const box = await w.webContents.getNodeBoxModel(el.backendNodeId);
+      expect(box).to.not.equal(null);
+      expect(box.backendNodeId).to.equal(el.backendNodeId);
+      expect(box.width).to.be.closeTo(el.width, 1);
+    });
+
+    it('clicks a closed-shadow target with a trusted event', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<div id="host"></div>
+<script>
+  const { ipcRenderer } = require('electron');
+  const host = document.getElementById('host');
+  const root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML = '<button id="inner" style="position:absolute;left:40px;top:40px;width:120px;height:40px">go</button>';
+  root.getElementById('inner').addEventListener('click', (e) => {
+    ipcRenderer.send('shadow-clicked', e.isTrusted);
+  });
+</script>`);
+
+      const clicked = once(ipcMain, 'shadow-clicked');
+      await w.webContents.clickSelector('#inner');
+      const [, isTrusted] = await clicked;
+      expect(isTrusted).to.be.true();
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+    });
+
+    it('supports the >>> pierce combinator', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<div id="host"></div>
+<script>
+  const host = document.getElementById('host');
+  const root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML = '<span class="x">hi</span>';
+</script>`);
+
+      const el = await w.webContents.querySelectorDeep('#host >>> .x', { pierce: false });
+      expect(el).to.not.equal(null);
+      expect(el.tagName.toLowerCase()).to.equal('span');
+    });
+  });
+
+  describe('dispatchKeyEvent(params)', () => {
+    afterEach(closeAllWindows);
+
+    it('types into a focused input without debugger.attach', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<input id="i" autofocus />
+<script>
+  const { ipcRenderer } = require('electron');
+  document.getElementById('i').addEventListener('input', (e) => {
+    ipcRenderer.send('dispatch-key-input', e.isTrusted, e.target.value);
+  });
+</script>`);
+      await w.webContents.executeJavaScript(
+        'document.getElementById("i").focus()'
+      );
+
+      const typed = once(ipcMain, 'dispatch-key-input');
+      await w.webContents.dispatchKeyEvent({
+        type: 'keyDown',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        text: 'a',
+        unmodifiedText: 'a'
+      });
+      await w.webContents.dispatchKeyEvent({
+        type: 'char',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        text: 'a',
+        unmodifiedText: 'a'
+      });
+      await w.webContents.dispatchKeyEvent({
+        type: 'keyUp',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65
+      });
+      const [, isTrusted, value] = await typed;
+      expect(isTrusted).to.be.true();
+      expect(value).to.equal('a');
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+    });
+  });
+
+  describe('dispatchTouchEvent(params)', () => {
+    afterEach(closeAllWindows);
+
+    it('dispatches a trusted touch sequence without debugger.attach', async () => {
+      const w = new BrowserWindow({
+        show: true,
+        width: 400,
+        height: 300,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+      });
+      await w.loadURL(`data:text/html,<!DOCTYPE html>
+<div id="t" style="position:absolute;left:40px;top:40px;width:120px;height:40px"></div>
+<script>
+  const { ipcRenderer } = require('electron');
+  document.getElementById('t').addEventListener('touchstart', (e) => {
+    ipcRenderer.send('dispatch-touch-start', e.isTrusted, e.touches.length);
+  }, { passive: true });
+</script>`);
+
+      const started = once(ipcMain, 'dispatch-touch-start');
+      await w.webContents.dispatchTouchEvent({
+        type: 'touchStart',
+        touchPoints: [{ x: 100, y: 60 }]
+      });
+      await w.webContents.dispatchTouchEvent({
+        type: 'touchEnd',
+        touchPoints: [{ x: 100, y: 60 }]
+      });
+      const [, isTrusted, touchCount] = await started;
+      expect(isTrusted).to.be.true();
+      expect(touchCount).to.equal(1);
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+    });
+  });
+
+  describe('cancelDragging()', () => {
+    afterEach(closeAllWindows);
+
+    it('resolves without debugger.attach', async () => {
+      const w = new BrowserWindow({ show: false });
+      await w.loadURL('about:blank');
+      await w.webContents.cancelDragging();
+      expect(w.webContents.debugger.isAttached()).to.be.false();
+    });
   });
 
   describe('insertCSS', () => {
