@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -45,6 +46,8 @@
 #include "shell/common/gin_helper/pinnable.h"
 #include "shell/common/gin_helper/wrappable.h"
 #include "third_party/skia/include/core/SkRegion.h"
+#include "third_party/blink/public/common/input/pointer_id.h"
+#include "third_party/blink/public/common/input/web_touch_point.h"
 #include "ui/base/models/image_model.h"
 #include "v8/include/cppgc/persistent.h"
 
@@ -311,6 +314,25 @@ class WebContents final : public ExclusiveAccessContext,
 
   // CDP Input.dispatchMouseEvent equivalent without attaching the debugger.
   v8::Local<v8::Promise> DispatchMouseEvent(gin::Arguments* args);
+
+  // Blink C++ querySelector that can pierce closed author shadow roots.
+  // Returns null when not found.
+  v8::Local<v8::Promise> QuerySelectorDeep(gin::Arguments* args);
+
+  // Resolve a DomNodeId / CDP backendNodeId to a CSS-pixel box model.
+  v8::Local<v8::Promise> GetNodeBoxModel(gin::Arguments* args);
+
+  // querySelectorDeep + trusted dispatchMouseEvent click at element center.
+  v8::Local<v8::Promise> ClickSelector(gin::Arguments* args);
+
+  // CDP Input.dispatchKeyEvent equivalent without attaching the debugger.
+  v8::Local<v8::Promise> DispatchKeyEvent(gin::Arguments* args);
+
+  // CDP Input.dispatchTouchEvent equivalent without attaching the debugger.
+  v8::Local<v8::Promise> DispatchTouchEvent(gin::Arguments* args);
+
+  // CDP Input.cancelDragging equivalent without attaching the debugger.
+  v8::Local<v8::Promise> CancelDragging();
 
   // Subscribe to the frame updates.
   void BeginFrameSubscription(gin::Arguments* args);
@@ -959,6 +981,9 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Declared after |inspectable_web_contents_| because it observes its views.
   std::unique_ptr<DraggableRegionDebugger> draggable_region_debugger_;
+
+  // Active touch points for CDP-style dispatchTouchEvent sessions.
+  base::flat_map<blink::PointerId, blink::WebTouchPoint> dispatch_touch_points_;
 
   base::WeakPtrFactory<WebContents> weak_factory_{this};
 };

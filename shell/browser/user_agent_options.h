@@ -37,6 +37,9 @@ struct UserAgentOptions {
   // Overrides navigator.platform.
   std::string platform;
 
+  // When true, hide window.chrome in webpage script contexts.
+  bool hide_chrome = false;
+
   // Overrides Accept-Language (renderer prefs + optional NetworkContext).
   std::optional<std::string> accept_language;
 
@@ -55,7 +58,7 @@ bool ParseUserAgentMetadata(const gin_helper::Dictionary& dict,
 
 // Reads optional 2nd argument of setUserAgent:
 // - string -> accept_language (legacy session API)
-// - object -> platform / acceptLanguage / userAgentMetadata
+// - object -> platform / hideChrome / acceptLanguage / userAgentMetadata
 //   - userAgentMetadata omitted -> kDefault
 //   - userAgentMetadata: null -> kDisabled (no Sec-CH-UA-*)
 //   - userAgentMetadata: {..} -> kCustom

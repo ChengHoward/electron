@@ -47,6 +47,13 @@ class ElectronApiServiceImpl
                           blink::TransferableMessage message) override;
   void TakeHeapSnapshot(mojo::ScopedHandle file,
                         TakeHeapSnapshotCallback callback) override;
+  void QuerySelectorDeep(const std::string& selector,
+                         bool pierce,
+                         bool scroll_into_view,
+                         QuerySelectorDeepCallback callback) override;
+  void GetNodeBoxModel(int32_t backend_node_id,
+                       bool scroll_into_view,
+                       GetNodeBoxModelCallback callback) override;
   void ProcessPendingMessages();
 
   // mojom::ElectronFrameStartup
