@@ -139,6 +139,7 @@ bool ParseUserAgentOptions(gin::Arguments* args,
   }
 
   dict.Get("platform", &out->platform);
+  dict.Get("hideChrome", &out->hide_chrome);
 
   std::string accept_language;
   if (dict.Get("acceptLanguage", &accept_language) ||

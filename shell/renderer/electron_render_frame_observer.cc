@@ -5,6 +5,7 @@
 #include "shell/renderer/electron_render_frame_observer.h"
 
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -176,6 +177,19 @@ void ElectronRenderFrameObserver::DidInstallConditionalFeatures(
     if (!renderer_client_->IsWebViewFrame(isolate, context, render_frame_))
       renderer_client_->SetupMainWorldOverrides(isolate, context,
                                                 render_frame_);
+  }
+
+  // Insurance: remove window.chrome if setUserAgent({ hideChrome: true }).
+  // Primary gate is in NativeExtensionBindingsSystem::UpdateBindingsForContext.
+  if (electron::is_main_world(world_id)) {
+    blink::WebLocalFrame* frame = render_frame_->GetWebFrame();
+    if (frame && frame->View() &&
+        frame->View()->GetRendererPreferences().hide_chrome) {
+      v8::Local<v8::String> chrome_name;
+      if (v8::String::NewFromUtf8(isolate, "chrome").ToLocal(&chrome_name)) {
+        std::ignore = context->Global()->Delete(context, chrome_name);
+      }
+    }
   }
 }
 
