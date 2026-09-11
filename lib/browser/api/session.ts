@@ -41,7 +41,10 @@ Session.prototype._init = function () {
   }
 };
 
-Session.prototype.fetch = function (input: RequestInfo, init?: RequestInit) {
+Session.prototype.fetch = function (
+  input: RequestInfo,
+  init?: RequestInit & { bypassCustomProtocolHandlers?: boolean, headerOrder?: string[] }
+) {
   return fetchWithSession(input, init, this, net.request);
 };
 
