@@ -4,6 +4,19 @@ import { ClientRequestConstructorOptions, ClientRequest, IncomingMessage, Sessio
 
 import { Readable, Writable, isReadable } from 'stream';
 
+export type ElectronFetchInit = RequestInit & {
+  bypassCustomProtocolHandlers?: boolean;
+  /**
+   * Optional explicit header name order (matched case-insensitively against
+   * `init.headers`). When omitted, object/array insertion order is preserved.
+   *
+   * This bypasses WHATWG Headers sort-and-combine when applying headers onto
+   * Chromium's URLLoader (so session.fetch / net.fetch can match navigation
+   * header order).
+   */
+  headerOrder?: string[];
+};
+
 function createDeferredPromise<T, E extends Error = Error>(): {
   promise: Promise<T>;
   resolve: (x: T) => void;
@@ -19,9 +32,52 @@ function createDeferredPromise<T, E extends Error = Error>(): {
   return { promise, resolve: res!, reject: rej! };
 }
 
+/**
+ * Preserve caller header order instead of iterating `Request.headers`
+ * (Fetch spec sort-and-combine / lexicographic order).
+ */
+function headersInOrder(init?: ElectronFetchInit): [string, string][] {
+  const h = init?.headers;
+  if (!h) return [];
+
+  let pairs: [string, string][];
+  if (typeof Headers !== 'undefined' && h instanceof Headers) {
+    // Already sorted by spec.
+    pairs = [...h.entries()];
+  } else if (Array.isArray(h)) {
+    pairs = h.map(([k, v]) => [String(k), Array.isArray(v) ? v.join(', ') : String(v)]);
+  } else {
+    pairs = Object.entries(h as Record<string, string | string[]>).map(([k, v]) => [
+      k,
+      Array.isArray(v) ? v.join(', ') : String(v)
+    ]);
+  }
+
+  const order = init?.headerOrder;
+  if (!order?.length) return pairs;
+
+  const byLower = new Map<string, [string, string]>();
+  for (const p of pairs) byLower.set(p[0].toLowerCase(), p);
+
+  const out: [string, string][] = [];
+  const used = new Set<string>();
+  for (const name of order) {
+    const key = name.toLowerCase();
+    const p = byLower.get(key);
+    if (p) {
+      out.push(p);
+      used.add(key);
+    }
+  }
+  for (const p of pairs) {
+    if (!used.has(p[0].toLowerCase())) out.push(p);
+  }
+  return out;
+}
+
 export function fetchWithSession(
   input: RequestInfo,
-  init: (RequestInit & { bypassCustomProtocolHandlers?: boolean }) | undefined,
+  init: ElectronFetchInit | undefined,
   session: SessionT | undefined,
   request: (options: ClientRequestConstructorOptions | string) => ClientRequest
 ) {
@@ -55,6 +111,8 @@ export function fetchWithSession(
   }
 
   let locallyAborted = false;
+  let r: ClientRequest;
+
   req.signal.addEventListener(
     'abort',
     () => {
@@ -84,7 +142,7 @@ export function fetchWithSession(
   // We can't set credentials to same-origin unless there's an origin set.
   const credentials = req.credentials === 'same-origin' && !origin ? 'include' : req.credentials;
 
-  const r = request(
+  r = request(
     allowAnyProtocol({
       session,
       method: req.method,
@@ -99,12 +157,15 @@ export function fetchWithSession(
 
   (r as any)._urlLoaderOptions.bypassCustomProtocolHandlers = !!init?.bypassCustomProtocolHandlers;
 
+  const ordered = headersInOrder(init);
+  const hasMode = ordered.some(([k]) => k.toLowerCase() === 'sec-fetch-mode');
   // cors is the default mode, but we can't set mode=cors without an origin.
-  if (req.mode && (req.mode !== 'cors' || origin)) {
+  // Do not prepend Sec-Fetch-Mode when the caller already set it (preserves order).
+  if (!hasMode && req.mode && (req.mode !== 'cors' || origin)) {
     r.setHeader('Sec-Fetch-Mode', req.mode);
   }
 
-  for (const [k, v] of req.headers) {
+  for (const [k, v] of ordered) {
     r.setHeader(k, v);
   }
 

@@ -816,13 +816,18 @@ Returns `Promise<void>` - Resolves when all connections are closed.
 #### `ses.fetch(input[, init])`
 
 * `input` string | [GlobalRequest](https://nodejs.org/api/globals.html#request)
-* `init` [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/fetch#options) & \{ bypassCustomProtocolHandlers?: boolean \} (optional)
+* `init` [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/fetch#options) & \{ bypassCustomProtocolHandlers?: boolean, headerOrder?: string[] \} (optional)
 
 Returns `Promise<GlobalResponse>` - see [Response](https://developer.mozilla.org/en-US/docs/Web/API/Response).
 
 Sends a request, similarly to how `fetch()` works in the renderer, using
 Chrome's network stack. This differs from Node's `fetch()`, which uses
 Node.js's HTTP stack.
+
+When applying `init.headers`, Electron preserves object/array insertion order
+instead of the Fetch-spec lexicographic order from `Headers` iteration. Pass
+`headerOrder` (header names) to force a specific wire order. Auto-added headers
+such as `Accept-Encoding` may still be appended by Chromium after your list.
 
 Example:
 
