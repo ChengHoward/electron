@@ -13,6 +13,12 @@ declare namespace Electron {
     utility = 'utility'
   }
 
+  interface LoadURLWithResponseOptions {
+    statusCode?: number;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
+  }
+
   interface App {
     setVersion(version: string): void;
     setDesktopName(name: string): void;
@@ -89,6 +95,14 @@ declare namespace Electron {
   interface WebContents {
     _awaitNextLoad(expectedUrl: string): Promise<void>;
     _setConsoleMessageObserved(observed: boolean): void;
+    _loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): void;
+    loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): Promise<void>;
     getOwnerBrowserWindow(): Electron.BrowserWindow | null;
     getLastWebPreferences(): Electron.WebPreferences | null;
     _getProcessMemoryInfo(processId?: number): Electron.ProcessMemoryInfo;
@@ -200,6 +214,10 @@ declare namespace Electron {
   // Deprecated / undocumented BrowserWindow methods
   interface BrowserWindow {
     getURL(): string;
+    loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): Promise<void>;
     send(channel: string, ...args: any[]): void;
     openDevTools(options?: Electron.OpenDevToolsOptions): void;
     closeDevTools(): void;
@@ -338,6 +356,22 @@ declare namespace ElectronInternal {
     reloadIgnoringCache?: boolean;
   }
 
+  interface WebContentsPrintOptions extends Electron.WebContentsPrintOptions {
+    mediaSize?: MediaSize;
+  }
+
+  type MediaSize = {
+    name: string;
+    custom_display_name: string;
+    height_microns: number;
+    width_microns: number;
+    imageable_area_left_microns?: number;
+    imageable_area_bottom_microns?: number;
+    imageable_area_right_microns?: number;
+    imageable_area_top_microns?: number;
+    is_default?: 'true';
+  };
+
   type PageSize = {
     width: number;
     height: number;
@@ -384,7 +418,7 @@ declare namespace ElectronInternal {
     /**
      * Whether the preload file's contents were read successfully. The actual
      * contents stay on the C++ side (mojo-cached startup data) and are looked
-     * up by id from createPreloadScript() — they never become a V8 string.
+     * up by id from createPreloadScript() 鈥?they never become a V8 string.
      */
     hasContents?: boolean;
     error?: Error;

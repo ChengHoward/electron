@@ -23,6 +23,7 @@
 3. **隐藏 `window.chrome`** — 经 `setUserAgent(ua, { hideChrome: true })` 控制网页主世界是否暴露该对象（可运行时切换）
 4. **穿 closed shadow 的 DOM 自动化** — `querySelectorDeep` / `getNodeBoxModel` / `clickSelector`（Blink C++，无 attach）
 5. **`session.fetch` / `net.fetch` 请求头保序** — 绕过 WHATWG `Headers` 字母序；可选 `headerOrder` 强制线上顺序
+6. **`loadURLWithResponse`** — 导航到指定 http(s) URL，主文档返回自定义正文（per-WC，不影响同 Session 其它窗口；不注册 `protocol.handle`）
 
 | 能力 | 上游 Electron | 本定制 |
 |------|---------------|--------|
@@ -33,6 +34,7 @@
 | 隐藏网页 `window.chrome` | 无 | `setUserAgent(ua, { hideChrome: true })` |
 | 穿 closed shadow 的元素查找 / 盒模型 / 点击 | 需 debugger CDP DOM，或页面 JS（穿不了 closed） | `querySelectorDeep` / `getNodeBoxModel` / `clickSelector`，Blink C++，无 attach |
 | `ses.fetch` / `net.fetch` 自定义请求头顺序 | 经 `Request`→`Headers` 后按名字字节序发出 | 保插入序；可选 `headerOrder` 强制顺序 |
+| 导航指定 URL、主文档自定义正文 | 需自管 `protocol.handle`（Session 级易误伤） | `loadURLWithResponse`：per-WC 短路，子资源仍出网 |
 
 ---
 
@@ -51,6 +53,7 @@
 | 节点盒模型 | `contents.getNodeBoxModel(backendNodeId[, options])` | **新增 API** |
 | 按选择器可信点击 | `contents.clickSelector(selector[, options])` | **新增 API** |
 | fetch 请求头保序 / 强制顺序 | `ses.fetch` / `net.fetch` 的 `headerOrder` | **增强既有 API** |
+| 导航到 URL + 自定义主文档响应 | `contents.loadURLWithResponse(url, response)` | **新增 API** |
 | OOPIF 继承 UA | （无新 API，行为修复） | Chromium 补丁 |
 
 ---
@@ -382,6 +385,30 @@ await win.webContents.clickSelector('#login', { pierce: true })
 await win.webContents.clickSelector('x-card >>> button.primary')
 ```
 
+### 3.12 `contents.loadURLWithResponse(url, response)`
+
+- **返回**：`Promise<void>`（生命周期同 `loadURL`）
+- **作用**：导航到 `url`（须 `http:` / `https:`），**主文档**使用你提供的响应，**不出网**；子资源仍走真实网络
+- **隔离**：override 挂在**本 WebContents**；同 Session 其它 WC 不受影响
+- **不**注册 / 覆盖 `protocol.handle`
+- **不接受** `loadURL` 的 options（`extraHeaders` / `postData` / `httpReferrer` 等）
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `statusCode` | `number` | `200` | HTTP 状态码 |
+| `headers` | `Record<string, string>` | — | 响应头（建议含 `content-type`） |
+| `body` | `string` \| `Buffer` | `''` | 主文档正文 |
+
+```js
+await win.webContents.loadURLWithResponse('https://example.com/app', {
+  statusCode: 200,
+  headers: { 'content-type': 'text/html; charset=utf-8' },
+  body: '<!doctype html><h1>hello</h1>'
+})
+```
+
+实现要点：`NavigationResponseOverrideRegistry` + `ProxyingURLLoaderFactory::CreateLoaderAndStart` 命中后走 `ElectronURLLoaderFactory::SendContents`。
+
 ---
 
 ## 4. 行为说明
@@ -466,6 +493,9 @@ await win.webContents.clickSelector('x-card >>> button.primary')
 | `shell/renderer/electron_render_frame_observer.cc` | 主世界保险删除 `window.chrome` |
 | `lib/browser/api/net-fetch.ts` | `ses.fetch` / `net.fetch` 头保序与 `headerOrder` |
 | `lib/browser/api/session.ts` | `fetch` init 类型含 `headerOrder` |
+| `lib/browser/api/web-contents.ts` / `browser-window.ts` | `loadURLWithResponse` JS 封装 |
+| `shell/browser/net/navigation_response_override_registry.{h,cc}` | per-WC 一次性主文档假响应登记 |
+| `shell/browser/net/proxying_url_loader_factory.cc` | CreateLoaderAndStart 命中短路 |
 | `filenames.gni` | 登记新源文件 |
 | `docs/api/session.md` / `net.md` / `web-contents.md` | API 文档 |
 | `docs/api/structures/user-agent-*.md` / `dom-*.md` / `*-selector-*.md` | 结构体文档 |
@@ -477,7 +507,6 @@ await win.webContents.clickSelector('x-card >>> button.primary')
 
 | 能力 | 状态 | 备注 |
 |------|------|------|
-| `loadURL(url, { responseOverride })` | **搁置** | 导航到指定 URL、主文档返回指定正文；推荐 per-WC/导航在 `ProxyingURLLoaderFactory` 挂接，避免 Session 级 `protocol.handle` 影响其它 WC |
 | fetch 对齐导航的 `priority` / AE·AL 顺序 | **搁置** | 可用 `net` 的 `priority: 'highest'` 等减轻差距；完整对齐需更深网络栈改动 |
 
 ---
@@ -643,6 +672,7 @@ cd <repo>/mirror
 7. `setUserAgent(ua, { hideChrome: true })` 后页面 `typeof chrome === 'undefined'`；`hideChrome: false` 恢复；与 platform / metadata 可同传
 8. `querySelectorDeep('host >>> #inner')` 能命中 closed shadow 内节点；`clickSelector` 触发的点击 `isTrusted === true`
 9. `ses.fetch(url, { headers, headerOrder })`：TLS/HTTP 回显（如 peet.ws）中自定义头顺序与 `headerOrder` 一致；对象键故意打乱时仍以 `headerOrder` 为准
+10. `loadURLWithResponse`：`getURL()` / origin 为目标站；页面正文为自定义 HTML；同 Session 另一 WC 真导航不受影响；全程无 `protocol.handle`
 
 自动化：`spec/api-session-spec.ts`、`spec/api-web-contents-spec.ts` 中相关用例。
 

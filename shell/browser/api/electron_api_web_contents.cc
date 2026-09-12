@@ -97,10 +97,12 @@
 #include "electron/buildflags/buildflags.h"
 #include "electron/mas.h"
 #include "gin/arguments.h"
+#include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "gin/dictionary.h"
 #include "gin/object_template_builder.h"
 #include "media/base/mime_util.h"
+#include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
@@ -127,6 +129,7 @@
 #include "shell/browser/electron_autofill_driver_factory.h"
 #include "shell/browser/electron_browser_client.h"
 #include "shell/browser/electron_browser_context.h"
+#include "shell/browser/net/navigation_response_override_registry.h"
 #include "shell/browser/electron_browser_main_parts.h"
 #include "shell/browser/electron_navigation_throttle.h"
 #include "shell/browser/electron_permission_manager.h"
@@ -2560,8 +2563,7 @@ void WebContents::DidFinishLoad(content::RenderFrameHost* render_frame_host,
   Emit("did-frame-finish-load", is_main_frame, frame_process_id,
        frame_routing_id);
 
-  // 鈿狅笍WARNING!鈿狅笍
-  // Emit() triggers JS which can call destroy() on |this|. It's not safe to
+  // 閳跨媴绗峎ARNING!閳跨媴绗?  // Emit() triggers JS which can call destroy() on |this|. It's not safe to
   // assume that |this| points to valid memory at this point.
   if (is_main_frame && weak_this && web_contents()) {
     load_url_promises_.DidFinishLoad();
@@ -2583,6 +2585,8 @@ void WebContents::DidFailLoad(content::RenderFrameHost* render_frame_host,
     return;
 
   bool is_main_frame = !render_frame_host->GetParent();
+  if (is_main_frame)
+    NavigationResponseOverrideRegistry::Get()->Unregister(web_contents());
   int32_t frame_process_id =
       render_frame_host->GetProcess()->GetID().GetUnsafeValue();
   int frame_routing_id = render_frame_host->GetRoutingID();
@@ -2780,7 +2784,7 @@ void WebContents::MaybeSendRendererStartupData(
   // WebContents has no per-WC preload but still gets session preloads + env.
   auto* web_prefs = WebContentsPreferences::From(web_contents());
 
-  // Match RendererClientBase::ShouldLoadPreload() 鈥?only push for documents
+  // Match RendererClientBase::ShouldLoadPreload() 閳?only push for documents
   // that will actually run preloads / create a Node.js environment.
   content::RenderFrameHost* rfh = navigation_handle->GetRenderFrameHost();
   if (!rfh || !rfh->IsRenderFrameLive())
@@ -2811,7 +2815,7 @@ void WebContents::SendRendererStartupData(content::RenderFrameHost* rfh) {
   {
     // We're on the UI thread. The asar is mmap'd and offset-indexed so warm
     // reads are fast; cold reads block briefly. Crucially the renderer is NOT
-    // parked waiting on us here 鈥?we haven't sent CommitNavigation yet 鈥?so
+    // parked waiting on us here 閳?we haven't sent CommitNavigation yet 閳?so
     // unlike the old sync IPC handler this can't amplify under contention.
     ScopedAllowBlockingForElectron allow_blocking;
     data = renderer_startup_data::BuildForFrame(rfh);
@@ -2869,6 +2873,13 @@ void WebContents::DidFinishNavigation(
 
   if (!navigation_handle->HasCommitted())
     return;
+
+  // Drop any unused one-shot override after the main document committed
+  // (already consumed on hit, or abandoned if URL did not match).
+  if (navigation_handle->IsInMainFrame() &&
+      !navigation_handle->IsSameDocument()) {
+    NavigationResponseOverrideRegistry::Get()->Unregister(web_contents());
+  }
 
   base::AutoReset<bool> resetter(&is_emitting_event_, true);
 
@@ -3010,7 +3021,7 @@ void WebContents::DevToolsOpened() {
   DCHECK(inspectable_web_contents_);
 
   // GetDevToolsWebContents() can be null here when DevTools were closed
-  // re-entrantly during InspectableWebContents::LoadCompleted() 鈥?e.g. when
+  // re-entrantly during InspectableWebContents::LoadCompleted() 閳?e.g. when
   // a JS handler for `devtools-focused` (fired from the activate path inside
   // SetIsDocked) calls closeDevTools() before LoadCompleted finishes.
   content::WebContents* const dtwc = GetDevToolsWebContents();
@@ -3093,6 +3104,8 @@ content::WebContents* WebContents::GetOpenDevToolsWebContents() const {
 }
 
 void WebContents::WebContentsDestroyed() {
+  NavigationResponseOverrideRegistry::Get()->Unregister(web_contents());
+
   // Drop this instance's contribution to the process-wide caret browsing count.
   ReconcileCaretBrowsingCount(false);
 
@@ -3103,7 +3116,6 @@ void WebContents::WebContentsDestroyed() {
 
   // The underlying content::WebContents is gone, let the wrapper be collected.
   Unpin();
-
   // Clear the pointer stored in wrapper.
   if (GetAllWebContents().Lookup(id_))
     GetAllWebContents().Remove(id_);
@@ -3351,13 +3363,103 @@ void WebContents::LoadURLWithParams(
   web_contents()->GetController().DiscardNonCommittedEntries();
   web_contents()->GetController().LoadURLWithParams(params);
 
-  // 鈿狅笍WARNING!鈿狅笍
-  // LoadURLWithParams() triggers JS events which can call destroy() on |this|.
+  // 閳跨媴绗峎ARNING!閳跨媴绗?  // LoadURLWithParams() triggers JS events which can call destroy() on |this|.
   // It's not safe to assume that |this| points to valid memory at this point.
   if (!weak_this || !web_contents())
     return;
 
   // Required to make beforeunload handler work.
+  NotifyUserActivation();
+}
+
+void WebContents::LoadURLWithResponse(const GURL& url,
+                                      const gin_helper::Dictionary& response) {
+  if (!url.is_valid() || url.spec().size() > url::kMaxURLChars) {
+    Emit("did-fail-load", static_cast<int>(net::ERR_INVALID_URL),
+         net::ErrorToShortString(net::ERR_INVALID_URL),
+         url.possibly_invalid_spec(), true);
+    return;
+  }
+  if (!url.SchemeIsHTTPOrHTTPS()) {
+    Emit("did-fail-load", static_cast<int>(net::ERR_INVALID_URL),
+         "loadURLWithResponse only supports http(s) URLs",
+         url.possibly_invalid_spec(), true);
+    return;
+  }
+  if (response.IsEmpty()) {
+    Emit("did-fail-load", static_cast<int>(net::ERR_INVALID_ARGUMENT),
+         "loadURLWithResponse requires a response object",
+         url.possibly_invalid_spec(), true);
+    return;
+  }
+
+  NavigationResponseOverride override_data;
+  override_data.url = url;
+  override_data.status_code =
+      response.ValueOrDefault("statusCode", static_cast<int>(net::HTTP_OK));
+
+  base::DictValue headers;
+  if (response.Get("headers", &headers)) {
+    for (const auto iter : headers) {
+      if (iter.second.is_string()) {
+        override_data.headers.emplace_back(iter.first,
+                                           iter.second.GetString());
+      } else if (iter.second.is_list()) {
+        for (const auto& item : iter.second.GetList()) {
+          if (item.is_string())
+            override_data.headers.emplace_back(iter.first, item.GetString());
+        }
+      }
+    }
+  }
+
+  v8::Local<v8::Value> body_val;
+  if (response.Get("body", &body_val) && !body_val.IsEmpty() &&
+      !body_val->IsNullOrUndefined()) {
+    if (body_val->IsArrayBufferView()) {
+      auto view = body_val.As<v8::ArrayBufferView>();
+      const size_t length = view->ByteLength();
+      override_data.body.resize(length);
+      if (length > 0)
+        view->CopyContents(override_data.body.data(), length);
+    } else if (body_val->IsString()) {
+      gin::ConvertFromV8(response.isolate(), body_val, &override_data.body);
+    } else {
+      Emit("did-fail-load", static_cast<int>(net::ERR_INVALID_ARGUMENT),
+           "response.body must be a string or Buffer",
+           url.possibly_invalid_spec(), true);
+      return;
+    }
+  }
+
+  auto& ctrl_impl = static_cast<content::NavigationControllerImpl&>(
+      web_contents()->GetController());
+  if (!is_safe_to_delete_ || ctrl_impl.in_navigate_to_pending_entry()) {
+    Emit("did-fail-load", static_cast<int>(net::ERR_FAILED),
+         net::ErrorToShortString(net::ERR_FAILED), url.possibly_invalid_spec(),
+         true);
+    return;
+  }
+
+  NavigationResponseOverrideRegistry::Get()->Register(web_contents(),
+                                                      std::move(override_data));
+
+  content::NavigationController::LoadURLParams params(url);
+  params.transition_type = ui::PageTransitionFromInt(
+      ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
+  params.override_user_agent = content::NavigationController::UA_OVERRIDE_TRUE;
+
+  auto weak_this = GetWeakPtr();
+
+  if (web_contents()->NeedToFireBeforeUnloadOrUnloadEvents())
+    pending_unload_url_ = url;
+
+  web_contents()->GetController().DiscardNonCommittedEntries();
+  web_contents()->GetController().LoadURLWithParams(params);
+
+  if (!weak_this || !web_contents())
+    return;
+
   NotifyUserActivation();
 }
 
@@ -4699,7 +4801,7 @@ float GetDispatchMouseEventScaleFactor(content::WebContents* web_contents) {
   return scale_factor;
 }
 
-// Match CDP InputHandler::GetEventTimeTicks 鈥?wall-clock seconds since Unix
+// Match CDP InputHandler::GetEventTimeTicks 閳?wall-clock seconds since Unix
 // epoch mapped onto the TimeTicks timeline.
 base::TimeTicks GetDispatchMouseEventTimeTicks(
     const std::optional<double>& timestamp) {
@@ -4714,7 +4816,7 @@ blink::WebPointerProperties::PointerType GetDispatchMouseEventPointerType(
     const std::string& pointer_type) {
   if (pointer_type == "pen")
     return blink::WebPointerProperties::PointerType::kPen;
-  // Default / "mouse" / empty 鈥?same as CDP GetPointerType.
+  // Default / "mouse" / empty 閳?same as CDP GetPointerType.
   return blink::WebPointerProperties::PointerType::kMouse;
 }
 
@@ -7000,6 +7102,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::SetConsoleMessageObserved>(
           "_setConsoleMessageObserved")
       .SetMethod<&WebContents::LoadURL>("loadURL")
+      .SetMethod<&WebContents::LoadURLWithResponse>("_loadURLWithResponse")
       .SetMethod<&WebContents::Reload>("reload")
       .SetMethod<&WebContents::ReloadIgnoringCache>("reloadIgnoringCache")
       .SetMethod<&WebContents::DownloadURL>("downloadURL")

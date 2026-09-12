@@ -217,6 +217,11 @@ class WebContents final : public ExclusiveAccessContext,
   // webContents.loadURL(url[, options]); see LoadURLPromises for the promise.
   v8::Local<v8::Promise> LoadURL(gin::Arguments* args, const std::string& url);
   void LoadURLWithParams(content::NavigationController::LoadURLParams params);
+  // Navigate to |url| but serve a custom main-document response (no network for
+  // the document). Does not accept LoadURL options; other WebContents are
+  // unaffected. See NavigationResponseOverrideRegistry.
+  void LoadURLWithResponse(const GURL& url,
+                           const gin_helper::Dictionary& response);
   void Reload();
   void ReloadIgnoringCache();
   void DownloadURL(const GURL& url, gin::Arguments* args);
