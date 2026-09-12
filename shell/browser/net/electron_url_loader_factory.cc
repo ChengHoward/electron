@@ -796,12 +796,16 @@ void ElectronURLLoaderFactory::StartLoadingStream(
 void ElectronURLLoaderFactory::SendContents(
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
     network::mojom::URLResponseHeadPtr head,
-    std::string data) {
+    std::string data,
+    bool add_cors_wildcard) {
   mojo::Remote<network::mojom::URLLoaderClient> client_remote(
       std::move(client));
 
-  // Add header to ignore CORS.
-  head->headers->AddHeader("Access-Control-Allow-Origin", "*");
+  // Historic protocol string/buffer responses add ACAO to ignore CORS.
+  // Main-document overrides must not — a top-level HTML doc with ACAO:* is a
+  // strong synthetic fingerprint.
+  if (add_cors_wildcard)
+    head->headers->AddHeader("Access-Control-Allow-Origin", "*");
 
   // Code below follows the pattern of data_url_loader_factory.cc.
   mojo::ScopedDataPipeProducerHandle producer;

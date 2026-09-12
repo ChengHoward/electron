@@ -10,21 +10,32 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_navigation_ui_data.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/completion_repeating_callback.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_connection_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/parsed_headers.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "shell/browser/net/asar/asar_url_loader_factory.h"
+#include "shell/browser/net/electron_url_loader_factory.h"
+#include "shell/browser/net/navigation_response_override_registry.h"
 #include "shell/common/options_switches.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/origin.h"
@@ -32,6 +43,93 @@
 namespace electron {
 
 namespace {
+
+// Make loadURLWithResponse main-document heads look closer to a real short
+// HTTPS/HTTP navigation (timing / ALPN / address space), instead of an empty
+// data-URL-like synthetic response that anti-bots often flag.
+void EnrichSyntheticNavigationResponseHead(
+    network::mojom::URLResponseHead* head,
+    const GURL& request_url,
+    size_t body_size) {
+  DCHECK(head);
+  DCHECK(head->headers);
+
+  const bool is_https = request_url.SchemeIsCryptographic();
+  const base::Time now = base::Time::Now();
+  const base::TimeTicks ticks = base::TimeTicks::Now();
+
+  // Plausible short RTT (not all-zero, not cache-resurrected ages).
+  constexpr base::TimeDelta kDns = base::Milliseconds(8);
+  constexpr base::TimeDelta kConnect = base::Milliseconds(28);
+  constexpr base::TimeDelta kSsl = base::Milliseconds(22);
+  constexpr base::TimeDelta kTtfb = base::Milliseconds(18);
+
+  const base::TimeTicks request_start = ticks - kDns - kConnect - kTtfb;
+  const base::TimeTicks dns_start = request_start;
+  const base::TimeTicks dns_end = dns_start + kDns;
+  const base::TimeTicks connect_start = dns_end;
+  const base::TimeTicks ssl_start =
+      is_https ? connect_start + (kConnect - kSsl) : base::TimeTicks();
+  const base::TimeTicks ssl_end = is_https ? connect_start + kConnect
+                                           : base::TimeTicks();
+  const base::TimeTicks connect_end = connect_start + kConnect;
+  const base::TimeTicks send_start = connect_end;
+  const base::TimeTicks send_end = send_start + base::Milliseconds(1);
+  const base::TimeTicks headers_start = send_end + kTtfb;
+  const base::TimeTicks headers_end = headers_start + base::Milliseconds(2);
+
+  head->request_time = now - (ticks - request_start);
+  head->response_time = now;
+  head->original_response_time = head->response_time;
+  head->request_start = request_start;
+  head->response_start = headers_end;
+  head->timing_allow_passed = true;
+
+  head->load_timing.request_start_time = head->request_time;
+  head->load_timing.request_start = request_start;
+  head->load_timing.connect_timing.domain_lookup_start = dns_start;
+  head->load_timing.connect_timing.domain_lookup_end = dns_end;
+  head->load_timing.connect_timing.connect_start = connect_start;
+  head->load_timing.connect_timing.connect_end = connect_end;
+  head->load_timing.connect_timing.ssl_start = ssl_start;
+  head->load_timing.connect_timing.ssl_end = ssl_end;
+  head->load_timing.send_start = send_start;
+  head->load_timing.send_end = send_end;
+  head->load_timing.receive_headers_start = headers_start;
+  head->load_timing.receive_headers_end = headers_end;
+  head->load_timing.receive_non_informational_headers_start = headers_start;
+
+  head->network_accessed = true;
+  head->was_fetched_via_cache = false;
+  head->is_validated = false;
+  head->navigation_delivery_type =
+      network::mojom::NavigationDeliveryType::kDefault;
+  head->response_address_space = network::mojom::IPAddressSpace::kPublic;
+  head->client_address_space = network::mojom::IPAddressSpace::kPublic;
+
+  if (is_https) {
+    // Cloudflare / modern origins commonly speak h2.
+    head->connection_info = net::HttpConnectionInfo::kHTTP2;
+    head->was_alpn_negotiated = true;
+    head->was_fetched_via_spdy = true;
+    head->alpn_negotiated_protocol = "h2";
+  } else {
+    head->connection_info = net::HttpConnectionInfo::kHTTP1_1;
+    head->was_alpn_negotiated = false;
+    head->was_fetched_via_spdy = false;
+    head->alpn_negotiated_protocol.clear();
+  }
+
+  const int64_t size = static_cast<int64_t>(body_size);
+  head->content_length = size;
+  head->encoded_data_length = size;
+  if (!head->headers->HasHeader("content-length")) {
+    head->headers->SetHeader("content-length", base::NumberToString(size));
+  }
+
+  head->parsed_headers =
+      network::PopulateParsedHeaders(head->headers.get(), request_url);
+}
 
 class NoOpHeaderClient final : public network::mojom::TrustedHeaderClient {
  public:
@@ -837,6 +935,59 @@ void ProxyingURLLoaderFactory::CreateLoaderAndStart(
   if (ShouldIgnoreConnectionsLimit(request)) {
     request.priority = net::RequestPriority::MAXIMUM_PRIORITY;
     request.load_flags |= net::LOAD_IGNORE_LIMITS;
+  }
+
+  // Per-WebContents one-shot main-document response override (loadURLWithResponse).
+  // Checked before Session protocol.handle so other WebContents stay unaffected.
+  if (request.is_outermost_main_frame &&
+      (loader_factory_type_ ==
+           content::ContentBrowserClient::URLLoaderFactoryType::kNavigation ||
+       request.destination ==
+           network::mojom::RequestDestination::kDocument)) {
+    content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
+        render_process_id_, frame_routing_id_);
+    content::WebContents* web_contents =
+        content::WebContents::FromRenderFrameHost(rfh);
+    if (auto override_data =
+            NavigationResponseOverrideRegistry::Get()->TryTake(web_contents,
+                                                               request.url)) {
+      auto head = network::mojom::URLResponseHead::New();
+      const int status_code = override_data->status_code;
+      head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+          absl::StrFormat(
+              "HTTP/1.1 %d %s", status_code,
+              net::GetHttpReasonPhrase(
+                  static_cast<net::HttpStatusCode>(status_code))));
+      head->mime_type = "text/html";
+      head->charset = "utf-8";
+      bool has_content_type = false;
+      for (const auto& [name, value] : override_data->headers) {
+        if (!net::HttpUtil::IsValidHeaderName(name) ||
+            !net::HttpUtil::IsValidHeaderValue(value)) {
+          continue;
+        }
+        head->headers->AddHeader(name, value);
+        if (base::EqualsCaseInsensitiveASCII(name, "content-type")) {
+          head->headers->GetMimeTypeAndCharset(&head->mime_type,
+                                               &head->charset);
+          has_content_type = true;
+        } else if (base::EqualsCaseInsensitiveASCII(name, "content-length")) {
+          base::StringToInt64(value, &head->content_length);
+        }
+      }
+      if (!has_content_type)
+        head->headers->AddHeader("content-type", "text/html; charset=utf-8");
+
+      EnrichSyntheticNavigationResponseHead(head.get(), request.url,
+                                            override_data->body.size());
+
+      // No ACAO:* — unlike protocol string helpers — so the document does not
+      // look like a CORS-padded synthetic buffer response.
+      ElectronURLLoaderFactory::SendContents(std::move(client), std::move(head),
+                                             std::move(override_data->body),
+                                             /*add_cors_wildcard=*/false);
+      return;
+    }
   }
 
   mojo::Remote<network::mojom::URLLoaderFactory> override_target_factory;

@@ -133,6 +133,15 @@ class ElectronURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
       base::WeakPtr<ElectronBrowserContext> browser_context,
       gin::Arguments* args);
 
+  // Helper to send string as response (also used by loadURLWithResponse).
+  // |add_cors_wildcard| matches historic protocol string responses; main-document
+  // navigation overrides should pass false (ACAO:* is unnatural for documents).
+  static void SendContents(
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      network::mojom::URLResponseHeadPtr head,
+      std::string data,
+      bool add_cors_wildcard = true);
+
   // disable copy
   ElectronURLLoaderFactory(const ElectronURLLoaderFactory&) = delete;
   ElectronURLLoaderFactory& operator=(const ElectronURLLoaderFactory&) = delete;
@@ -173,12 +182,6 @@ class ElectronURLLoaderFactory : public network::SelfDeletingURLLoaderFactory {
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
       network::mojom::URLResponseHeadPtr head,
       const gin_helper::Dictionary& dict);
-
-  // Helper to send string as response.
-  static void SendContents(
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-      network::mojom::URLResponseHeadPtr head,
-      std::string data);
 
   ProtocolType type_;
   ProtocolHandler handler_;

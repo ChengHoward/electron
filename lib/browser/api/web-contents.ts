@@ -467,6 +467,13 @@ WebContents.prototype.loadURL = function (url, options) {
   return p;
 };
 
+WebContents.prototype.loadURLWithResponse = function (url, response) {
+  const p = _awaitNextLoad.call(this, url);
+  p.catch(() => {});
+  this._loadURLWithResponse(url, response ?? {});
+  return p;
+};
+
 WebContents.prototype.copyVideoFrameAt = function (x: number, y: number) {
   this.mainFrame.copyVideoFrameAt(x, y);
 };

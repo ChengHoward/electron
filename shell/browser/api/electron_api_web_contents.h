@@ -202,6 +202,11 @@ class WebContents final : public ExclusiveAccessContext,
   [[nodiscard]] Type type() const { return type_; }
   v8::Local<v8::Value> Clone(v8::Isolate* isolate);
   void LoadURL(const GURL& url, const gin_helper::Dictionary& options);
+  // Navigate to |url| but serve a custom main-document response (no network for
+  // the document). Does not accept LoadURL options; other WebContents are
+  // unaffected. See NavigationResponseOverrideRegistry.
+  void LoadURLWithResponse(const GURL& url,
+                           const gin_helper::Dictionary& response);
   void Reload();
   void ReloadIgnoringCache();
   void DownloadURL(const GURL& url, gin::Arguments* args);

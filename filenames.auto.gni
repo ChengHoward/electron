@@ -108,6 +108,7 @@ auto_filenames = {
     "docs/api/structures/ipc-renderer-event.md",
     "docs/api/structures/jump-list-category.md",
     "docs/api/structures/jump-list-item.md",
+    "docs/api/structures/load-url-with-response-options.md",
     "docs/api/structures/keyboard-event.md",
     "docs/api/structures/keyboard-input-event.md",
     "docs/api/structures/media-access-permission-request.md",

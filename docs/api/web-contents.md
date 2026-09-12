@@ -1100,6 +1100,33 @@ const options = { extraHeaders: 'pragma: no-cache\n' }
 win.webContents.loadURL('https://github.com', options)
 ```
 
+#### `contents.loadURLWithResponse(url, response)`
+
+* `url` string - Must be an `http:` or `https:` URL. Address bar / origin use this URL.
+* `response` Object
+  * `statusCode` Integer (optional) - HTTP status, default `200`.
+  * `headers` Record\<string, string\> (optional) - Response headers (e.g. `content-type`).
+  * `body` (string | Buffer) (optional) - Main document body. Defaults to empty.
+
+Returns `Promise<void>` - same load lifecycle as [`loadURL`](#contentsloadurlurl-options)
+(`did-finish-load` / `did-fail-load`).
+
+Navigates to `url` but serves a **custom main-document response** without hitting
+the network for that document. Subresources still load normally. The override is
+scoped to **this** `WebContents` only (other windows in the same session are
+unaffected) and does **not** register `protocol.handle`.
+
+This API intentionally does **not** accept `loadURL` options (`extraHeaders`,
+`postData`, `httpReferrer`, etc.).
+
+```js
+await win.webContents.loadURLWithResponse('https://example.com/app', {
+  statusCode: 200,
+  headers: { 'content-type': 'text/html; charset=utf-8' },
+  body: '<!doctype html><title>ok</title><h1>hello</h1>'
+})
+```
+
 #### `contents.loadFile(filePath[, options])`
 
 * `filePath` string

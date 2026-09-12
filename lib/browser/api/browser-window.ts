@@ -138,6 +138,13 @@ BrowserWindow.prototype.loadURL = function (...args) {
   return this.webContents.loadURL(...args);
 };
 
+BrowserWindow.prototype.loadURLWithResponse = function (
+  url: string,
+  response: ElectronInternal.LoadURLWithResponseOptions
+) {
+  return this.webContents.loadURLWithResponse(url, response);
+};
+
 BrowserWindow.prototype.getURL = function () {
   return this.webContents.getURL();
 };

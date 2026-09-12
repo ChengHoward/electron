@@ -13,6 +13,12 @@ declare namespace Electron {
     utility = 'utility'
   }
 
+  interface LoadURLWithResponseOptions {
+    statusCode?: number;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
+  }
+
   interface App {
     setVersion(version: string): void;
     setDesktopName(name: string): void;
@@ -98,6 +104,14 @@ declare namespace Electron {
   interface WebContents {
     _awaitNextLoad(expectedUrl: string): Promise<void>;
     _loadURL(url: string, options: ElectronInternal.LoadURLOptions): void;
+    _loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): void;
+    loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): Promise<void>;
     getOwnerBrowserWindow(): Electron.BrowserWindow | null;
     getLastWebPreferences(): Electron.WebPreferences | null;
     _getProcessMemoryInfo(): Electron.ProcessMemoryInfo;
@@ -244,6 +258,10 @@ declare namespace Electron {
   // Deprecated / undocumented BrowserWindow methods
   interface BrowserWindow {
     getURL(): string;
+    loadURLWithResponse(
+      url: string,
+      response: ElectronInternal.LoadURLWithResponseOptions
+    ): Promise<void>;
     send(channel: string, ...args: any[]): void;
     openDevTools(options?: Electron.OpenDevToolsOptions): void;
     closeDevTools(): void;
@@ -393,6 +411,12 @@ declare namespace ElectronInternal {
 
   interface LoadURLOptions extends Electron.LoadURLOptions {
     reloadIgnoringCache?: boolean;
+  }
+
+  interface LoadURLWithResponseOptions {
+    statusCode?: number;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
   }
 
   interface WebContentsPrintOptions extends Electron.WebContentsPrintOptions {
