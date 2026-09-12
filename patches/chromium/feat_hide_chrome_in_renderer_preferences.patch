@@ -1,18 +1,21 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: chuanchuan <example@gmail.com>
-Date: Wed, 22 Jul 2026 18:10:00 +0800
+Date: Sat, 12 Sep 2026 10:23:27 +0800
 Subject: feat: hide_chrome in RendererPreferences
 
 Plumb Electron setUserAgent({ hideChrome }) through RendererPreferences
 and skip creating window.chrome in webpage extension bindings contexts.
 
+This is Electron-specific and cannot be upstreamed.
+
 Co-authored-by: Cursor <cursoragent@cursor.com>
 
 diff --git a/extensions/renderer/native_extension_bindings_system.cc b/extensions/renderer/native_extension_bindings_system.cc
-index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+index 3a8688cfc4e66f399d35c70d4e30c2d1963994e1..934c776654b0fce317a282f1039197fd2d0cfaeb 100644
 --- a/extensions/renderer/native_extension_bindings_system.cc
 +++ b/extensions/renderer/native_extension_bindings_system.cc
-@@ -7,6 +7,7 @@
+@@ -6,6 +6,7 @@
+ 
  #include <algorithm>
  #include <string_view>
 +#include <tuple>
@@ -20,35 +23,29 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
  
  #include "base/command_line.h"
 @@ -68,6 +69,7 @@
- #include "third_party/blink/public/web/web_document.h"
  #include "third_party/blink/public/web/web_frame.h"
  #include "third_party/blink/public/web/web_local_frame.h"
-+#include "third_party/blink/public/web/web_view.h"
  #include "third_party/blink/public/web/web_origin_trials.h"
++#include "third_party/blink/public/web/web_view.h"
  #include "url/origin.h"
  #include "v8/include/cppgc/allocation.h"
-@@ -586,6 +588,36 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
+ #include "v8/include/v8-context.h"
+@@ -586,11 +588,6 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
    v8::Isolate* isolate = context->isolate();
    v8::HandleScope handle_scope(isolate);
    v8::Local<v8::Context> v8_context = context->v8_context();
-+
-+  bool is_webpage = false;
-+  switch (context->context_type()) {
-+    case mojom::ContextType::kUnspecified:
-+    case mojom::ContextType::kWebPage:
-+    case mojom::ContextType::kPrivilegedWebPage:
-+      is_webpage = true;
-+      break;
-+    case mojom::ContextType::kPrivilegedExtension:
-+    case mojom::ContextType::kOffscreenExtension:
-+    case mojom::ContextType::kUnprivilegedExtension:
-+    case mojom::ContextType::kUserScript:
-+    case mojom::ContextType::kContentScript:
-+    case mojom::ContextType::kWebUi:
-+    case mojom::ContextType::kUntrustedWebUi:
-+      is_webpage = false;
-+  }
-+
+-  v8::Local<v8::Object> chrome =
+-      GetOrCreateGlobalObjectProperty(v8_context, "chrome");
+-  if (chrome.IsEmpty()) {
+-    return;
+-  }
+ 
+   bool is_webpage = false;
+   switch (context->context_type()) {
+@@ -609,6 +606,24 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
+       is_webpage = false;
+   }
+ 
 +  // Electron: setUserAgent({ hideChrome: true }) — do not expose window.chrome
 +  // on webpage-like contexts. Content scripts / extension worlds are untouched.
 +  if (is_webpage) {
@@ -61,35 +58,17 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
 +    }
 +  }
 +
-   v8::Local<v8::Object> chrome =
-       GetOrCreateGlobalObjectProperty(v8_context, "chrome");
-   if (chrome.IsEmpty()) {
-@@ -593,22 +625,6 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
-     return;
-   }
- 
--  bool is_webpage = false;
--  switch (context->context_type()) {
--    case mojom::ContextType::kUnspecified:
--    case mojom::ContextType::kWebPage:
--    case mojom::ContextType::kPrivilegedWebPage:
--      is_webpage = true;
--      break;
--    case mojom::ContextType::kPrivilegedExtension:
--    case mojom::ContextType::kOffscreenExtension:
--    case mojom::ContextType::kUnprivilegedExtension:
--    case mojom::ContextType::kUserScript:
--    case mojom::ContextType::kContentScript:
--    case mojom::ContextType::kWebUi:
--    case mojom::ContextType::kUntrustedWebUi:
--      is_webpage = false;
--  }
--
++  v8::Local<v8::Object> chrome =
++      GetOrCreateGlobalObjectProperty(v8_context, "chrome");
++  if (chrome.IsEmpty()) {
++    return;
++  }
++
    std::optional<v8::Local<v8::Object>> browser;
    // TODO(crbug.com/401226626): Determine if `browser` should be created in
    // WebUI script contexts, currently it is not.
 diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
-index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+index a789ee55317b6bebb41632db22b2a0e6f43da232..5b61e0540136d0462416f1c29b8f7e65927b9d11 100644
 --- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 +++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 @@ -76,6 +76,8 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
@@ -102,7 +81,7 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
      return false;
  
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
-index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+index 2052177a45af4d7a09bde0f03df559f8733c974c..ddfb2028f3765ada6831ddd38f72859beb1d96f9 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 @@ -66,6 +66,8 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
@@ -115,7 +94,7 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
    bool send_subresource_notification{false};
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
-index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+index e844bf07cc851452aab9aaead0e314a38c476c08..6d50d88fef3c4a1d6a9e8fd0078caa4c574c68d4 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 @@ -180,6 +180,10 @@ struct BLINK_COMMON_EXPORT
@@ -130,7 +109,7 @@ index 1111111111111111111111111111111111111111..22222222222222222222222222222222
        const ::blink::RendererPreferences& data) {
      return data.accept_languages;
 diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
-index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+index ca95628b577e460b15364a8dbe62e13c595e6045..dfb73bff27b11c33b12f70a34526136a76179d34 100644
 --- a/third_party/blink/public/mojom/renderer_preferences.mojom
 +++ b/third_party/blink/public/mojom/renderer_preferences.mojom
 @@ -126,6 +126,10 @@ struct RendererPreferences {
