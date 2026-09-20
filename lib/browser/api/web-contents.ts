@@ -488,6 +488,29 @@ WebContents.prototype.setWindowOpenHandler = function (
   this._windowOpenHandler = handler;
 };
 
+/**
+ * Intercept page `alert` / `confirm` / `prompt` without injecting into the page
+ * or attaching a debugger. Return a response object to handle immediately, or
+ * `null`/`undefined` to fall through to the `js-dialog` event / native dialog.
+ *
+ * Cloudbypass / unofficial Electron extension.
+ */
+WebContents.prototype.setJsDialogHandler = function (
+  handler:
+    | ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined)
+    | null
+) {
+  this._jsDialogHandler = handler;
+};
+
+/**
+ * Timeout (ms) after `js-dialog` `preventDefault()` if `respond()` is never
+ * called. Default 5000. Use 0 to wait indefinitely (not recommended).
+ */
+WebContents.prototype.setJsDialogTimeout = function (ms: number) {
+  this._jsDialogTimeoutMs = Number.isFinite(ms) ? Math.max(0, Math.floor(ms)) : 5000;
+};
+
 WebContents.prototype._callWindowOpenHandler = function (
   event: Electron.Event,
   details: Electron.HandlerDetails
@@ -618,6 +641,8 @@ WebContents.prototype._init = function () {
   });
 
   this._windowOpenHandler = null;
+  this._jsDialogHandler = null;
+  this._jsDialogTimeoutMs = 5000;
 
   const ipc = new IpcMainImpl();
   Object.defineProperty(this, 'ipc', {
@@ -878,7 +903,78 @@ WebContents.prototype._init = function () {
     const prefs = this.getLastWebPreferences();
     if (!prefs || prefs.disableDialogs) return callback(false, '');
 
-    // We don't support prompt() for some reason :)
+    const details: Electron.JsDialogDetails = {
+      type: info.dialogType,
+      message: info.messageText,
+      defaultPrompt: info.defaultPromptText,
+      url: typeof info.frame?.url === 'string' ? info.frame.url : undefined,
+      isMainFrame: info.frame === this.mainFrame
+    };
+
+    // 1) Sync handler — preferred for automation (no native UI, no CDP).
+    if (typeof this._jsDialogHandler === 'function') {
+      try {
+        const handled = this._jsDialogHandler(details);
+        if (handled != null && typeof handled === 'object' && typeof handled.accept === 'boolean') {
+          const promptText =
+            handled.promptText != null
+              ? String(handled.promptText)
+              : String(details.defaultPrompt ?? '');
+          return callback(!!handled.accept, promptText);
+        }
+      } catch (err) {
+        console.error('js dialog handler threw:', err);
+      }
+    }
+
+    // 2) Public event — preventDefault() + respond() for async handling.
+    let responded = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (accept: boolean, promptText: string) => {
+      if (responded || this.isDestroyed()) return;
+      responded = true;
+      if (timer) clearTimeout(timer);
+      callback(accept, promptText);
+    };
+
+    const event = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      respond: (response: Electron.JsDialogResponse) => {
+        if (!response || typeof response !== 'object' || typeof response.accept !== 'boolean') {
+          console.error('js-dialog respond() expects { accept: boolean, promptText?: string }');
+          return;
+        }
+        const promptText =
+          response.promptText != null
+            ? String(response.promptText)
+            : String(details.defaultPrompt ?? '');
+        finish(!!response.accept, promptText);
+      }
+    };
+
+    try {
+      this.emit('js-dialog', event, details);
+    } catch (err) {
+      console.error('js-dialog listener threw:', err);
+    }
+
+    if (event.defaultPrevented) {
+      const timeoutMs = this._jsDialogTimeoutMs ?? 5000;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          // Safe defaults: accept alert/confirm; accept prompt with default text.
+          const promptText = String(details.defaultPrompt ?? '');
+          finish(true, promptText);
+        }, timeoutMs);
+      }
+      return;
+    }
+
+    // 3) Stock Electron path — native message box.
+    // Historical: prompt() was not supported via native UI.
     if (info.dialogType === 'prompt') return callback(false, '');
 
     originCounts.set(origin, (originCounts.get(origin) ?? 0) + 1);

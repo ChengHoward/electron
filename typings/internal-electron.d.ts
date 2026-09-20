@@ -118,6 +118,16 @@ declare namespace Electron {
     _getPreloadScript(): Electron.PreloadScript | null;
     browserWindowOptions: BrowserWindowConstructorOptions;
     _windowOpenHandler: ((details: Electron.HandlerDetails) => any) | null;
+    _jsDialogHandler:
+      | ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined)
+      | null;
+    _jsDialogTimeoutMs: number;
+    setJsDialogHandler(
+      handler:
+        | ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined)
+        | null
+    ): void;
+    setJsDialogTimeout(ms: number): void;
     _callWindowOpenHandler(
       event: any,
       details: Electron.HandlerDetails
