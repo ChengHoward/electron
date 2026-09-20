@@ -482,6 +482,28 @@ win.webContents.on('will-prevent-unload', (event) => {
 > [!NOTE]
 > This will be emitted for `BrowserViews` but will _not_ be respected - this is because we have chosen not to tie the `BrowserView` lifecycle to its owning BrowserWindow should one exist per the [specification](https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeunload_event).
 
+#### Event: 'js-dialog'
+
+Returns:
+
+* `event` Event
+  * `preventDefault()` - Suppress the native dialog and require `respond()`.
+  * `respond(response)` Function
+    * `response` [JsDialogResponse](structures/js-dialog-response.md)
+* `details` [JsDialogDetails](structures/js-dialog-details.md)
+
+**(Unofficial / cloudbypass)** Emitted when a page calls `alert` / `confirm` / `prompt`,
+after any [`setJsDialogHandler`](#contentssetjsdialoghandlerhandler) returned `null`/`undefined`.
+
+```js
+win.webContents.on('js-dialog', (event, details) => {
+  event.preventDefault()
+  setTimeout(() => {
+    event.respond({ accept: true, promptText: 'later' })
+  }, 10)
+})
+```
+
 #### Event: 'render-process-gone'
 
 Returns:
@@ -1554,6 +1576,41 @@ mainWindow.webContents.setWindowOpenHandler((details) => {
   }
 })
 ```
+
+#### `contents.setJsDialogHandler(handler)`
+
+* `handler` Function\<[JsDialogResponse](structures/js-dialog-response.md) | null | undefined\> | null
+  * `details` [JsDialogDetails](structures/js-dialog-details.md)
+
+**(Unofficial / cloudbypass)** Intercepts page `window.alert` / `confirm` / `prompt` in the
+main process without injecting into the page or attaching a debugger.
+
+* Return a [`JsDialogResponse`](structures/js-dialog-response.md) to handle immediately (no native dialog).
+* Return `null` / `undefined` to fall through to the [`js-dialog`](#event-js-dialog) event,
+  then the stock native message box.
+* Pass `null` as `handler` to clear.
+
+```js
+win.webContents.setJsDialogHandler((details) => {
+  if (details.type === 'prompt') {
+    return { accept: true, promptText: details.defaultPrompt || 'ok' }
+  }
+  if (details.type === 'confirm') {
+    return { accept: true }
+  }
+  return { accept: true } // alert
+})
+```
+
+> [!NOTE]
+> `beforeunload` continues to use [`will-prevent-unload`](#event-will-prevent-unload);
+> it is not routed through this handler.
+
+#### `contents.setJsDialogTimeout(ms)`
+
+* `ms` Integer - Milliseconds to wait after `js-dialog` `preventDefault()` if
+  `respond()` is never called. Default `5000`. Use `0` to wait indefinitely
+  (not recommended — can stall the renderer).
 
 #### `contents.setAudioMuted(muted)`
 
