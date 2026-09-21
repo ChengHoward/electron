@@ -7,7 +7,6 @@ Expose HTMLInputElement::SetFilesFromPaths on WebInputElement so
 Electron can set <input type=file> without CDP debugger.attach.
 
 diff --git a/third_party/blink/public/web/web_input_element.h b/third_party/blink/public/web/web_input_element.h
-index 67d05800d90ad..4b0f025bb9f99 100644
 --- a/third_party/blink/public/web/web_input_element.h
 +++ b/third_party/blink/public/web/web_input_element.h
 @@ -90,6 +90,10 @@ class BLINK_EXPORT WebInputElement final : public WebFormControlElement {
@@ -22,17 +21,17 @@ index 67d05800d90ad..4b0f025bb9f99 100644
    explicit WebInputElement(HTMLInputElement*);
    WebInputElement& operator=(HTMLInputElement*);
 diff --git a/third_party/blink/renderer/core/exported/web_input_element.cc b/third_party/blink/renderer/core/exported/web_input_element.cc
-index 5147fece64f63..2ed3aa451c233 100644
 --- a/third_party/blink/renderer/core/exported/web_input_element.cc
 +++ b/third_party/blink/renderer/core/exported/web_input_element.cc
-@@ -113,6 +113,13 @@ void WebInputElement::DispatchSimulatedEnter() {
+@@ -113,6 +113,14 @@ void WebInputElement::DispatchSimulatedEnter() {
    Unwrap<HTMLInputElement>()->DispatchSimulatedEnter();
  }
  
 +void WebInputElement::SetFilesFromPaths(const std::vector<WebString>& paths) {
 +  Vector<String> path_strings;
-+  for (const auto& path : paths)
++  for (const auto& path : paths) {
 +    path_strings.push_back(path);
++  }
 +  Unwrap<HTMLInputElement>()->SetFilesFromPaths(path_strings);
 +}
 +
