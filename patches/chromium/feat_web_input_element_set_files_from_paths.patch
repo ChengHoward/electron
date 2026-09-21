@@ -22,10 +22,10 @@ index 67d05800d90ad..4b0f025bb9f99 100644
    explicit WebInputElement(HTMLInputElement*);
    WebInputElement& operator=(HTMLInputElement*);
 diff --git a/third_party/blink/renderer/core/exported/web_input_element.cc b/third_party/blink/renderer/core/exported/web_input_element.cc
-index 5147fece64f63..35fcf90c16699 100644
+index 5147fece64f63..2ed3aa451c233 100644
 --- a/third_party/blink/renderer/core/exported/web_input_element.cc
 +++ b/third_party/blink/renderer/core/exported/web_input_element.cc
-@@ -113,6 +113,14 @@ void WebInputElement::DispatchSimulatedEnter() {
+@@ -113,6 +113,13 @@ void WebInputElement::DispatchSimulatedEnter() {
    Unwrap<HTMLInputElement>()->DispatchSimulatedEnter();
  }
  
