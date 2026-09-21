@@ -39,6 +39,7 @@
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
+#include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_input_method_controller.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_message_port_converter.h"
@@ -46,6 +47,7 @@
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "ui/base/ime/ime_text_span.h"
+#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 #include "v8/include/v8-context.h"
@@ -700,6 +702,57 @@ void ElectronApiServiceImpl::GetNodeBoxModel(
     element.ScrollIntoViewIfNeeded();
 
   std::move(callback).Run(true, BuildDomBoxModel(element));
+}
+
+void ElectronApiServiceImpl::SetFileInputFiles(
+    const std::string& selector,
+    int32_t backend_node_id,
+    bool pierce,
+    const std::vector<std::string>& paths,
+    SetFileInputFilesCallback callback) {
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+  if (!frame) {
+    std::move(callback).Run(false, "No live frame");
+    return;
+  }
+
+  blink::WebElement element;
+  if (backend_node_id != 0) {
+    blink::WebNode node = blink::WebNode::FromDomNodeId(backend_node_id);
+    if (node.IsNull() || !node.IsElementNode()) {
+      std::move(callback).Run(false, "Node not found for backendNodeId");
+      return;
+    }
+    element = node.DynamicTo<blink::WebElement>();
+    if (element.IsNull() || element.GetDocument() != frame->GetDocument()) {
+      std::move(callback).Run(false, "Node not found for backendNodeId");
+      return;
+    }
+  } else {
+    if (selector.empty()) {
+      std::move(callback).Run(false, "'selector' or 'backendNodeId' is required");
+      return;
+    }
+    element = QuerySelectorDeepImpl(frame->GetDocument(), selector, pierce);
+    if (element.IsNull()) {
+      std::move(callback).Run(false, "No node found for selector");
+      return;
+    }
+  }
+
+  blink::WebInputElement input = element.DynamicTo<blink::WebInputElement>();
+  if (input.IsNull() ||
+      input.FormControlType() != blink::mojom::FormControlType::kInputFile) {
+    std::move(callback).Run(false, "Node is not a file input element");
+    return;
+  }
+
+  std::vector<blink::WebString> web_paths;
+  web_paths.reserve(paths.size());
+  for (const auto& path : paths)
+    web_paths.push_back(blink::WebString::FromUtf8(path));
+  input.SetFilesFromPaths(web_paths);
+  std::move(callback).Run(true, std::string());
 }
 
 }  // namespace electron
