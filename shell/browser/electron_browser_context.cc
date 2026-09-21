@@ -38,6 +38,7 @@
 #include "content/public/browser/page.h"
 #include "content/public/browser/preconnect_manager.h"
 #include "content/public/browser/render_process_host.h"
+#include "shell/browser/electron_client_hints_controller_delegate.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents_media_capture_id.h"
@@ -730,7 +731,11 @@ ElectronBrowserContext::GetBrowsingDataRemoverDelegate() {
 
 content::ClientHintsControllerDelegate*
 ElectronBrowserContext::GetClientHintsControllerDelegate() {
-  return nullptr;
+  if (!client_hints_controller_delegate_) {
+    client_hints_controller_delegate_ =
+        std::make_unique<ElectronClientHintsControllerDelegate>();
+  }
+  return client_hints_controller_delegate_.get();
 }
 
 content::StorageNotificationService*

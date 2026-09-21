@@ -88,4 +88,14 @@ void ServiceWorkerData::GetNodeBoxModel(int32_t backend_node_id,
   std::move(callback).Run(false, nullptr);
 }
 
+void ServiceWorkerData::SetFileInputFiles(
+    const std::string& selector,
+    int32_t backend_node_id,
+    bool pierce,
+    const std::vector<std::string>& paths,
+    SetFileInputFilesCallback callback) {
+  NOTIMPLEMENTED();
+  std::move(callback).Run(false, "Not supported in service worker");
+}
+
 }  // namespace electron

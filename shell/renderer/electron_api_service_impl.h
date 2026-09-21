@@ -6,6 +6,7 @@
 #define ELECTRON_SHELL_RENDERER_ELECTRON_API_SERVICE_IMPL_H_
 
 #include <string>
+#include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "content/public/renderer/render_frame.h"
@@ -54,6 +55,11 @@ class ElectronApiServiceImpl
   void GetNodeBoxModel(int32_t backend_node_id,
                        bool scroll_into_view,
                        GetNodeBoxModelCallback callback) override;
+  void SetFileInputFiles(const std::string& selector,
+                         int32_t backend_node_id,
+                         bool pierce,
+                         const std::vector<std::string>& paths,
+                         SetFileInputFilesCallback callback) override;
   void ProcessPendingMessages();
 
   // mojom::ElectronFrameStartup

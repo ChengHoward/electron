@@ -330,6 +330,9 @@ class WebContents final : public ExclusiveAccessContext,
   // querySelectorDeep + trusted dispatchMouseEvent click at element center.
   v8::Local<v8::Promise> ClickSelector(gin::Arguments* args);
 
+  // CDP DOM.setFileInputFiles equivalent without attaching the debugger.
+  v8::Local<v8::Promise> SetFileInputFiles(gin::Arguments* args);
+
   // CDP Input.dispatchKeyEvent equivalent without attaching the debugger.
   v8::Local<v8::Promise> DispatchKeyEvent(gin::Arguments* args);
 

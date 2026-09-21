@@ -87,6 +87,14 @@ interface ElectronRenderer {
   // Resolve blink DomNodeId / CDP backendNodeId to a CSS-pixel box model.
   GetNodeBoxModel(int32 backend_node_id, bool scroll_into_view) =>
       (bool found, DomBoxModel? model);
+
+  // Set files on <input type=file> without debugger (CDP DOM.setFileInputFiles).
+  // When |backend_node_id| is non-zero it is used; otherwise |selector| is
+  // resolved with the same pierce rules as QuerySelectorDeep.
+  SetFileInputFiles(string selector,
+                    int32 backend_node_id,
+                    bool pierce,
+                    array<string> paths) => (bool ok, string error);
 };
 
 interface ElectronAutofillAgent {

@@ -167,6 +167,7 @@
 #include "shell/common/gin_converters/net_converter.h"
 #include "shell/common/gin_converters/optional_converter.h"
 #include "shell/common/gin_converters/osr_converter.h"
+#include "shell/common/gin_converters/std_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/error_thrower.h"
@@ -5059,6 +5060,87 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
   return handle;
 }
 
+v8::Local<v8::Promise> WebContents::SetFileInputFiles(gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<void> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  std::string selector;
+  int32_t backend_node_id = 0;
+  bool pierce = true;
+
+  v8::Local<v8::Value> first;
+  if (!args->GetNext(&first)) {
+    promise.RejectWithErrorMessage(
+        "Expected selector string or { backendNodeId } as first argument");
+    return handle;
+  }
+
+  if (first->IsString()) {
+    if (!gin::ConvertFromV8(isolate, first, &selector) || selector.empty()) {
+      promise.RejectWithErrorMessage("'selector' is required");
+      return handle;
+    }
+  } else if (first->IsObject() && !first->IsArray()) {
+    gin_helper::Dictionary target;
+    if (!gin::ConvertFromV8(isolate, first, &target)) {
+      promise.RejectWithErrorMessage("Invalid target object");
+      return handle;
+    }
+    target.Get("backendNodeId", &backend_node_id);
+    target.Get("selector", &selector);
+    target.Get("pierce", &pierce);
+    if (backend_node_id == 0 && selector.empty()) {
+      promise.RejectWithErrorMessage(
+          "'backendNodeId' or 'selector' is required");
+      return handle;
+    }
+  } else {
+    promise.RejectWithErrorMessage(
+        "Expected selector string or { backendNodeId } as first argument");
+    return handle;
+  }
+
+  std::vector<std::string> paths;
+  if (!args->GetNext(&paths)) {
+    promise.RejectWithErrorMessage(
+        "'files' array of absolute paths is required");
+    return handle;
+  }
+
+  gin_helper::Dictionary options;
+  if (args->GetNext(&options))
+    options.Get("pierce", &pierce);
+
+  std::string error;
+  auto* frame_host = GetLiveMainFrame(web_contents(), &error);
+  if (!frame_host) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+
+  auto electron_renderer =
+      std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame_host->GetRemoteInterfaces()->GetInterface(
+      electron_renderer->BindNewPipeAndPassReceiver());
+  auto* raw_ptr = electron_renderer.get();
+  (*raw_ptr)->SetFileInputFiles(
+      selector, backend_node_id, pierce, paths,
+      base::BindOnce(
+          [](std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+             gin_helper::Promise<void> promise, bool ok,
+             const std::string& error) {
+            if (!ok) {
+              promise.RejectWithErrorMessage(
+                  error.empty() ? "setFileInputFiles failed" : error);
+              return;
+            }
+            promise.Resolve();
+          },
+          std::move(electron_renderer), std::move(promise)));
+  return handle;
+}
+
 v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
   v8::Isolate* isolate = args->isolate();
   gin_helper::Promise<void> promise(isolate);
@@ -6522,6 +6604,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("querySelectorDeep", &WebContents::QuerySelectorDeep)
       .SetMethod("getNodeBoxModel", &WebContents::GetNodeBoxModel)
       .SetMethod("clickSelector", &WebContents::ClickSelector)
+      .SetMethod("setFileInputFiles", &WebContents::SetFileInputFiles)
       .SetMethod("dispatchKeyEvent", &WebContents::DispatchKeyEvent)
       .SetMethod("dispatchTouchEvent", &WebContents::DispatchTouchEvent)
       .SetMethod("cancelDragging", &WebContents::CancelDragging)

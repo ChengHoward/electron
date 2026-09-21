@@ -6,6 +6,7 @@
 #define ELECTRON_SHELL_RENDERER_SERVICE_WORKER_DATA_H_
 
 #include <string>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -65,6 +66,11 @@ class ServiceWorkerData : public mojom::ElectronRenderer {
   void GetNodeBoxModel(int32_t backend_node_id,
                        bool scroll_into_view,
                        GetNodeBoxModelCallback callback) override;
+  void SetFileInputFiles(const std::string& selector,
+                         int32_t backend_node_id,
+                         bool pierce,
+                         const std::vector<std::string>& paths,
+                         SetFileInputFilesCallback callback) override;
 
  private:
   void OnElectronRendererRequest(
