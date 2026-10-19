@@ -820,6 +820,9 @@ Returns `Promise<void>` - Resolves when the proxy setting process is complete.
 
 Sets the proxy settings.
 
+`config.username` and `config.password` authenticate HTTP, HTTPS, and SOCKS5
+proxies. See [ProxyConfig](structures/proxy-config.md).
+
 You may need `ses.closeAllConnections` to close currently in flight connections to prevent
 pooled sockets using previous proxy from being reused by future requests.
 

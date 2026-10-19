@@ -33,6 +33,7 @@
 #include "components/proxy_config/proxy_config_dictionary.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/proxy_config/proxy_prefs.h"
+#include "net/base/proxy_string_util.h"
 #include "content/browser/gpu/compositor_util.h"        // nogncheck
 #include "content/browser/gpu/gpu_data_manager_impl.h"  // nogncheck
 #include "content/public/browser/browser_accessibility_state.h"
@@ -1644,11 +1645,17 @@ v8::Local<v8::Promise> App::SetProxy(gin::Arguments* args) {
     return handle;
   }
 
-  std::string mode, proxy_rules, bypass_list, pac_url;
+  std::string mode, proxy_rules, bypass_list, pac_url, username, password;
 
   options.Get("pacScript", &pac_url);
   options.Get("proxyRules", &proxy_rules);
   options.Get("proxyBypassRules", &bypass_list);
+  options.Get("username", &username);
+  options.Get("password", &password);
+  if (!username.empty() || !password.empty()) {
+    proxy_rules =
+        net::ApplyProxyAuthToProxyRules(proxy_rules, username, password);
+  }
 
   ProxyPrefs::ProxyMode proxy_mode = ProxyPrefs::MODE_FIXED_SERVERS;
   if (!options.Get("mode", &mode)) {

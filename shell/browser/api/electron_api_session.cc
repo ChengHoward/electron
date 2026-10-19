@@ -55,6 +55,7 @@
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/load_flags.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/proxy_string_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_auth_preferences.h"
@@ -771,11 +772,17 @@ v8::Local<v8::Promise> Session::SetProxy(gin::Arguments* args) {
     return handle;
   }
 
-  std::string mode, proxy_rules, bypass_list, pac_url;
+  std::string mode, proxy_rules, bypass_list, pac_url, username, password;
 
   options.Get("pacScript", &pac_url);
   options.Get("proxyRules", &proxy_rules);
   options.Get("proxyBypassRules", &bypass_list);
+  options.Get("username", &username);
+  options.Get("password", &password);
+  if (!username.empty() || !password.empty()) {
+    proxy_rules =
+        net::ApplyProxyAuthToProxyRules(proxy_rules, username, password);
+  }
 
   ProxyPrefs::ProxyMode proxy_mode = ProxyPrefs::MODE_FIXED_SERVERS;
   if (!options.Get("mode", &mode)) {
