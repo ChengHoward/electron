@@ -63,6 +63,11 @@ class ServiceWorkerData : public mojom::ElectronRenderer {
                          bool pierce,
                          bool scroll_into_view,
                          QuerySelectorDeepCallback callback) override;
+  void QuerySelectorAcrossDocuments(
+      const std::string& selector,
+      bool pierce,
+      bool scroll_into_view,
+      QuerySelectorAcrossDocumentsCallback callback) override;
   void GetNodeBoxModel(int32_t backend_node_id,
                        bool scroll_into_view,
                        GetNodeBoxModelCallback callback) override;

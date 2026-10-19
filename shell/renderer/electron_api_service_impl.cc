@@ -38,6 +38,7 @@
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
+#include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
 #include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_input_method_controller.h"
@@ -148,6 +149,342 @@ blink::WebElement QuerySelectorDeepImpl(blink::WebDocument document,
   if (pierce)
     return QueryDeepPierce(document, web_selector);
   return QueryInScope(document, web_selector);
+}
+
+enum class SelectorCombinator {
+  kNone,
+  kDescendant,
+  kChild,
+  kNextSibling,
+  kSubsequentSibling,
+  kPierce,
+};
+
+struct SelectorPart {
+  SelectorCombinator combinator_before = SelectorCombinator::kNone;
+  std::string text;
+};
+
+struct SelectorAlternative {
+  std::vector<SelectorPart> parts;
+};
+
+bool IsAsciiIdentContinue(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+bool IsAsciiIdentStart(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+         c == '-';
+}
+
+// Type selector of a compound, lower-cased. Empty when the compound has no
+// type (`#id`, `.class`, `[attr]`). `*|iframe` yields `iframe`.
+std::string CompoundTypeSelector(const std::string& compound) {
+  size_t i = 0;
+  while (i < compound.size() && base::IsAsciiWhitespace(compound[i]))
+    ++i;
+  if (i >= compound.size())
+    return std::string();
+  if (compound[i] == '*') {
+    if (i + 1 < compound.size() && compound[i + 1] == '|')
+      i += 2;
+    else
+      return "*";
+  }
+  if (i >= compound.size() || !IsAsciiIdentStart(compound[i]))
+    return std::string();
+  size_t start = i;
+  while (i < compound.size() && IsAsciiIdentContinue(compound[i]))
+    ++i;
+  if (i < compound.size() && compound[i] == '|') {
+    ++i;
+    start = i;
+    while (i < compound.size() && IsAsciiIdentContinue(compound[i]))
+      ++i;
+  }
+  return base::ToLowerASCII(compound.substr(start, i - start));
+}
+
+bool IsFrameCompound(const std::string& compound) {
+  const std::string type = CompoundTypeSelector(compound);
+  return type == "iframe" || type == "frame";
+}
+
+bool CombinatorEntersFrame(SelectorCombinator combinator) {
+  return combinator == SelectorCombinator::kDescendant ||
+         combinator == SelectorCombinator::kChild ||
+         combinator == SelectorCombinator::kPierce;
+}
+
+std::vector<SelectorAlternative> SplitSelectorAlternatives(
+    const std::string& selector) {
+  std::vector<SelectorAlternative> alternatives(1);
+  std::string current;
+  SelectorCombinator pending = SelectorCombinator::kNone;
+  int brackets = 0;
+  int parens = 0;
+  char quote = 0;
+
+  auto flush = [&]() {
+    std::string text = TrimAsciiWhitespace(current);
+    current.clear();
+    if (text.empty())
+      return;
+    alternatives.back().parts.push_back(SelectorPart{pending, std::move(text)});
+    pending = SelectorCombinator::kNone;
+  };
+
+  for (size_t i = 0; i < selector.size(); ++i) {
+    const char c = selector[i];
+    if (quote) {
+      current.push_back(c);
+      if (c == '\\' && i + 1 < selector.size()) {
+        current.push_back(selector[++i]);
+        continue;
+      }
+      if (c == quote)
+        quote = 0;
+      continue;
+    }
+    if (c == '"' || c == '\'') {
+      quote = c;
+      current.push_back(c);
+      continue;
+    }
+    if (c == '[') {
+      ++brackets;
+      current.push_back(c);
+      continue;
+    }
+    if (c == ']') {
+      if (brackets)
+        --brackets;
+      current.push_back(c);
+      continue;
+    }
+    if (c == '(') {
+      ++parens;
+      current.push_back(c);
+      continue;
+    }
+    if (c == ')') {
+      if (parens)
+        --parens;
+      current.push_back(c);
+      continue;
+    }
+    if (brackets || parens) {
+      current.push_back(c);
+      continue;
+    }
+    if (c == ',') {
+      flush();
+      alternatives.emplace_back();
+      pending = SelectorCombinator::kNone;
+      continue;
+    }
+    if (c == '>' && i + 2 < selector.size() && selector[i + 1] == '>' &&
+        selector[i + 2] == '>') {
+      flush();
+      pending = SelectorCombinator::kPierce;
+      i += 2;
+      continue;
+    }
+    if (c == '>') {
+      flush();
+      pending = SelectorCombinator::kChild;
+      continue;
+    }
+    if (c == '+') {
+      flush();
+      pending = SelectorCombinator::kNextSibling;
+      continue;
+    }
+    if (c == '~') {
+      flush();
+      pending = SelectorCombinator::kSubsequentSibling;
+      continue;
+    }
+    if (base::IsAsciiWhitespace(c)) {
+      size_t j = i;
+      while (j < selector.size() && base::IsAsciiWhitespace(selector[j]))
+        ++j;
+      if (j < selector.size() &&
+          (selector[j] == '>' || selector[j] == '+' || selector[j] == '~' ||
+           selector[j] == ',')) {
+        continue;
+      }
+      if (!TrimAsciiWhitespace(current).empty()) {
+        flush();
+        pending = SelectorCombinator::kDescendant;
+      }
+      continue;
+    }
+    current.push_back(c);
+  }
+  flush();
+  if (alternatives.size() == 1 && alternatives[0].parts.empty())
+    alternatives.clear();
+  return alternatives;
+}
+
+std::string JoinSelectorParts(const std::vector<SelectorPart>& parts,
+                              size_t begin,
+                              size_t end) {
+  std::string out;
+  for (size_t i = begin; i < end && i < parts.size(); ++i) {
+    if (!out.empty()) {
+      switch (parts[i].combinator_before) {
+        case SelectorCombinator::kChild:
+          out += " > ";
+          break;
+        case SelectorCombinator::kNextSibling:
+          out += " + ";
+          break;
+        case SelectorCombinator::kSubsequentSibling:
+          out += " ~ ";
+          break;
+        case SelectorCombinator::kPierce:
+          out += " >>> ";
+          break;
+        case SelectorCombinator::kDescendant:
+        case SelectorCombinator::kNone:
+          out.push_back(' ');
+          break;
+      }
+    }
+    out += parts[i].text;
+  }
+  return out;
+}
+
+bool SelectorHasExplicitFrameHop(const std::string& selector) {
+  for (const SelectorAlternative& alternative : SplitSelectorAlternatives(selector)) {
+    const std::vector<SelectorPart>& parts = alternative.parts;
+    if (parts.size() < 2)
+      continue;
+    for (size_t i = 0; i + 1 < parts.size(); ++i) {
+      if (!IsFrameCompound(parts[i].text))
+        continue;
+      if (CombinatorEntersFrame(parts[i + 1].combinator_before))
+        return true;
+    }
+  }
+  return false;
+}
+
+std::vector<blink::WebElement> QueryAllPierceCombinator(
+    const blink::WebNode& scope,
+    const std::vector<std::string>& parts,
+    size_t index) {
+  std::vector<blink::WebElement> found;
+  if (scope.IsNull() || index >= parts.size() || parts[index].empty())
+    return found;
+  std::vector<blink::WebElement> matches =
+      scope.QuerySelectorAll(blink::WebString::FromUtf8(parts[index]));
+  if (index + 1 == parts.size())
+    return matches;
+  for (blink::WebElement& match : matches) {
+    blink::WebNode shadow = match.OpenOrClosedShadowRoot();
+    if (shadow.IsNull())
+      continue;
+    std::vector<blink::WebElement> nested =
+        QueryAllPierceCombinator(shadow, parts, index + 1);
+    found.insert(found.end(), nested.begin(), nested.end());
+  }
+  return found;
+}
+
+std::vector<blink::WebElement> QueryAllInDocument(const blink::WebNode& scope,
+                                                 const std::string& selector,
+                                                 bool pierce) {
+  std::vector<blink::WebElement> found;
+  if (scope.IsNull() || selector.empty())
+    return found;
+  if (selector.find(">>>") != std::string::npos) {
+    return QueryAllPierceCombinator(scope, SplitPierceSelector(selector), 0);
+  }
+  blink::WebString web_selector = blink::WebString::FromUtf8(selector);
+  found = scope.QuerySelectorAll(web_selector);
+  if (!pierce)
+    return found;
+  std::vector<blink::WebElement> all =
+      scope.QuerySelectorAll(blink::WebString::FromUtf8("*"));
+  for (blink::WebElement& candidate : all) {
+    blink::WebNode shadow = candidate.OpenOrClosedShadowRoot();
+    if (shadow.IsNull())
+      continue;
+    std::vector<blink::WebElement> nested =
+        QueryAllInDocument(shadow, selector, true);
+    found.insert(found.end(), nested.begin(), nested.end());
+  }
+  return found;
+}
+
+bool ElementIsFrame(const blink::WebElement& element) {
+  if (element.IsNull())
+    return false;
+  const std::string tag = base::ToLowerASCII(element.TagName().Utf8());
+  return tag == "iframe" || tag == "frame";
+}
+
+constexpr size_t kMaxCrossDocumentHops = 64;
+
+void AppendFrameHop(blink::WebFrame* frame,
+                    const std::string& remainder,
+                    std::vector<mojom::CrossDocumentHopPtr>* hops) {
+  if (!frame || remainder.empty() || !hops || hops->size() >= kMaxCrossDocumentHops)
+    return;
+  auto hop = mojom::CrossDocumentHop::New();
+  hop->frame_token = frame->GetFrameToken().value();
+  hop->is_local = frame->IsWebLocalFrame();
+  hop->remainder_selector = remainder;
+  hops->push_back(std::move(hop));
+}
+
+void CollectExplicitFrameHops(const blink::WebDocument& document,
+                              const std::string& selector,
+                              bool pierce,
+                              std::vector<mojom::CrossDocumentHopPtr>* hops) {
+  for (const SelectorAlternative& alternative : SplitSelectorAlternatives(selector)) {
+    const std::vector<SelectorPart>& parts = alternative.parts;
+    if (parts.size() < 2)
+      continue;
+    for (size_t i = 0; i + 1 < parts.size(); ++i) {
+      if (!IsFrameCompound(parts[i].text))
+        continue;
+      if (!CombinatorEntersFrame(parts[i + 1].combinator_before))
+        continue;
+      const std::string prefix = JoinSelectorParts(parts, 0, i + 1);
+      const std::string remainder = JoinSelectorParts(parts, i + 1, parts.size());
+      if (prefix.empty() || remainder.empty())
+        continue;
+      for (const blink::WebElement& element :
+           QueryAllInDocument(document, prefix, pierce)) {
+        if (!ElementIsFrame(element))
+          continue;
+        AppendFrameHop(blink::WebFrame::FromFrameOwnerElement(element),
+                       remainder, hops);
+        if (hops->size() >= kMaxCrossDocumentHops)
+          return;
+      }
+    }
+  }
+}
+
+void CollectChildFrameHops(blink::WebLocalFrame* frame,
+                           const std::string& selector,
+                           std::vector<mojom::CrossDocumentHopPtr>* hops) {
+  if (!frame)
+    return;
+  for (blink::WebFrame* child = frame->FirstChild(); child;
+       child = child->NextSibling()) {
+    AppendFrameHop(child, selector, hops);
+    if (hops->size() >= kMaxCrossDocumentHops)
+      return;
+  }
 }
 
 float CssScaleForElement(blink::WebElement element) {
@@ -668,6 +1005,39 @@ void ElectronApiServiceImpl::QuerySelectorDeep(
     element.ScrollIntoViewIfNeeded();
 
   std::move(callback).Run(true, BuildDomElementInfo(element));
+}
+
+void ElectronApiServiceImpl::QuerySelectorAcrossDocuments(
+    const std::string& selector,
+    bool pierce,
+    bool scroll_into_view,
+    QuerySelectorAcrossDocumentsCallback callback) {
+  auto result = mojom::CrossDocumentProbe::New();
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+  if (!frame || selector.empty()) {
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
+  blink::WebDocument document = frame->GetDocument();
+  blink::WebElement element =
+      QuerySelectorDeepImpl(document, selector, pierce);
+  if (!element.IsNull()) {
+    if (scroll_into_view)
+      element.ScrollIntoViewIfNeeded();
+    result->found = true;
+    result->element = BuildDomElementInfo(element);
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
+  result->explicit_frame_hop = SelectorHasExplicitFrameHop(selector);
+  if (result->explicit_frame_hop) {
+    CollectExplicitFrameHops(document, selector, pierce, &result->hops);
+  } else {
+    CollectChildFrameHops(frame, selector, &result->hops);
+  }
+  std::move(callback).Run(std::move(result));
 }
 
 void ElectronApiServiceImpl::GetNodeBoxModel(

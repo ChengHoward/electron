@@ -2310,6 +2310,35 @@ await win.webContents.dispatchMouseEvent({
 })
 ```
 
+#### `contents.querySelectorAcrossDocuments(selector[, options])`
+
+* `selector` string - CSS selector. An `iframe` or `frame` compound followed by a descendant, child, or `>>>` combinator continues inside that frame's document, including cross-origin OOPIFs. Example: `iframe[src*="challenges.cloudflare.com"] input[type="checkbox"]`
+* `options` [QuerySelectorDeepOptions](structures/query-selector-deep-options.md) (optional) - Same as `querySelectorDeep`
+
+Returns `Promise<(DomElementInfo | null)>` - [DomElementInfo](structures/dom-element-info.md)
+when found, otherwise `null`.
+
+Within one document this uses the same closed-shadow rules as `querySelectorDeep`.
+Selectors that do not name a frame still search the current document first, then
+descendant frames. Coordinates are CSS pixels in the main-frame viewport (the
+same space as `dispatchMouseEvent`). `querySelectorDeep` does not enter frames.
+
+```js
+const box = await win.webContents.querySelectorAcrossDocuments(
+  'iframe[src*="challenges.cloudflare.com"] input[type="checkbox"]'
+)
+if (box) {
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  await win.webContents.dispatchMouseEvent({
+    type: 'mousePressed', x, y, button: 'left', clickCount: 1
+  })
+  await win.webContents.dispatchMouseEvent({
+    type: 'mouseReleased', x, y, button: 'left', clickCount: 1
+  })
+}
+```
+
 #### `contents.querySelectorDeep(selector[, options])`
 
 * `selector` string - CSS selector; supports `>>>` to enter author shadow roots
