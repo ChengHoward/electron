@@ -19,6 +19,11 @@ otherwise defaults to `fixed_servers`.
 * `proxyRules` string (optional) - Rules indicating which proxies to use.
 * `proxyBypassRules` string (optional) - Rules indicating which URLs should
 bypass the proxy settings.
+* `username` string (optional) - Username used to authenticate to every proxy
+  listed in `proxyRules`. Applied to HTTP, HTTPS, and SOCKS5 proxies.
+* `password` string (optional) - Password used with `username`. SOCKS5
+  usernames and passwords are each limited to 255 bytes. SOCKS4 does not
+  support this authentication.
 
 When `mode` is unspecified, `pacScript` and `proxyRules` are provided together, the `proxyRules`
 option is ignored and `pacScript` configuration is applied.
@@ -47,6 +52,27 @@ For example:
   proxy if `foopy` is unavailable.
 * `http=foopy;socks=foopy2` - Use HTTP proxy `foopy` for http URLs, and use
   `socks4://foopy2` for all other URLs.
+
+`username` and `password` are inserted into each proxy in `proxyRules`. The
+same credentials can also be written directly into a proxy URI as
+`scheme://user:pass@host:port`. Characters other than unreserved URL characters
+are percent-encoded. `direct://` entries are left unchanged.
+
+HTTP and HTTPS proxies use these credentials when the proxy responds with
+`407 Proxy-Authenticate` (Basic, Digest, NTLM, or Negotiate). SOCKS5 proxies
+use them during the connection handshake (RFC 1929). Credentials are not
+included in the string returned by `resolveProxy`. They are applied with
+`proxyRules` in `fixed_servers` mode, which is the default when `proxyRules`
+is set. A PAC script does not receive these credentials.
+
+```js
+await ses.setProxy({
+  mode: 'fixed_servers',
+  proxyRules: 'socks5://proxy.example:1080',
+  username: 'user',
+  password: 'pass'
+})
+```
 
 The `proxyBypassRules` is a comma separated list of rules described below:
 

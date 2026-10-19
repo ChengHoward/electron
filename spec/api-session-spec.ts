@@ -838,6 +838,25 @@ describe('session module', () => {
       expect(proxy).to.equal('PROXY myproxy:80');
     });
 
+    it('accepts proxy credentials without exposing them from resolveProxy', async () => {
+      await customSession.setProxy({
+        proxyRules: 'http://myproxy:80',
+        username: 'user',
+        password: 'p@ss word'
+      });
+      const httpProxy = await customSession.resolveProxy('http://example.com/');
+      expect(httpProxy).to.equal('PROXY myproxy:80');
+
+      await customSession.setProxy({
+        mode: 'fixed_servers',
+        proxyRules: 'socks5://127.0.0.1:1080',
+        username: 'user',
+        password: 'pass'
+      });
+      const socksProxy = await customSession.resolveProxy('http://example.com/');
+      expect(socksProxy).to.equal('SOCKS5 127.0.0.1:1080');
+    });
+
     it('allows removing the implicit bypass rules for localhost', async () => {
       const config = {
         proxyRules: 'http=myproxy:80',
