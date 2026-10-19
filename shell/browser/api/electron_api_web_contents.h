@@ -324,6 +324,10 @@ class WebContents final : public ExclusiveAccessContext,
   // Returns null when not found.
   v8::Local<v8::Promise> QuerySelectorDeep(gin::Arguments* args);
 
+  // Like QuerySelectorDeep, and also steps into iframe/frame documents,
+  // including cross-origin OOPIFs.
+  v8::Local<v8::Promise> QuerySelectorAcrossDocuments(gin::Arguments* args);
+
   // Resolve a DomNodeId / CDP backendNodeId to a CSS-pixel box model.
   v8::Local<v8::Promise> GetNodeBoxModel(gin::Arguments* args);
 

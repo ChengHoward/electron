@@ -81,6 +81,14 @@ void ServiceWorkerData::QuerySelectorDeep(const std::string& selector,
   std::move(callback).Run(false, nullptr);
 }
 
+void ServiceWorkerData::QuerySelectorAcrossDocuments(
+    const std::string& selector,
+    bool pierce,
+    bool scroll_into_view,
+    QuerySelectorAcrossDocumentsCallback callback) {
+  std::move(callback).Run(mojom::CrossDocumentProbe::New());
+}
+
 void ServiceWorkerData::GetNodeBoxModel(int32_t backend_node_id,
                                         bool scroll_into_view,
                                         GetNodeBoxModelCallback callback) {

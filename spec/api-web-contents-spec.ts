@@ -2206,6 +2206,64 @@ describe('webContents module', () => {
     });
   });
 
+  describe('querySelectorAcrossDocuments', () => {
+    afterEach(closeAllWindows);
+
+    const framePage = `<!DOCTYPE html>
+<iframe class="a" srcdoc="<p>none</p>"></iframe>
+<iframe class="b" srcdoc="<div id=&quot;host&quot;></div><script>const host=document.getElementById('host');const root=host.attachShadow({mode:'closed'});root.innerHTML='<input type=&quot;checkbox&quot; id=&quot;box&quot;>';</script>"></iframe>`;
+
+    async function loadFrames(w) {
+      await w.loadURL('data:text/html,' + encodeURIComponent(framePage));
+      await w.webContents.executeJavaScript(`new Promise((resolve) => {
+        const frame = document.querySelector('iframe.b');
+        const ready = () => {
+          const host = frame.contentDocument && frame.contentDocument.getElementById('host');
+          if (host)
+            resolve(true);
+        };
+        if (frame.contentDocument && frame.contentDocument.readyState === 'complete' &&
+            frame.contentDocument.getElementById('host'))
+          ready();
+        else
+          frame.addEventListener('load', ready, { once: true });
+      })`);
+    }
+
+    it('finds an element inside an iframe, including closed shadow', async () => {
+      const w = new BrowserWindow({ show: true, width: 400, height: 300 });
+      await loadFrames(w);
+
+      const missed = await w.webContents.querySelectorDeep(
+        'iframe.b input[type="checkbox"]');
+      expect(missed).to.equal(null);
+
+      const el = await w.webContents.querySelectorAcrossDocuments(
+        'iframe.b input[type="checkbox"]');
+      expect(el).to.not.equal(null);
+      expect(el.tagName.toLowerCase()).to.equal('input');
+      expect(el.width).to.be.greaterThan(0);
+      expect(el.height).to.be.greaterThan(0);
+    });
+
+    it('does not use an iframe the selector did not name', async () => {
+      const w = new BrowserWindow({ show: true, width: 400, height: 300 });
+      await loadFrames(w);
+      const el = await w.webContents.querySelectorAcrossDocuments(
+        'iframe.a input[type="checkbox"]');
+      expect(el).to.equal(null);
+    });
+
+    it('searches descendant frames when the selector has no iframe hop', async () => {
+      const w = new BrowserWindow({ show: true, width: 400, height: 300 });
+      await loadFrames(w);
+      const el = await w.webContents.querySelectorAcrossDocuments(
+        'input[type="checkbox"]');
+      expect(el).to.not.equal(null);
+      expect(el.tagName.toLowerCase()).to.equal('input');
+    });
+  });
+
   describe('dispatchKeyEvent(params)', () => {
     afterEach(closeAllWindows);
 

@@ -55,6 +55,7 @@
 #include "content/browser/renderer_host/navigation_controller_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_manager.h"  // nogncheck
+#include "content/browser/renderer_host/render_frame_proxy_host.h"  // nogncheck
 #include "components/input/touch_emulator.h"
 #include "content/browser/renderer_host/input/touch_emulator_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
@@ -205,6 +206,9 @@
 #include "ui/views/widget/widget.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/range/range.h"
 #include "ui/latency/latency_info.h"
 
@@ -4780,6 +4784,186 @@ v8::Local<v8::Value> DomBoxModelToV8(v8::Isolate* isolate,
   return dict.GetHandle();
 }
 
+constexpr int kMaxCrossDocumentDepth = 16;
+
+void MapDomElementInfoToRootViewport(content::RenderFrameHost* frame,
+                                    mojom::DomElementInfo* info) {
+  if (!frame || !info)
+    return;
+  content::RenderWidgetHostView* view = frame->GetView();
+  if (!view)
+    return;
+  const gfx::Rect bounds = info->bounds;
+  const double scale = (info->width != 0.0 && bounds.width() != 0)
+                           ? static_cast<double>(bounds.width()) / info->width
+                           : 1.0;
+  const double safe_scale = scale == 0.0 ? 1.0 : scale;
+  gfx::PointF origin(bounds.x(), bounds.y());
+  gfx::PointF bottom_right(bounds.x() + bounds.width(),
+                           bounds.y() + bounds.height());
+  origin = view->TransformPointToRootCoordSpaceF(origin);
+  bottom_right = view->TransformPointToRootCoordSpaceF(bottom_right);
+  const gfx::RectF root_bounds(origin.x(), origin.y(),
+                               bottom_right.x() - origin.x(),
+                               bottom_right.y() - origin.y());
+  info->bounds = gfx::ToEnclosingRect(root_bounds);
+  info->x = origin.x() / safe_scale;
+  info->y = origin.y() / safe_scale;
+  info->width = root_bounds.width() / safe_scale;
+  info->height = root_bounds.height() / safe_scale;
+}
+
+content::RenderFrameHost* ResolveCrossDocumentHop(
+    content::RenderFrameHost* parent,
+    const mojom::CrossDocumentHop& hop) {
+  if (!parent || hop.frame_token.is_empty())
+    return nullptr;
+  content::RenderFrameHostImpl* parent_impl =
+      content::RenderFrameHostImpl::From(parent);
+  if (!parent_impl || !parent_impl->GetProcess())
+    return nullptr;
+  if (hop.is_local) {
+    return content::RenderFrameHostImpl::FromFrameToken(
+        parent_impl->GetProcess()->GetID(),
+        blink::LocalFrameToken(hop.frame_token));
+  }
+  content::RenderFrameProxyHost* proxy =
+      content::RenderFrameProxyHost::FromFrameToken(
+          parent_impl->GetProcess()->GetDeprecatedID(),
+          blink::RemoteFrameToken(hop.frame_token));
+  if (!proxy || !proxy->frame_tree_node())
+    return nullptr;
+  return proxy->frame_tree_node()->current_frame_host();
+}
+
+class AcrossDocumentsSearch
+    : public base::RefCounted<AcrossDocumentsSearch> {
+ public:
+  AcrossDocumentsSearch(gin_helper::Promise<v8::Local<v8::Value>> promise,
+                        bool pierce,
+                        bool scroll_into_view)
+      : promise_(std::move(promise)),
+        pierce_(pierce),
+        scroll_into_view_(scroll_into_view) {}
+
+  bool finished() const { return finished_; }
+  bool pierce() const { return pierce_; }
+  bool scroll_into_view() const { return scroll_into_view_; }
+
+  void FinishNull() {
+    if (finished_)
+      return;
+    finished_ = true;
+    v8::Isolate* isolate = promise_.isolate();
+    v8::HandleScope scope(isolate);
+    promise_.Resolve(v8::Null(isolate).As<v8::Value>());
+  }
+
+  void Finish(content::RenderFrameHost* frame, mojom::DomElementInfoPtr info) {
+    if (finished_ || !info)
+      return;
+    finished_ = true;
+    MapDomElementInfoToRootViewport(frame, info.get());
+    v8::Isolate* isolate = promise_.isolate();
+    v8::HandleScope scope(isolate);
+    promise_.Resolve(DomElementInfoToV8(isolate, *info));
+  }
+
+ private:
+  friend class base::RefCounted<AcrossDocumentsSearch>;
+  ~AcrossDocumentsSearch() {
+    if (!finished_)
+      FinishNull();
+  }
+
+  gin_helper::Promise<v8::Local<v8::Value>> promise_;
+  bool pierce_;
+  bool scroll_into_view_;
+  bool finished_ = false;
+};
+
+void ProbeAcrossDocuments(scoped_refptr<AcrossDocumentsSearch> search,
+                          content::GlobalRenderFrameHostId frame_id,
+                          std::string selector,
+                          int depth,
+                          base::OnceClosure on_miss);
+
+void FollowCrossDocumentHops(
+    scoped_refptr<AcrossDocumentsSearch> search,
+    std::vector<mojom::CrossDocumentHopPtr> hops,
+    content::GlobalRenderFrameHostId parent_id,
+    int depth,
+    size_t index,
+    base::OnceClosure on_miss) {
+  if (!search || search->finished() || index >= hops.size() ||
+      depth > kMaxCrossDocumentDepth) {
+    if (on_miss)
+      std::move(on_miss).Run();
+    return;
+  }
+
+  const mojom::CrossDocumentHop& hop = *hops[index];
+  const std::string remainder = hop.remainder_selector;
+  content::RenderFrameHost* parent = content::RenderFrameHost::FromID(parent_id);
+  content::RenderFrameHost* child =
+      parent ? ResolveCrossDocumentHop(parent, hop) : nullptr;
+  const content::GlobalRenderFrameHostId child_id =
+      child ? child->GetGlobalId() : content::GlobalRenderFrameHostId();
+
+  auto next = base::BindOnce(&FollowCrossDocumentHops, search, std::move(hops),
+                             parent_id, depth, index + 1, std::move(on_miss));
+  if (!child || !child->IsRenderFrameLive() || remainder.empty()) {
+    std::move(next).Run();
+    return;
+  }
+  ProbeAcrossDocuments(search, child_id, remainder, depth, std::move(next));
+}
+
+void ProbeAcrossDocuments(scoped_refptr<AcrossDocumentsSearch> search,
+                          content::GlobalRenderFrameHostId frame_id,
+                          std::string selector,
+                          int depth,
+                          base::OnceClosure on_miss) {
+  if (!search || search->finished() || selector.empty() ||
+      depth > kMaxCrossDocumentDepth) {
+    if (on_miss)
+      std::move(on_miss).Run();
+    return;
+  }
+  content::RenderFrameHost* frame = content::RenderFrameHost::FromID(frame_id);
+  if (!frame || !frame->IsRenderFrameLive()) {
+    if (on_miss)
+      std::move(on_miss).Run();
+    return;
+  }
+
+  auto remote = std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame->GetRemoteInterfaces()->GetInterface(
+      remote->BindNewPipeAndPassReceiver());
+  auto* raw = remote.get();
+  (*raw)->QuerySelectorAcrossDocuments(
+      selector, search->pierce(), search->scroll_into_view(),
+      base::BindOnce(
+          [](scoped_refptr<AcrossDocumentsSearch> search,
+             std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+             content::GlobalRenderFrameHostId frame_id, int depth,
+             base::OnceClosure on_miss, mojom::CrossDocumentProbePtr probe) {
+            if (!search || search->finished())
+              return;
+            if (probe && probe->found && probe->element) {
+              search->Finish(content::RenderFrameHost::FromID(frame_id),
+                             std::move(probe->element));
+              return;
+            }
+            std::vector<mojom::CrossDocumentHopPtr> hops;
+            if (probe)
+              hops = std::move(probe->hops);
+            FollowCrossDocumentHops(search, std::move(hops), frame_id,
+                                    depth + 1, 0, std::move(on_miss));
+          },
+          search, std::move(remote), frame_id, depth, std::move(on_miss)));
+}
+
 content::RenderFrameHost* GetLiveMainFrame(content::WebContents* contents,
                                            std::string* error) {
   if (!contents) {
@@ -4846,6 +5030,41 @@ v8::Local<v8::Promise> WebContents::QuerySelectorDeep(gin::Arguments* args) {
             promise.Resolve(DomElementInfoToV8(isolate, *info));
           },
           std::move(electron_renderer), std::move(promise)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::QuerySelectorAcrossDocuments(
+    gin::Arguments* args) {
+  v8::Isolate* isolate = args->isolate();
+  gin_helper::Promise<v8::Local<v8::Value>> promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  std::string selector;
+  if (!args->GetNext(&selector) || selector.empty()) {
+    promise.RejectWithErrorMessage("'selector' is required");
+    return handle;
+  }
+
+  bool pierce = true;
+  bool scroll_into_view = false;
+  gin_helper::Dictionary options;
+  if (args->GetNext(&options)) {
+    options.Get("pierce", &pierce);
+    options.Get("scrollIntoView", &scroll_into_view);
+  }
+
+  std::string error;
+  auto* frame_host = GetLiveMainFrame(web_contents(), &error);
+  if (!frame_host) {
+    promise.RejectWithErrorMessage(error);
+    return handle;
+  }
+
+  auto search = base::MakeRefCounted<AcrossDocumentsSearch>(
+      std::move(promise), pierce, scroll_into_view);
+  ProbeAcrossDocuments(
+      search, frame_host->GetGlobalId(), selector, 0,
+      base::BindOnce(&AcrossDocumentsSearch::FinishNull, search));
   return handle;
 }
 
@@ -6602,6 +6821,8 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("sendInputEvent", &WebContents::SendInputEvent)
       .SetMethod("dispatchMouseEvent", &WebContents::DispatchMouseEvent)
       .SetMethod("querySelectorDeep", &WebContents::QuerySelectorDeep)
+      .SetMethod("querySelectorAcrossDocuments",
+                 &WebContents::QuerySelectorAcrossDocuments)
       .SetMethod("getNodeBoxModel", &WebContents::GetNodeBoxModel)
       .SetMethod("clickSelector", &WebContents::ClickSelector)
       .SetMethod("setFileInputFiles", &WebContents::SetFileInputFiles)
