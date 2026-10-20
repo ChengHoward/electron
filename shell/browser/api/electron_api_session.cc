@@ -1059,8 +1059,8 @@ void Session::SetUserAgent(const std::string& user_agent,
       browser_context_->GetDefaultStoragePartition()->GetNetworkContext();
   network_context->SetUserAgent(user_agent);
   if (options.accept_language) {
-    network_context->SetAcceptLanguage(
-        net::HttpUtil::GenerateAcceptLanguageHeader(*options.accept_language));
+    network_context->SetAcceptLanguage(net::HttpUtil::GenerateAcceptLanguageHeader(
+        AcceptLanguagesForRenderer(*options.accept_language)));
   }
 
   // Broadcast to all WebContents in this session so renderer preferences and

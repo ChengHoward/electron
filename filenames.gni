@@ -824,6 +824,8 @@ filenames = {
     "shell/renderer/api/electron_api_web_utils.h",
     "shell/renderer/browser_exposed_renderer_interfaces.cc",
     "shell/renderer/browser_exposed_renderer_interfaces.h",
+    "shell/renderer/chrome_app_bindings.cc",
+    "shell/renderer/chrome_app_bindings.h",
     "shell/renderer/content_settings_observer.cc",
     "shell/renderer/content_settings_observer.h",
     "shell/renderer/electron_api_service_impl.cc",

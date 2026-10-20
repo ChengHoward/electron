@@ -366,6 +366,8 @@ declare namespace ElectronInternal {
     reloadIgnoringCache?: boolean;
   }
 
+  type LoadURLWithResponseOptions = Electron.LoadURLWithResponseOptions;
+
   interface WebContentsPrintOptions extends Electron.WebContentsPrintOptions {
     mediaSize?: MediaSize;
   }

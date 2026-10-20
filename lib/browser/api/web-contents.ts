@@ -176,14 +176,6 @@ function _awaitNextLoad(this: Electron.WebContents, navigationUrl: string) {
   });
 }
 
-WebContents.prototype.loadURL = function (url, options) {
-  const p = _awaitNextLoad.call(this, url);
-  // Add a no-op rejection handler to silence the unhandled rejection error.
-  p.catch(() => {});
-  this._loadURL(url, options ?? {});
-  return p;
-};
-
 WebContents.prototype.loadURLWithResponse = function (url, response) {
   const p = _awaitNextLoad.call(this, url);
   p.catch(() => {});

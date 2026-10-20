@@ -67,6 +67,10 @@ bool ParseUserAgentOptions(gin::Arguments* args,
                            UserAgentOptions* out,
                            std::string* error);
 
+// Language tags for navigator.languages. Drops Accept-Language q-values.
+// "en-US,en;q=0.9" -> "en-US,en".
+std::string AcceptLanguagesForRenderer(const std::string& raw);
+
 }  // namespace electron
 
 #endif  // ELECTRON_SHELL_BROWSER_USER_AGENT_OPTIONS_H_

@@ -14,8 +14,10 @@
 #include "net/base/module/net_module.h"
 #include "net/grit/net_resources.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "chrome/renderer/loadtimes_bindings.h"
 #include "shell/common/web_contents_utility.mojom.h"
 #include "shell/common/world_ids.h"
+#include "shell/renderer/chrome_app_bindings.h"
 #include "shell/renderer/renderer_client_base.h"
 #include "shell/renderer/window_setup.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -179,16 +181,22 @@ void ElectronRenderFrameObserver::DidInstallConditionalFeatures(
                                                 render_frame_);
   }
 
-  // Insurance: remove window.chrome if setUserAgent({ hideChrome: true }).
-  // Primary gate is in NativeExtensionBindingsSystem::UpdateBindingsForContext.
+  // Webpage main world only. hideChrome deletes window.chrome; otherwise
+  // install Chrome's loadTimes/csi plus the ordinary-page chrome.app surface.
+  // Extension and content-script worlds are left to the bindings system.
   if (electron::is_main_world(world_id)) {
     blink::WebLocalFrame* frame = render_frame_->GetWebFrame();
-    if (frame && frame->View() &&
-        frame->View()->GetRendererPreferences().hide_chrome) {
+    const bool hide_chrome =
+        frame && frame->View() &&
+        frame->View()->GetRendererPreferences().hide_chrome;
+    if (hide_chrome) {
       v8::Local<v8::String> chrome_name;
       if (v8::String::NewFromUtf8(isolate, "chrome").ToLocal(&chrome_name)) {
         std::ignore = context->Global()->Delete(context, chrome_name);
       }
+    } else {
+      LoadTimesBindings::Install(context);
+      InstallChromeApp(context);
     }
   }
 }

@@ -22,7 +22,6 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"  // nogncheck
 #include "url/gurl.h"
 #include "v8/include/v8-context.h"
-#include "v8/include/v8-exception.h"
 #include "v8/include/v8-function.h"
 
 namespace electron {
@@ -40,12 +39,6 @@ content::RenderFrame* CurrentRenderFrame(v8::Isolate* isolate) {
   blink::WebLocalFrame* frame =
       blink::WebLocalFrame::FrameForContext(isolate->GetCurrentContext());
   return frame ? content::RenderFrame::FromWebFrame(frame) : nullptr;
-}
-
-void Prompt(const v8::FunctionCallbackInfo<v8::Value>& info) {
-  v8::Isolate* isolate = info.GetIsolate();
-  isolate->ThrowException(v8::Exception::Error(
-      gin::StringToV8(isolate, "prompt() is not supported.")));
 }
 
 void Close(const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -106,9 +99,8 @@ void SetUpWindow(content::RenderFrame* render_frame,
   }
   v8::Context::Scope context_scope(context);
 
-  SetFunction(context, "prompt", Prompt);
-
-  // A popup opened from a <webview> inherits is_webview but is not one.
+  // Keep Blink's prompt() so setJsDialogHandler can answer it. The browser
+  // still rejects prompt when no handler is installed.
   const bool is_webview =
       render_frame->GetBlinkPreferences().is_webview && !web_frame->Opener();
   const bool is_main_world = context == web_frame->MainWorldScriptContext();

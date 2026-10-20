@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/strings/string_tokenizer.h"
+#include "base/strings/string_util.h"
 #include "gin/arguments.h"
 #include "gin/converter.h"
 #include "shell/common/gin_converters/std_converter.h"
@@ -169,6 +171,26 @@ bool ParseUserAgentOptions(gin::Arguments* args,
   }
 
   return true;
+}
+
+std::string AcceptLanguagesForRenderer(const std::string& raw) {
+  std::string out;
+  base::StringTokenizer tokenizer(raw, ",");
+  while (tokenizer.GetNext()) {
+    std::string language(base::TrimWhitespaceASCII(
+        tokenizer.token(), base::TRIM_ALL));
+    const size_t semi = language.find(';');
+    if (semi != std::string::npos)
+      language.resize(semi);
+    language = std::string(
+        base::TrimWhitespaceASCII(language, base::TRIM_ALL));
+    if (language.empty())
+      continue;
+    if (!out.empty())
+      out.push_back(',');
+    out += language;
+  }
+  return out;
 }
 
 }  // namespace electron

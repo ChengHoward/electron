@@ -14,9 +14,10 @@ diff --git a/extensions/renderer/native_extension_bindings_system.cc b/extension
 index 3a8688cfc4e66f399d35c70d4e30c2d1963994e1..934c776654b0fce317a282f1039197fd2d0cfaeb 100644
 --- a/extensions/renderer/native_extension_bindings_system.cc
 +++ b/extensions/renderer/native_extension_bindings_system.cc
-@@ -6,6 +6,7 @@
+@@ -6,7 +6,8 @@
  
  #include <algorithm>
+ #include <optional>
  #include <string_view>
 +#include <tuple>
  #include <utility>

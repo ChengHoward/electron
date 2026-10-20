@@ -3901,8 +3901,10 @@ void WebContents::SetUserAgent(const std::string& user_agent,
   prefs->navigator_platform_override = options.platform;
   prefs->hide_chrome = options.hide_chrome;
   if (options.accept_language) {
+    // Renderer prefs feed navigator.languages, which does not understand
+    // Accept-Language q-values. The network header still adds q separately.
     prefs->accept_languages =
-        net::HttpUtil::GenerateAcceptLanguageHeader(*options.accept_language);
+        AcceptLanguagesForRenderer(*options.accept_language);
   }
 
   // Mark the visible entry so renderer-initiated navigations (including
@@ -7485,6 +7487,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::QuerySelectorAcrossDocuments>("querySelectorAcrossDocuments")
       .SetMethod<&WebContents::GetNodeBoxModel>("getNodeBoxModel")
       .SetMethod<&WebContents::ClickSelector>("clickSelector")
+      .SetMethod<&WebContents::SetFileInputFiles>("setFileInputFiles")
       .SetMethod<&WebContents::DispatchKeyEvent>("dispatchKeyEvent")
       .SetMethod<&WebContents::DispatchTouchEvent>("dispatchTouchEvent")
       .SetMethod<&WebContents::CancelDragging>("cancelDragging")

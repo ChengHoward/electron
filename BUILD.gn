@@ -657,6 +657,13 @@ source_set("electron_lib") {
     sources += filenames.lib_sources_views
   }
 
+  # Chrome's webpage chrome.loadTimes() / chrome.csi(). Electron does not link
+  # //chrome/renderer, so compile the bindings into the renderer directly.
+  sources += [
+    "//chrome/renderer/loadtimes_bindings.cc",
+    "//chrome/renderer/loadtimes_bindings.h",
+  ]
+
   if (electron_generate_js2c_code_cache) {
     sources += [
       "$root_gen_dir/electron_natives_code_cache_browser.cc",

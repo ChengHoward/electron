@@ -100,7 +100,6 @@ auto_filenames = {
     "docs/api/structures/display.md",
     "docs/api/structures/dom-box-model.md",
     "docs/api/structures/dom-element-info.md",
-    "docs/api/structures/enable-heap-profiling-options.md",
     "docs/api/structures/extension-info.md",
     "docs/api/structures/extension.md",
     "docs/api/structures/file-filter.md",
