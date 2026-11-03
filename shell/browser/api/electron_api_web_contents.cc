@@ -87,6 +87,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/browser/ssl_status.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/weak_document_ptr.h"
@@ -113,6 +114,8 @@
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
+#include "net/ssl/ssl_cipher_suite_names.h"
+#include "net/ssl/ssl_connection_status_flags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
@@ -199,6 +202,7 @@
 #include "third_party/blink/public/common/messaging/transferable_message_mojom_traits.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
@@ -3081,6 +3085,7 @@ void WebContents::SetOwnerBaseWindow(std::optional<BaseWindow*> owner_window) {
 
 void WebContents::SetOwnerWindow(content::WebContents* web_contents,
                                  NativeWindow* owner_window) {
+  const bool owner_changed = owner_window_.get() != owner_window;
   if (owner_window_) {
     owner_window_->RemoveBackgroundThrottlingSource(this);
   }
@@ -3097,6 +3102,8 @@ void WebContents::SetOwnerWindow(content::WebContents* web_contents,
   auto* osr_wcv = GetOffScreenWebContentsView();
   if (osr_wcv)
     osr_wcv->SetNativeWindow(owner_window);
+  if (owner_changed)
+    Emit("-owner-window-changed");
 }
 
 content::WebContents* WebContents::GetWebContents() const {
@@ -3157,6 +3164,10 @@ void WebContents::NavigationEntryCommitted(
     const content::LoadCommittedDetails& details) {
   Emit("navigation-entry-committed", details.entry->GetURL(),
        details.is_same_document, details.did_replace_entry);
+}
+
+void WebContents::DidChangeVisibleSecurityState() {
+  Emit("-page-info-security-state-changed");
 }
 
 bool WebContents::GetBackgroundThrottling() const {
@@ -3307,6 +3318,140 @@ v8::Local<v8::Value> WebContents::Clone(v8::Isolate* isolate) {
 
 GURL WebContents::GetURL() const {
   return web_contents()->GetLastCommittedURL();
+}
+
+int WebContents::GetOwnerWindowID() const {
+  return owner_window() ? owner_window()->base_window_id() : 0;
+}
+
+v8::Local<v8::Value> WebContents::GetPageInfo(
+    v8::Isolate* isolate,
+    gin_helper::ErrorThrower thrower,
+    std::optional<bool> include_permissions) {
+  auto* contents = GetWebContents();
+  if (!contents || contents->IsBeingDestroyed()) {
+    thrower.ThrowError(
+        "Cannot read page information from destroyed webContents");
+    return v8::Null(isolate);
+  }
+  auto* entry = contents->GetController().GetLastCommittedEntry();
+  if (!entry || entry->IsInitialEntry()) {
+    thrower.ThrowError("Page information requires a committed navigation");
+    return v8::Null(isolate);
+  }
+  auto* frame = contents->GetPrimaryMainFrame();
+  const int entry_id = entry->GetUniqueID();
+  const GURL committed_url = entry->GetURL();
+  const auto origin = frame->GetLastCommittedOrigin();
+  const std::string document_id =
+      content::RenderFrameHostImpl::From(frame)->GetDocumentToken().ToString();
+  const int owner_id = owner_window() ? owner_window()->base_window_id() : 0;
+  // The visible entry can already refer to an uncommitted destination. Only
+  // expose the certificate and transport of the document actually committed.
+  const content::SSLStatus ssl = entry->GetSSL();
+  const bool error_page = entry->GetPageType() == content::PAGE_TYPE_ERROR;
+  const bool certificate_error = net::IsCertStatusError(ssl.cert_status);
+  const bool mixed_content =
+      ssl.content_status != content::SSLStatus::NORMAL_CONTENT;
+  const bool obsolete_tls =
+      ssl.initialized && ssl.connection_status != 0 &&
+      net::ObsoleteSSLStatus(ssl.connection_status,
+                             ssl.peer_signature_algorithm) !=
+          net::OBSOLETE_SSL_NONE;
+  const char* security = "unknown";
+  if (certificate_error) {
+    security = "certificate-error";
+  } else if (error_page) {
+    security = "error";
+  } else if (mixed_content) {
+    security = "mixed-content";
+  } else if (obsolete_tls) {
+    security = "obsolete-tls";
+  } else if (committed_url.SchemeIsCryptographic() && ssl.initialized &&
+             ssl.certificate && ssl.connection_status != 0) {
+    security = "secure";
+  } else if (committed_url.SchemeIs("http")) {
+    security = "insecure";
+  }
+
+  auto result = gin_helper::Dictionary::CreateEmpty(isolate);
+  result.Set("url", committed_url.spec());
+  result.Set("origin", origin.Serialize());
+  result.Set("host", committed_url.host());
+  result.Set("entryId", entry_id);
+  result.Set("documentId", document_id);
+  result.Set("ownerWindowId", owner_id);
+  result.Set("securityState", std::string(security));
+  result.Set("certificateStatus", static_cast<double>(ssl.cert_status));
+  result.Set("contentStatus", ssl.content_status);
+  if (ssl.certificate)
+    result.Set("certificate", ssl.certificate);
+  if (ssl.initialized && ssl.connection_status != 0) {
+    const char* protocol = nullptr;
+    net::SSLVersionToString(
+        &protocol, net::SSLConnectionStatusToVersion(ssl.connection_status));
+    result.Set("protocol", std::string(protocol ? protocol : "Unknown"));
+    const char* exchange = nullptr;
+    const char* cipher = nullptr;
+    const char* mac = nullptr;
+    bool aead = false;
+    bool tls13 = false;
+    net::SSLCipherSuiteToStrings(
+        &exchange, &cipher, &mac, &aead, &tls13,
+        net::SSLConnectionStatusToCipherSuite(ssl.connection_status));
+    result.Set("cipher", std::string(cipher ? cipher : "Unknown"));
+  }
+
+  base::ListValue permissions;
+  auto* manager = static_cast<ElectronPermissionManager*>(
+      contents->GetBrowserContext()->GetPermissionControllerDelegate());
+  if (include_permissions.value_or(true) && !origin.opaque() && manager &&
+      manager->HasPermissionCheckHandler()) {
+    static constexpr struct {
+      const char* id;
+      blink::PermissionType type;
+    } kPermissions[] = {
+        {"geolocation", blink::PermissionType::GEOLOCATION},
+        {"microphone", blink::PermissionType::AUDIO_CAPTURE},
+        {"camera", blink::PermissionType::VIDEO_CAPTURE},
+        {"notifications", blink::PermissionType::NOTIFICATIONS},
+        {"clipboard-read", blink::PermissionType::CLIPBOARD_READ_WRITE},
+        {"midi-sysex", blink::PermissionType::MIDI_SYSEX},
+    };
+    const auto weak_this = GetWeakPtr();
+    for (const auto& permission : kPermissions) {
+      if (!manager->HasPermissionCheckHandler()) {
+        permissions.clear();
+        break;
+      }
+      const bool allowed = manager->CheckPermissionWithDetails(
+          permission.type, frame, origin.GetURL(), base::DictValue());
+      // A host check handler is JavaScript and can navigate, transfer or
+      // destroy this page. Never return a snapshot assembled from different
+      // documents.
+      if (!weak_this || !GetWebContents() ||
+          GetWebContents()->IsBeingDestroyed() ||
+          !GetWebContents()->GetController().GetLastCommittedEntry() ||
+          GetWebContents()
+                  ->GetController()
+                  .GetLastCommittedEntry()
+                  ->GetUniqueID() != entry_id ||
+          content::RenderFrameHostImpl::From(
+              GetWebContents()->GetPrimaryMainFrame())
+                  ->GetDocumentToken()
+                  .ToString() != document_id ||
+          (owner_window() ? owner_window()->base_window_id() : 0) != owner_id) {
+        thrower.ThrowError("Page changed while reading page information");
+        return v8::Null(isolate);
+      }
+      permissions.Append(base::DictValue()
+                             .Set("id", permission.id)
+                             .Set("allowed", allowed)
+                             .Set("source", "host-check"));
+    }
+  }
+  result.Set("permissions", std::move(permissions));
+  return result.GetHandle();
 }
 
 v8::Local<v8::Promise> WebContents::LoadURL(gin::Arguments* args,
@@ -5303,8 +5448,9 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
               self->input_sequence_->MouseRouted(widget_host);
             promise->Resolve();
           },
-          GetWeakPtr(), AgentInputFrame(web_contents(), params) != nullptr ||
-                            params.Has("_sequenceId"),
+          GetWeakPtr(),
+          AgentInputFrame(web_contents(), params) != nullptr ||
+              params.Has("_sequenceId"),
           params.ValueOrDefault<int>("_sequenceId", 0), shared_event,
           shared_promise));
 
@@ -7781,6 +7927,8 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
           "_setConsoleMessageObserved")
       .SetMethod<&WebContents::LoadURL>("loadURL")
       .SetMethod<&WebContents::LoadURLWithResponse>("_loadURLWithResponse")
+      .SetMethod<&WebContents::GetPageInfo>("_getPageInfo")
+      .SetMethod<&WebContents::GetOwnerWindowID>("_getOwnerWindowId")
       .SetMethod<&WebContents::Reload>("reload")
       .SetMethod<&WebContents::ReloadIgnoringCache>("reloadIgnoringCache")
       .SetMethod<&WebContents::DownloadURL>("downloadURL")

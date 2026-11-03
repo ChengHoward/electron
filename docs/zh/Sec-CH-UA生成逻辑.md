@@ -8,7 +8,7 @@
 | 规范 | [UA Client Hints — create arbitrary brands](https://wicg.github.io/ua-client-hints/#create-arbitrary-brands-section) |
 | 源码 | `src/components/embedder_support/user_agent_utils.cc` |
 
-本文说明 Chromium / Electron **默认**如何生成请求头 `Sec-CH-UA`（及同源的 `navigator.userAgentData.brands`）。  
+本文说明 Chromium / Electron **默认**如何生成请求头 `Sec-CH-UA`（及同源的 `navigator.userAgentData.brands`）。
 与本 fork 的 `setUserAgent(..., { userAgentMetadata })` 覆盖关系见文末，以及 [定制Electron功能说明.md](./定制Electron功能说明.md)。
 
 ---
@@ -38,7 +38,7 @@ ElectronBrowserClient::GetUserAgentMetadata()
                                     → Sec-CH-UA-Full-Version-List（高熵，通常需 Accept-CH）
 ```
 
-低熵头（常默认附带）：`Sec-CH-UA`、`Sec-CH-UA-Mobile`、`Sec-CH-UA-Platform`。  
+低熵头（常默认附带）：`Sec-CH-UA`、`Sec-CH-UA-Mobile`、`Sec-CH-UA-Platform`。
 `Sec-CH-UA` 的值来自 `blink::UserAgentMetadata::SerializeBrandMajorVersionList()`（Structured Headers）。
 
 **seed 来源**：`version_info::GetMajorVersionNumber()`，对应 `chrome/VERSION` 的 `MAJOR`（本仓库当前为 `150`）。

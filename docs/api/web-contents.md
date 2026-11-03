@@ -112,6 +112,20 @@ _This class is not exported from the `'electron'` module. It is only available a
 
 ### Instance Events
 
+#### Event: 'page-info-open-site-settings'
+
+Returns:
+
+* `event` Event
+* `details` Object
+  * `url` string - The committed document URL.
+  * `origin` string - The committed document origin.
+
+Emitted when the native page information panel's Website settings button is
+activated. The source document and owner are revalidated before dispatch, and
+the panel is closed. The host opens its own website settings and applies any
+permission changes through its existing permission handlers.
+
 #### Event: 'did-finish-load'
 
 Emitted when the navigation is done, i.e. the spinner of the tab has stopped
@@ -495,7 +509,7 @@ Returns:
 **(Unofficial / cloudbypass)** Emitted when a page calls `alert` / `confirm` / `prompt`,
 after any [`setJsDialogHandler`](#contentssetjsdialoghandlerhandler) returned `null`/`undefined`.
 
-```js
+```js @ts-type={win:{webContents:{on:(name:'js-dialog',listener:(event:{preventDefault:()=>void,respond:(response:Electron.JsDialogResponse)=>void},details:Electron.JsDialogDetails)=>void)=>void}}}
 win.webContents.on('js-dialog', (event, details) => {
   event.preventDefault()
   setTimeout(() => {
@@ -1147,7 +1161,7 @@ unaffected) and does **not** register `protocol.handle`.
 This API intentionally does **not** accept `loadURL` options (`extraHeaders`,
 `postData`, `httpReferrer`, etc.).
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.loadURLWithResponse('https://example.com/app', {
   statusCode: 200,
   headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -1194,6 +1208,29 @@ win.loadFile('src/index.html')
 
 Initiates a download of the resource at `url` without navigating. The
 `will-download` event of `session` will be triggered.
+
+#### `contents.showPageInfoDialog(options)`
+
+* `options` [PageInfoDialogOptions](structures/page-info-dialog-options.md)
+
+Returns `boolean` - `true` when a native page information panel was created and
+requested to show, or `false` on unsupported platforms. The initial target is
+Windows x64. Invalid arguments, destroyed contents, an uncommitted page, or a
+missing owner window throw an error.
+
+Displays the committed origin, actual connection security, certificate summary,
+and application permission checks. False permission checks mean the permission
+is not preauthorized; they are not permanent user denials. Permission changes
+are delegated to the host application's website settings.
+
+The panel overlaps WebContentsView, can extend outside its owner, and does not
+create a renderer, hide or capture the page, or change its input protection.
+Navigation, destruction, or transfer to another window closes the old panel.
+Only one page information panel is kept per WebContents.
+
+The Website settings button emits `page-info-open-site-settings` with an `event`
+and `details` object containing the committed `url` and `origin`. The document
+and host are revalidated before this event is emitted.
 
 #### `contents.getURL()`
 
@@ -1583,7 +1620,7 @@ main process without injecting into the page or attaching a debugger.
   then the stock native message box.
 * Pass `null` as `handler` to clear.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 win.webContents.setJsDialogHandler((details) => {
   if (details.type === 'prompt') {
     return { accept: true, promptText: details.defaultPrompt || 'ok' }
@@ -2292,7 +2329,7 @@ Dispatches a mouse event through Chromium's input pipeline, matching CDP
 Unlike DOM `element.click()`, events are trusted (`isTrusted === true`) and
 go through hit-testing / widget routing like a real user click.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 // Equivalent to debugger.sendCommand('Input.dispatchMouseEvent', ...)
 await win.webContents.dispatchMouseEvent({
   type: 'mousePressed',
@@ -2323,7 +2360,7 @@ Selectors that do not name a frame still search the current document first, then
 descendant frames. Coordinates are CSS pixels in the main-frame viewport (the
 same space as `dispatchMouseEvent`). `querySelectorDeep` does not enter frames.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 const box = await win.webContents.querySelectorAcrossDocuments(
   'iframe[src*="challenges.cloudflare.com"] input[type="checkbox"]'
 )
@@ -2331,10 +2368,18 @@ if (box) {
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
   await win.webContents.dispatchMouseEvent({
-    type: 'mousePressed', x, y, button: 'left', clickCount: 1
+    type: 'mousePressed',
+    x,
+    y,
+    button: 'left',
+    clickCount: 1
   })
   await win.webContents.dispatchMouseEvent({
-    type: 'mouseReleased', x, y, button: 'left', clickCount: 1
+    type: 'mouseReleased',
+    x,
+    y,
+    button: 'left',
+    clickCount: 1
   })
 }
 ```
@@ -2350,7 +2395,7 @@ when found, otherwise `null`.
 Runs in Blink C++ (no page JS, no `debugger.attach()`), so closed shadow roots are visible
 to this API while remaining closed to the page.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 const el = await win.webContents.querySelectorDeep('my-button >>> #submit')
 if (el) {
   await win.webContents.dispatchMouseEvent({
@@ -2386,7 +2431,7 @@ Target calls serialize the complete click sequence with other target inputs;
 `pierce` only applies to selector lookup. Invalid button, count, modifier or
 boolean options reject before sending any input.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.clickSelector('#login', { pierce: true })
 await win.webContents.clickSelector('x-card >>> button.primary')
 ```
@@ -2412,7 +2457,7 @@ await win.webContents.clickSelector('x-card >>> button.primary')
 Returns `Promise<void>` - Resolves when the event has been forwarded to the
 focused render widget.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchKeyEvent({
   type: 'keyDown',
   key: 'a',
@@ -2459,7 +2504,7 @@ await win.webContents.dispatchKeyEvent({
 Returns `Promise<void>` - Resolves when the event has been injected (including
 OOPIF routing). Must begin a sequence with `touchStart`.
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchTouchEvent({
   type: 'touchStart',
   touchPoints: [{ x: 100, y: 200 }]

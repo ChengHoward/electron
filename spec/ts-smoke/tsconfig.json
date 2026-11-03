@@ -13,6 +13,7 @@
   "files": [
     "electron/main.ts",
     "electron/input-sequence.ts",
+    "electron/native-panel.ts",
     "electron/renderer.ts",
     "electron/utility.ts",
     "../../electron.d.ts"

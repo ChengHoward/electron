@@ -99,7 +99,7 @@
 
 **示例**
 
-```js
+```js @ts-type={windowsUA:string}
 const { session } = require('electron')
 
 // 旧用法（兼容）
@@ -141,7 +141,7 @@ session.defaultSession.setUserAgent('MyAgent/1.0', { userAgentMetadata: null })
 // 隐藏网页 window.chrome（可与 platform / metadata 同传）
 session.defaultSession.setUserAgent(windowsUA, {
   platform: 'Win32',
-  hideChrome: true,
+  hideChrome: true
 })
 ```
 
@@ -177,7 +177,7 @@ session.defaultSession.setUserAgent(windowsUA, {
 
 **示例**
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchMouseEvent({
   type: 'mousePressed',
   x: 100,
@@ -212,17 +212,28 @@ await win.webContents.dispatchMouseEvent({
 
 主要字段：`type`（`keyDown` / `keyUp` / `rawKeyDown` / `char`）、`modifiers`、`text` / `unmodifiedText`、`code` / `key`、`windowsVirtualKeyCode`、`commands` 等（同 CDP，均为选配除 `type`）。
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchKeyEvent({
-  type: 'keyDown', key: 'a', code: 'KeyA',
-  windowsVirtualKeyCode: 65, text: 'a', unmodifiedText: 'a'
+  type: 'keyDown',
+  key: 'a',
+  code: 'KeyA',
+  windowsVirtualKeyCode: 65,
+  text: 'a',
+  unmodifiedText: 'a'
 })
 await win.webContents.dispatchKeyEvent({
-  type: 'char', key: 'a', code: 'KeyA',
-  windowsVirtualKeyCode: 65, text: 'a', unmodifiedText: 'a'
+  type: 'char',
+  key: 'a',
+  code: 'KeyA',
+  windowsVirtualKeyCode: 65,
+  text: 'a',
+  unmodifiedText: 'a'
 })
 await win.webContents.dispatchKeyEvent({
-  type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65
+  type: 'keyUp',
+  key: 'a',
+  code: 'KeyA',
+  windowsVirtualKeyCode: 65
 })
 ```
 
@@ -234,12 +245,14 @@ await win.webContents.dispatchKeyEvent({
 - **对齐**：CDP `Input.dispatchTouchEvent`（WebTouch + TouchEmulator 注入路径）
 - 序列须以 `touchStart` 开始；`touchStart`/`touchMove` 的 `touchPoints` 非空；`touchCancel` 须为空数组
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchTouchEvent({
-  type: 'touchStart', touchPoints: [{ x: 100, y: 200 }]
+  type: 'touchStart',
+  touchPoints: [{ x: 100, y: 200 }]
 })
 await win.webContents.dispatchTouchEvent({
-  type: 'touchEnd', touchPoints: [{ x: 100, y: 200 }]
+  type: 'touchEnd',
+  touchPoints: [{ x: 100, y: 200 }]
 })
 ```
 
@@ -259,7 +272,7 @@ await win.webContents.dispatchTouchEvent({
 
 **示例**
 
-```js
+```js @ts-type={myUA:string}
 session.defaultSession.setUserAgent(myUA, { hideChrome: true })
 // 之后恢复显示：
 session.defaultSession.setUserAgent(myUA, { hideChrome: false })
@@ -295,7 +308,7 @@ session.defaultSession.setUserAgent(myUA, { hideChrome: false })
 
 **示例**
 
-```js
+```js @ts-type={myUA:string}
 const { session } = require('electron')
 
 const navLike = {
@@ -341,7 +354,7 @@ const res = await session.defaultSession.fetch('https://example.com/', {
 
 **`DomElementInfo`（主要字段）**：`backendNodeId`、`tagName`、`bounds`、以及相对主框视口的 `x` / `y` / `width` / `height`（与 `dispatchMouseEvent` 同一坐标系）。
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 const el = await win.webContents.querySelectorDeep('my-button >>> #submit')
 if (el) {
   await win.webContents.dispatchMouseEvent({
@@ -380,7 +393,7 @@ if (el) {
 | `clickCount` | `number` | `1` | 点击次数 |
 | `modifiers` | `number` | `0` | Alt=1, Ctrl=2, Meta=4, Shift=8 |
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.clickSelector('#login', { pierce: true })
 await win.webContents.clickSelector('x-card >>> button.primary')
 ```
@@ -399,7 +412,7 @@ await win.webContents.clickSelector('x-card >>> button.primary')
 | `headers` | `Record<string, string>` | — | 响应头（建议含 `content-type`） |
 | `body` | `string` \| `Buffer` | `''` | 主文档正文 |
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.loadURLWithResponse('https://example.com/app', {
   statusCode: 200,
   headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -522,8 +535,8 @@ e sync
 e build electron:electron_dist_zip
 ```
 
-- Windows x64：当前 `e` 配置下 `out/Release` 即为 x64 产物  
-- Linux：需在 Linux 主机或 WSL2（源码置于 Linux 文件系统）上编译；不可从 Windows 交叉编译  
+- Windows x64：当前 `e` 配置下 `out/Release` 即为 x64 产物
+- Linux：需在 Linux 主机或 WSL2（源码置于 Linux 文件系统）上编译；不可从 Windows 交叉编译
 
 Linux 容器化编译可参考仓库内 `xbuild/`。
 
@@ -536,7 +549,7 @@ Linux 容器化编译可参考仓库内 `xbuild/`。
 | 公网域名 | `https://electron.cloudbypass.com` |
 | npm registry | `https://electron.cloudbypass.com/npm/` |
 | 包名 | `electron` |
-| 当前示例版本 | `41.0.0-cloudbypass.2`（以镜像实际发布为准） |
+| 历史安装示例版本 | `41.0.0-cloudbypass.2`（保留原示例；当前 Windows x64 为 `45.0.0-cloudbypass.5`，编译与验收通过，本地镜像已提供；Linux x64 仍为已有 `45.0.0-cloudbypass.2`） |
 | 本机服务目录 | 仓库旁 `mirror/`（默认端口 `8787`） |
 
 安装时有两段下载，都须指向本镜像：
@@ -698,3 +711,13 @@ cd <repo>/mirror
 ## 2026-11-03：原生虚拟光标与批量输入（.4）
 
 新增 `setVirtualCursorEnabled`、`setVirtualCursorImage`、`setVirtualCursorFrameRate`、`dispatchInputSequence`。Windows 原生 UI 光标与页面截图隔离；支持独立阻断真实指针/键盘、限帧、鼠标键盘统一 atMs 时间线、有界焦点确认、取消及失败清理。完整参数、实测和未覆盖硬件边界见 [Agent 自动化](./Agent自动化.md)。本版本同时包含 clickSelector 修复；不新增页面自动化标识，不承诺行为无法识别。
+
+## 2026-11-04：原生网站信息与 NativePanel（Windows .5）
+
+状态：**编译与验收通过**。Windows x64 发行版本为 [`45.0.0-cloudbypass.5`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.5)；原生浮层 42 项与既有功能 46 项回归合计 **88/88** 通过。Linux x64 仍为已有 `.2`。完整接口、schema、事件、源码入口与验收边界见 [原生浮层](./原生浮层.md)。
+
+本轮新增 `webContents.showPageInfoDialog`、`new NativePanel`、`NativePanel.isSupported`、`panel.show`、`panel.update`、`panel.hide`、`panel.destroy` 七个公开入口，使用浏览器主进程中的原生控件覆盖 `WebContentsView` 并可伸出父窗，不创建额外网页或渲染进程。首版目标为 Windows x64，必须运行时探测；历史二进制不能由本文推断支持。
+
+网站信息读取已提交导航项的真实 SSL/TLS 和证书。已接入的 `permissionCheckHandler` 只反映当前预授权检查，`false` 不能视为永久拒绝；修改许可通过 `page-info-open-site-settings(event, { url, origin })` 交宿主既有站点设置逻辑处理，不引入 Chrome Profile。
+
+实现入口为 `lib/browser/api/native-panel.ts`、`shell/browser/api/electron_api_native_panel.{h,cc}`、`shell/browser/ui/views/native_panel.{h,cc}`、`lib/browser/api/web-contents.ts` 和 `shell/browser/api/electron_api_web_contents.{h,cc}`。面板开关不改变虚拟光标、`dispatchInputSequence` 或真实输入保护；输入命中探测/设置及持续绘制租约三个可选接口未增加。编译和原生窗口验收仍在进行，不能用静态检查替代物理输入、中文 IME、混合 DPI 与资源释放验证。

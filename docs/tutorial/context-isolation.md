@@ -98,7 +98,7 @@ declare global {
 
 Doing so will ensure that the TypeScript compiler will know about the `electronAPI` property on your global `window` object when writing scripts in your renderer process:
 
-```ts title='renderer.ts'
+```ts title='renderer.ts' @ts-window-type={electronAPI:{loadPreferences:()=>Promise<void>}}
 window.electronAPI.loadPreferences()
 ```
 

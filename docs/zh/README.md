@@ -14,3 +14,4 @@
 英文上游风格 API 文档仍见 `docs/api/`。
 
 - [无需 CDP 的 Agent 自动化](./Agent自动化.md)：页面快照、语义查找、后台可信输入、原生虚拟光标及批量鼠标键盘时间线。
+- [原生浮层与网站信息](./原生浮层.md)：`showPageInfoDialog`、NativePanel 七入口、控件 schema、事件与验收边界。Windows x64 发行版本 [`45.0.0-cloudbypass.5`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.5) 已通过编译与验收并在本地镜像提供；Linux 仍为已有 `.2`。

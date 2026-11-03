@@ -391,18 +391,29 @@ app
       assert.equal(wc._getVirtualCursorState().pending, false);
     });
     await check('browser UI cursor is visible while capturePage remains clean', async () => {
-      wc.setVirtualCursorFrameRate(30);
-      await completed([mouse('mouseMoved', 0, { x: 400, y: 50 })]);
-      await delay(250);
-      const pixel = await native('pixel', 408, 58);
-      assert.deepEqual(pixel.rgb, [255, 0, 0], JSON.stringify({ pixel, state: wc._getVirtualCursorState() }));
-      const capture = await wc.capturePage({ x: 400, y: 50, width: 16, height: 16 });
-      const bitmap = capture.toBitmap();
-      const offset = (8 * capture.getSize().width + 8) * 4;
-      assert.deepEqual([...bitmap.subarray(offset, offset + 3)], [56, 34, 12]);
-      await wc.setVirtualCursorEnabled(false);
-      await delay(150);
-      assert.deepEqual((await native('pixel', 408, 58)).rgb, [12, 34, 56]);
+      const wasAlwaysOnTop = win.isAlwaysOnTop();
+      try {
+        // showInactive() preserves focus but does not guarantee unobscured
+        // desktop pixels. Elevate only this fixture for the composition check.
+        win.setAlwaysOnTop(true);
+        win.showInactive();
+        win.moveTop();
+        wc.setVirtualCursorFrameRate(30);
+        await completed([mouse('mouseMoved', 0, { x: 400, y: 50 })]);
+        await delay(250);
+        const pixel = await native('pixel', 408, 58);
+        measurements.push({ group: 'visible-cursor-native-hit', pixel });
+        assert.deepEqual(pixel.rgb, [255, 0, 0], JSON.stringify({ pixel, state: wc._getVirtualCursorState() }));
+        const capture = await wc.capturePage({ x: 400, y: 50, width: 16, height: 16 });
+        const bitmap = capture.toBitmap();
+        const offset = (8 * capture.getSize().width + 8) * 4;
+        assert.deepEqual([...bitmap.subarray(offset, offset + 3)], [56, 34, 12]);
+        await wc.setVirtualCursorEnabled(false);
+        await delay(150);
+        assert.deepEqual((await native('pixel', 408, 58)).rgb, [12, 34, 56]);
+      } finally {
+        if (!win.isDestroyed()) win.setAlwaysOnTop(wasAlwaysOnTop);
+      }
     });
     await check('five second input baseline and cursor CPU comparison', async () => {
       for (const enabled of [false, true]) {

@@ -2,6 +2,8 @@
 
 本说明对应 Windows x64 定制分发版本 `45.0.0-cloudbypass.4`，包含原生 Agent、clickSelector 修复、批量输入和虚拟光标。二进制内部上游版本仍为 `45.0.0-beta.5`；此前发布版本不据此认定支持，Linux 本次未编译验证。
 
+2026-11-04 继承回归记录：Windows x64 [`45.0.0-cloudbypass.5`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.5) 继承本文 `.4` 能力，Agent **11/11**、输入 **26/26**、clickSelector **9/9**，共 **46/46** 通过。输入像素测试补充 HWND/PID 前置验证，未因此改动业务内核。下文 `.4` 的历史日期、测量值和验收环境保持原记录；本次结果不扩展到 Linux。
+
 ## API 范围
 
 新增 `webContents.getAgentSnapshot(options)` 和 `findAgentElements(query, options)`；增强 `dispatchMouseEvent`、`dispatchKeyEvent`、`dispatchTouchEvent`、`clickSelector`、`querySelectorAcrossDocuments`，共涉及七个公开方法。此外新增 `setVirtualCursorEnabled`、`setVirtualCursorImage`、`setVirtualCursorFrameRate`、`dispatchInputSequence` 四个公开方法，参数、资源边界及验收记录见本文后半部分。内部通信方法不属于公开 API。
@@ -10,13 +12,13 @@
 
 ## 页面快照
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 const snapshot = await win.webContents.getAgentSnapshot({
   maxNodes: 1000,
   maxFrames: 100,
   timeoutMs: 5000,
   pierce: true
-});
+})
 ```
 
 返回 `elements`、`frames`、`complete`、`truncated` 和 `truncationReasons`。元素是扁平列表，携带框架与文档身份及 parentBackendNodeId（含 Shadow host 边界）；不能按列表位置推断 DOM 父子关系。
@@ -31,22 +33,19 @@ const snapshot = await win.webContents.getAgentSnapshot({
 
 ## 查找与覆盖状态
 
-```js
+```js @ts-type={win:Electron.BrowserWindow}
 const found = await win.webContents.findAgentElements({
   name: 'Customer name',
   disabled: false
-});
+})
 ```
 
 支持 role、name、text、label、disabled、checked、selected 和 selector；字符串 name/text/label 为区分大小写的包含匹配。selector 是每个文档/Shadow tree 范围内的 CSS 选择器。返回完整快照相同的覆盖字段，elements 仅保留匹配项；没有匹配项且 `complete: false` 时，不能推断整个页面不存在目标。
 
 现有跨文档选择器路径仍可复用：
 
-```js
-const result = await win.webContents.querySelectorAcrossDocuments(
-  'iframe >>> input',
-  { agentInfo: true }
-);
+```js @ts-type={win:Electron.BrowserWindow}
+const result = await win.webContents.querySelectorAcrossDocuments('iframe >>> input', { agentInfo: true })
 ```
 
 该模式保留旧接口的首个匹配语义，再从快照获取对应元素的语义信息。未指定 agentInfo 时保留原有返回值。
@@ -57,18 +56,18 @@ const result = await win.webContents.querySelectorAcrossDocuments(
 
 ## 后台可信输入
 
-```js
-const field = found.elements[0];
-if (!field) throw new Error('没有找到输入框，请检查覆盖状态');
+```js @ts-type={found:Electron.AgentSnapshot} @ts-type={win:Electron.BrowserWindow}
+const field = found.elements[0]
+if (!field) throw new Error('没有找到输入框，请检查覆盖状态')
 
 const dispatched = await win.webContents.dispatchKeyEvent({
   target: field.target,
   type: 'char',
   text: 'A'
-});
+})
 
 // 必须重新读取，确认值是否实际改变。
-const after = await win.webContents.findAgentElements({ name: 'Customer name' });
+const after = await win.webContents.findAgentElements({ name: 'Customer name' })
 ```
 
 当前 `dispatchKeyEvent` 单事件的 `text` 和 `unmodifiedText` 分别最多为 3 个 UTF-16 单元：原生缓冲区容量为 4，需保留结尾空字符。长文本须由调用方按字符边界拆成多次事件，不能拆开代理对；该接口不等同整段文本插入或真实输入法组合输入。
@@ -77,9 +76,9 @@ const after = await win.webContents.findAgentElements({ name: 'Customer name' })
 
 鼠标的 x/y、触摸点的 x/y 在 target 模式下表示相对目标元素的 CSS 像素偏移；鼠标省略坐标时使用元素中心。多点触摸应属于同一目标框架，touchStart/touchMove 必须提供触摸点；touchEnd/touchCancel 可使用空数组。触摸序列必须持续使用同一 target。
 
-```js
-const buttons = await win.webContents.findAgentElements({ name: 'Submit form' });
-await win.webContents.clickSelector('', { target: buttons.elements[0].target });
+```js @ts-type={win:Electron.BrowserWindow}
+const buttons = await win.webContents.findAgentElements({ name: 'Submit form' })
+await win.webContents.clickSelector('', { target: buttons.elements[0].target })
 ```
 
 输入期间暂时关闭后台节流，并获取保持隐藏的渲染保活作用域。它不生成截图文件、不显示或激活窗口；输入队列屏障不等待屏幕实际呈现，完成后释放作用域并恢复设置。鼠标按下/释放、键盘按下/释放、触摸开始/结束之间保持序列状态；不完整序列有恢复节流的超时保护。隐藏和未聚焦能力以带 target 的调用为准，旧坐标接口保持兼容。
@@ -326,20 +325,23 @@ await wc.dispatchInputSequence([
 
 本节为本次实现的参数定稿；实际运行验收及分发版本另见下方记录。公开新增方法为 `setVirtualCursorEnabled`、`setVirtualCursorImage`、`setVirtualCursorFrameRate` 和 `dispatchInputSequence`，目前虚拟光标仅支持 Windows 的普通 WebContents 视图；其他平台明确返回 VIRTUAL_CURSOR_PLATFORM_UNSUPPORTED。离屏视图和 guest 不支持开启光标。
 
-```js
+```js @ts-type={wc:Electron.WebContents} @ts-type={image:Electron.NativeImage} @ts-type={input:Electron.AgentElement} @ts-type={signal:AbortSignal}
 await wc.setVirtualCursorEnabled(true, {
   blockRealPointer: true,
   blockRealKeyboard: true
-});
-wc.setVirtualCursorImage(image, { hotspot: { x: 2, y: 2 } });
-wc.setVirtualCursorFrameRate(30); // 0 为自动；不影响输入频率
-const result = await wc.dispatchInputSequence([
-  { kind: 'mouse', atMs: 0, type: 'mouseMoved', x: 20, y: 30 },
-  { kind: 'mouse', atMs: 5, type: 'mousePressed', x: 20, y: 30, button: 'left', clickCount: 1 },
-  { kind: 'mouse', atMs: 10, type: 'mouseReleased', x: 20, y: 30, button: 'left', clickCount: 1 },
-  { kind: 'key', atMs: 10, type: 'char', target: input.target, text: 'A' }
-], { signal, focusTimeoutMs: 1000, maxLatenessMs: 250 });
-await wc.setVirtualCursorEnabled(false);
+})
+wc.setVirtualCursorImage(image, { hotspot: { x: 2, y: 2 } })
+wc.setVirtualCursorFrameRate(30) // 0 为自动；不影响输入频率
+const result = await wc.dispatchInputSequence(
+  [
+    { kind: 'mouse', atMs: 0, type: 'mouseMoved', x: 20, y: 30 },
+    { kind: 'mouse', atMs: 5, type: 'mousePressed', x: 20, y: 30, button: 'left', clickCount: 1 },
+    { kind: 'mouse', atMs: 10, type: 'mouseReleased', x: 20, y: 30, button: 'left', clickCount: 1 },
+    { kind: 'key', atMs: 10, type: 'char', target: input.target, text: 'A' }
+  ],
+  { signal, focusTimeoutMs: 1000, maxLatenessMs: 250 }
+)
+await wc.setVirtualCursorEnabled(false)
 ```
 
 - 光标帧率为整数 0–1000，实际不超过合成器刷新率；图片仅接受非空 NativeImage 或 null，null 恢复默认箭头。图片尺寸为 1–512 DIP，热点为图片内的有限 DIP 坐标。调用时复制 1x 表示到不可变内存，不保存文件，也不保留可变图片引用。

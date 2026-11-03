@@ -74,6 +74,8 @@ filenames = {
   lib_sources_posix = [ "shell/browser/electron_browser_main_parts_posix.cc" ]
 
   lib_sources_win = [
+    "shell/browser/ui/views/native_panel.cc",
+    "shell/browser/ui/views/native_panel.h",
     "shell/browser/ui/virtual_cursor.cc",
     "shell/browser/ui/virtual_cursor.h",
     "shell/browser/api/electron_api_clipboard_win.cc",
@@ -335,6 +337,8 @@ filenames = {
     "shell/browser/api/electron_api_menu_template.cc",
     "shell/browser/api/electron_api_msix_updater.cc",
     "shell/browser/api/electron_api_msix_updater.h",
+    "shell/browser/api/electron_api_native_panel.cc",
+    "shell/browser/api/electron_api_native_panel.h",
     "shell/browser/api/electron_api_native_theme.cc",
     "shell/browser/api/electron_api_native_theme.h",
     "shell/browser/api/electron_api_net_log.cc",

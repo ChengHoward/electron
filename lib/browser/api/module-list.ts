@@ -23,6 +23,7 @@ export const browserModuleList: ElectronInternal.ModuleEntry[] = [
     name: 'MessageChannelMain',
     loader: () => process._linkedBinding('electron_browser_message_port').MessageChannelMain
   },
+  { name: 'NativePanel', loader: () => require('./native-panel') },
   { name: 'nativeTheme', loader: () => require('./native-theme') },
   { name: 'net', loader: () => require('./net') },
   { name: 'netLog', loader: () => require('./net-log') },

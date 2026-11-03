@@ -1528,36 +1528,39 @@ Overrides the user agent for this session. Also applies to existing
 
 Examples:
 
-```js
+```js @ts-type={ses:Electron.Session}
 // Legacy: UA + Accept-Language
 ses.setUserAgent('MyAgent/1.0', 'en-US,fr,de')
 
 // CDP-style: navigator.platform + Client Hints (Sec-CH-UA-*)
-ses.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', {
-  platform: 'Win32',
-  acceptLanguage: 'en-US',
-  userAgentMetadata: {
-    brands: [
-      { brand: 'Chromium', version: '120' },
-      { brand: 'Google Chrome', version: '120' },
-      { brand: 'Not=A?Brand', version: '99' }
-    ],
-    fullVersionList: [
-      { brand: 'Chromium', version: '120.0.6099.109' },
-      { brand: 'Google Chrome', version: '120.0.6099.109' },
-      { brand: 'Not=A?Brand', version: '10.0.1.4' }
-    ],
-    fullVersion: '120.0.6099.109',
-    platform: 'Windows',
-    platformVersion: '15.0.0',
-    architecture: 'x86',
-    model: '',
-    mobile: false,
-    bitness: '64',
-    wow64: false,
-    formFactors: ['Desktop']
+ses.setUserAgent(
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  {
+    platform: 'Win32',
+    acceptLanguage: 'en-US',
+    userAgentMetadata: {
+      brands: [
+        { brand: 'Chromium', version: '120' },
+        { brand: 'Google Chrome', version: '120' },
+        { brand: 'Not=A?Brand', version: '99' }
+      ],
+      fullVersionList: [
+        { brand: 'Chromium', version: '120.0.6099.109' },
+        { brand: 'Google Chrome', version: '120.0.6099.109' },
+        { brand: 'Not=A?Brand', version: '10.0.1.4' }
+      ],
+      fullVersion: '120.0.6099.109',
+      platform: 'Windows',
+      platformVersion: '15.0.0',
+      architecture: 'x86',
+      model: '',
+      mobile: false,
+      bitness: '64',
+      wow64: false,
+      formFactors: ['Desktop']
+    }
   }
-})
+)
 
 // Disable Sec-CH-UA-* while keeping the custom User-Agent string
 ses.setUserAgent('MyAgent/1.0', { userAgentMetadata: null })

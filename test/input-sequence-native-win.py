@@ -12,6 +12,11 @@ user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, win
 user.GetDC.argtypes = [wintypes.HWND]
 user.GetDC.restype = wintypes.HDC
 user.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user.WindowFromPoint.argtypes = [wintypes.POINT]
+user.WindowFromPoint.restype = wintypes.HWND
+user.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+user.GetAncestor.restype = wintypes.HWND
 gdi.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
 gdi.GetPixel.restype = wintypes.DWORD
 hwnd = int(sys.argv[2])
@@ -27,11 +32,20 @@ if action in ('mouse', 'pixel'):
     else:
         point = wintypes.POINT(x, y)
         user.ClientToScreen(wintypes.HWND(hwnd), ctypes.byref(point))
+        hit = user.WindowFromPoint(point)
+        expected_pid, hit_pid = wintypes.DWORD(), wintypes.DWORD()
+        user.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(expected_pid))
+        user.GetWindowThreadProcessId(hit, ctypes.byref(hit_pid))
+        root = int(user.GetAncestor(hit, 2) or 0)
+        if root != hwnd or hit_pid.value != expected_pid.value:
+            raise RuntimeError(f'Pixel sample is occluded: target HWND/PID={hwnd}/{expected_pid.value}, '
+                               f'hit root/PID={root}/{hit_pid.value}')
         dc = user.GetDC(None)
         try:
             color = gdi.GetPixel(dc, point.x, point.y)
             print(json.dumps({'rgb': [color & 255, (color >> 8) & 255, (color >> 16) & 255],
-                              'x': point.x, 'y': point.y, 'scale': scale}))
+                              'x': point.x, 'y': point.y, 'scale': scale,
+                              'root': root, 'pid': hit_pid.value}))
         finally:
             user.ReleaseDC(None, dc)
 elif action == 'key':

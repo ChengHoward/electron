@@ -65,7 +65,7 @@ included in the string returned by `resolveProxy`. They are applied with
 `proxyRules` in `fixed_servers` mode, which is the default when `proxyRules`
 is set. A PAC script does not receive these credentials.
 
-```js
+```js @ts-type={ses:Electron.Session}
 await ses.setProxy({
   mode: 'fixed_servers',
   proxyRules: 'socks5://proxy.example:1080',

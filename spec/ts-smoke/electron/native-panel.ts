@@ -1,0 +1,45 @@
+import { NativePanel as DefaultEntryNativePanel, nativeImage } from 'electron';
+import { BaseWindow, BrowserWindow, NativePanel, WebContentsView } from 'electron/main';
+
+const parent = new BaseWindow();
+const view = new WebContentsView();
+parent.contentView.addChildView(view);
+const content: Electron.NativePanelContent = {
+  type: 'column',
+  id: 'root',
+  width: 320,
+  children: [
+    { type: 'text', id: 'title', text: 'Status' },
+    { type: 'icon', id: 'icon', image: nativeImage.createEmpty() },
+    { type: 'button', id: 'button', text: 'Run' },
+    { type: 'toggle', id: 'toggle', text: 'Enabled', checked: true },
+    { type: 'input', id: 'query', value: '', placeholder: 'Search' },
+    { type: 'option', id: 'choice', value: 'a', items: [{ id: 'a', label: 'A' }] },
+    { type: 'list', id: 'list', children: [] },
+    { type: 'separator', id: 'separator' },
+    { type: 'progress', id: 'progress', value: 0.5 }
+  ]
+};
+const supported: boolean = NativePanel.isSupported();
+const ExportedConstructor: typeof NativePanel = DefaultEntryNativePanel;
+const panel = new ExportedConstructor({ parent, sourceWebContents: view.webContents, content, focusMode: 'input' });
+panel.show({ anchorBounds: { x: 1, y: 2, width: 24, height: 24 }, placement: 'bottom-start' });
+panel.update({ content, theme: { mode: 'dark', accent: '#123456', fontSize: 14 }, radius: 12, shadow: true });
+panel.on('action', (action) => {
+  const id: string = action.id;
+  const type: string = action.type;
+  console.log(id, type, action.value);
+});
+panel.on('dismissed', (details) => console.log(details.reason));
+panel.once('closed', () => console.log('closed'));
+panel.hide();
+panel.destroy();
+const requested: boolean = view.webContents.showPageInfoDialog({
+  anchorBounds: { x: 1, y: 2, width: 24, height: 24 },
+  siteUrl: 'https://example.com'
+});
+view.webContents.on('page-info-open-site-settings', (event, details) =>
+  console.log(event.defaultPrevented, details.origin, details.url)
+);
+const browserPanel = new NativePanel({ parent: new BrowserWindow(), content, theme: 'system' });
+console.log(supported, requested, browserPanel);

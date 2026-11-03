@@ -229,6 +229,10 @@ class WebContents final : public ExclusiveAccessContext,
   void ReloadIgnoringCache();
   void DownloadURL(const GURL& url, gin::Arguments* args);
   GURL GetURL() const;
+  int GetOwnerWindowID() const;
+  v8::Local<v8::Value> GetPageInfo(v8::Isolate* isolate,
+                                   gin_helper::ErrorThrower thrower,
+                                   std::optional<bool> include_permissions);
   std::u16string GetTitle() const;
   bool IsLoading() const;
   bool IsLoadingMainFrame() const;
@@ -789,6 +793,7 @@ class WebContents final : public ExclusiveAccessContext,
   void WebContentsDestroyed() override;
   void NavigationEntryCommitted(
       const content::LoadCommittedDetails& load_details) override;
+  void DidChangeVisibleSecurityState() override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidUpdateFaviconURL(content::RenderFrameHost* render_frame_host,
                            const std::vector<blink::mojom::FaviconURLPtr>& urls,

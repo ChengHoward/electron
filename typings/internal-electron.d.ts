@@ -94,6 +94,10 @@ declare namespace Electron {
   }
 
   interface WebContents {
+    _getPageInfo(includePermissions?: boolean): any;
+    _getOwnerWindowId(): number;
+    on(event: '-owner-window-changed', listener: (event: Event) => void): this;
+    removeListener(event: '-owner-window-changed', listener: (event: Event) => void): this;
     _getAgentFrameData(
       process: number,
       routing: number,

@@ -1,3 +1,4 @@
+import { NativePanel } from '@electron/internal/browser/api/native-panel';
 import {
   openGuestWindow,
   makeWebPreferences,
@@ -7,7 +8,7 @@ import { IpcMainImpl } from '@electron/internal/browser/ipc-main-impl';
 import { parseFeatures } from '@electron/internal/browser/parse-features-string';
 import * as deprecate from '@electron/internal/common/deprecate';
 
-import { app, webFrameMain, dialog } from 'electron/main';
+import { app, BaseWindow, webFrameMain, dialog } from 'electron/main';
 import type { BrowserWindowConstructorOptions, MessageBoxOptions, NavigationEntry } from 'electron/main';
 
 import * as path from 'path';
@@ -19,6 +20,239 @@ import '@electron/internal/browser/api/session';
 // JavaScript implementations of WebContents.
 const binding = process._linkedBinding('electron_browser_web_contents');
 const { WebContents } = binding as { WebContents: { prototype: Electron.WebContents } };
+
+type PageInfoSnapshot = {
+  url: string;
+  origin: string;
+  host: string;
+  entryId: number;
+  documentId: string;
+  ownerWindowId: number;
+  securityState: string;
+  protocol?: string;
+  cipher?: string;
+  certificate?: Electron.Certificate;
+  permissions: { id: string; allowed: boolean; source: 'host-check' }[];
+};
+
+const pageInfoPanels = new WeakMap<Electron.WebContents, { destroy: () => void }>();
+
+function pageInfoContent(info: PageInfoSnapshot): Electron.NativePanelContent {
+  const security: Record<string, [string, string]> = {
+    secure: ['Connection is secure', 'The committed document has a verified certificate and an encrypted connection.'],
+    insecure: ['Connection is not secure', 'This document was loaded over an unencrypted HTTP connection.'],
+    'certificate-error': [
+      'Certificate verification failed',
+      'The connection has certificate errors. Do not submit sensitive information.'
+    ],
+    'mixed-content': [
+      'Connection has insecure content',
+      'This document contains insecure resources, a form, or resources with certificate errors.'
+    ],
+    'obsolete-tls': [
+      'Connection uses obsolete security',
+      'The negotiated connection does not meet current TLS security requirements.'
+    ],
+    error: [
+      'Page did not load successfully',
+      'Connection information for this error document cannot establish a secure connection.'
+    ],
+    unknown: [
+      'Connection security is unavailable',
+      'No verified TLS connection information is available for this committed document.'
+    ]
+  };
+  const [title, description] = security[info.securityState] || security.unknown;
+  const children: Electron.NativePanelContent[] = [
+    {
+      type: 'text',
+      id: 'page-info-origin',
+      text: info.origin === 'null' ? info.url.slice(0, 512) : info.origin,
+      fontSize: 16
+    },
+    { type: 'text', id: 'page-info-security', text: title },
+    { type: 'text', id: 'page-info-description', text: description, muted: true },
+    { type: 'separator', id: 'page-info-security-separator' }
+  ];
+  if (info.protocol) {
+    children.push({
+      type: 'text',
+      id: 'page-info-transport',
+      text: `${info.protocol} · ${info.cipher || 'Unknown cipher'}`,
+      muted: true
+    });
+  }
+  if (info.certificate) {
+    const certificate = info.certificate;
+    const date = (seconds: number) =>
+      Number.isFinite(seconds) ? new Date(seconds * 1000).toLocaleDateString() : 'Unknown';
+    children.push(
+      {
+        type: 'text',
+        id: 'page-info-certificate-subject',
+        text: `Certificate: ${certificate.subjectName || 'Unknown subject'}`
+      },
+      {
+        type: 'text',
+        id: 'page-info-certificate-issuer',
+        text: `Issued by: ${certificate.issuerName || 'Unknown issuer'}`,
+        muted: true
+      },
+      {
+        type: 'text',
+        id: 'page-info-certificate-validity',
+        text: `Valid: ${date(certificate.validStart)} – ${date(certificate.validExpiry)}`,
+        muted: true
+      },
+      {
+        type: 'text',
+        id: 'page-info-certificate-fingerprint',
+        text: `SHA-256: ${certificate.fingerprint}`,
+        muted: true
+      }
+    );
+  }
+  const permissionLabels: Record<string, string> = {
+    geolocation: 'Location',
+    microphone: 'Microphone',
+    camera: 'Camera',
+    notifications: 'Notifications',
+    'clipboard-read': 'Clipboard read',
+    'midi-sysex': 'MIDI system exclusive'
+  };
+  children.push({ type: 'separator', id: 'page-info-permissions-separator' });
+  for (const permission of info.permissions) {
+    children.push({
+      type: 'text',
+      id: `page-info-permission-${permission.id}`,
+      text: `${permissionLabels[permission.id] || permission.id}: ${permission.allowed ? 'Allowed by application check' : 'Not preauthorized; application decides on request'}`,
+      muted: true
+    });
+  }
+  children.push(
+    {
+      type: 'text',
+      id: 'page-info-permission-note',
+      text: info.permissions.length
+        ? 'These are application permission checks, not permanent grants or operating system permissions. Change permissions in website settings.'
+        : 'Permissions are handled by the application when requested. Open website settings to review them.',
+      muted: true
+    },
+    { type: 'button', id: 'page-info-site-settings', text: 'Website settings' }
+  );
+  return { type: 'column', id: 'page-info', width: 380, padding: 16, gap: 10, children };
+}
+
+WebContents.prototype.showPageInfoDialog = function (options) {
+  if (!options || typeof options !== 'object' || !options.anchorBounds || typeof options.anchorBounds !== 'object') {
+    throw new TypeError('showPageInfoDialog requires anchorBounds');
+  }
+  const { x, y, width, height } = options.anchorBounds;
+  if (
+    ![x, y, width, height].every((value) => typeof value === 'number' && Number.isFinite(value)) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new TypeError('anchorBounds must contain finite screen DIP coordinates and positive dimensions');
+  }
+  let requestedOrigin: string | undefined;
+  if (options.siteUrl !== undefined) {
+    if (typeof options.siteUrl !== 'string') throw new TypeError('siteUrl must be a URL string');
+    try {
+      requestedOrigin = new URL(options.siteUrl).origin;
+    } catch {
+      throw new TypeError('siteUrl must be a valid absolute URL');
+    }
+    if (requestedOrigin === 'null') throw new TypeError('siteUrl must have a non-opaque origin');
+  }
+  if (this.isDestroyed()) throw new Error('Cannot show page information for destroyed webContents');
+
+  let invalidated = false;
+  let panel: NativePanel | undefined;
+  let complete = false;
+  const events: NodeJS.EventEmitter = this;
+  const cleanup = () => {
+    invalidated = true;
+    this.removeListener('did-start-navigation', navigationStarted);
+    this.removeListener('did-navigate', invalidate);
+    this.removeListener('did-navigate-in-page', invalidate);
+    this.removeListener('destroyed', invalidate);
+    events.removeListener('-owner-window-changed', invalidate);
+    events.removeListener('-page-info-security-state-changed', invalidate);
+    if (pageInfoPanels.get(this)?.destroy === destroy) pageInfoPanels.delete(this);
+  };
+  const destroy = () => {
+    invalidated = true;
+    cleanup();
+    panel?.destroy();
+  };
+  const invalidate = () => destroy();
+  const navigationStarted = (_event: Electron.Event, _url: string, _sameDocument: boolean, isMainFrame: boolean) => {
+    if (isMainFrame) invalidate();
+  };
+  // Register before querying host permission checks: a check handler can
+  // synchronously navigate, transfer or destroy the document.
+  this.on('did-start-navigation', navigationStarted);
+  this.on('did-navigate', invalidate);
+  this.on('did-navigate-in-page', invalidate);
+  this.on('destroyed', invalidate);
+  events.on('-owner-window-changed', invalidate);
+  events.on('-page-info-security-state-changed', invalidate);
+  try {
+    const info: PageInfoSnapshot = this._getPageInfo();
+    if (invalidated) throw new Error('Page changed while reading page information');
+    if (requestedOrigin !== undefined && requestedOrigin !== info.origin) {
+      throw new Error('siteUrl must have the same origin as the committed document');
+    }
+    const parent = BaseWindow.fromId(info.ownerWindowId);
+    if (!parent || parent.isDestroyed()) throw new Error('Page information requires a valid owner window');
+    if (!NativePanel.isSupported()) return false;
+    pageInfoPanels.get(this)?.destroy();
+    panel = new NativePanel({
+      parent,
+      sourceWebContents: this,
+      content: pageInfoContent(info),
+      theme: 'system',
+      focusMode: 'menu',
+      dismissOnOutsideClick: true,
+      dismissOnEscape: true
+    });
+    panel.once('closed', cleanup);
+    panel.once('dismissed', destroy);
+    panel.on('action', (action: { id: string; type: string }) => {
+      if (action.id !== 'page-info-site-settings' || action.type !== 'click' || invalidated || this.isDestroyed()) {
+        return;
+      }
+      const current: PageInfoSnapshot = this._getPageInfo(false);
+      if (
+        invalidated ||
+        current.documentId !== info.documentId ||
+        current.entryId !== info.entryId ||
+        current.url !== info.url ||
+        current.ownerWindowId !== info.ownerWindowId
+      ) {
+        destroy();
+        return;
+      }
+      destroy();
+      const event = {
+        sender: this,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        }
+      };
+      this.emit('page-info-open-site-settings', event, { url: info.url, origin: info.origin });
+    });
+    pageInfoPanels.set(this, { destroy });
+    if (invalidated) throw new Error('Page changed while opening page information');
+    panel.show({ anchorBounds: { x, y, width, height }, placement: 'bottom-start' });
+    complete = true;
+    return true;
+  } finally {
+    if (!complete) destroy();
+  }
+};
 
 function getWebFrame(contents: Electron.WebContents, frame: number | [number, number]) {
   let webFrame: Electron.WebFrameMain | undefined;
