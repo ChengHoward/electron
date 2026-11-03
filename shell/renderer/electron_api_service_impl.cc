@@ -4,14 +4,19 @@
 
 #include "electron/shell/renderer/electron_api_service_impl.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include "base/json/json_writer.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "base/values.h"
 #include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
@@ -25,6 +30,14 @@
 #include "shell/common/v8_util.h"
 #include "shell/renderer/electron_ipc_native.h"
 #include "shell/renderer/preload_utils.h"
+#include "third_party/blink/public/web/web_ax_context.h"
+#include "third_party/blink/public/web/web_ax_object.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
+#include "third_party/blink/public/web/web_hit_test_result.h"
+#include "third_party/blink/public/web/web_option_element.h"
+#include "third_party/blink/public/web/web_select_element.h"
+#include "ui/accessibility/ax_enum_util.h"
+#include "ui/accessibility/ax_node_data.h"
 
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
@@ -32,11 +45,13 @@
 #include "content/public/renderer/render_thread.h"
 #include "shell/renderer/renderer_client_base.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_document_loader.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
@@ -48,7 +63,6 @@
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "ui/base/ime/ime_text_span.h"
-#include "third_party/blink/public/mojom/forms/form_control_type.mojom-shared.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 #include "v8/include/v8-context.h"
@@ -70,8 +84,8 @@ mojom::RendererStartupDataPtr* GetPendingNewWindowStartupData() {
 }
 
 std::string TrimAsciiWhitespace(std::string_view input) {
-  return std::string(base::TrimString(input, base::kWhitespaceASCII,
-                                      base::TRIM_ALL));
+  return std::string(
+      base::TrimString(input, base::kWhitespaceASCII, base::TRIM_ALL));
 }
 
 std::vector<std::string> SplitPierceSelector(const std::string& selector) {
@@ -311,9 +325,8 @@ std::vector<SelectorAlternative> SplitSelectorAlternatives(
       size_t j = i;
       while (j < selector.size() && base::IsAsciiWhitespace(selector[j]))
         ++j;
-      if (j < selector.size() &&
-          (selector[j] == '>' || selector[j] == '+' || selector[j] == '~' ||
-           selector[j] == ',')) {
+      if (j < selector.size() && (selector[j] == '>' || selector[j] == '+' ||
+                                  selector[j] == '~' || selector[j] == ',')) {
         continue;
       }
       if (!TrimAsciiWhitespace(current).empty()) {
@@ -361,7 +374,8 @@ std::string JoinSelectorParts(const std::vector<SelectorPart>& parts,
 }
 
 bool SelectorHasExplicitFrameHop(const std::string& selector) {
-  for (const SelectorAlternative& alternative : SplitSelectorAlternatives(selector)) {
+  for (const SelectorAlternative& alternative :
+       SplitSelectorAlternatives(selector)) {
     const std::vector<SelectorPart>& parts = alternative.parts;
     if (parts.size() < 2)
       continue;
@@ -398,8 +412,8 @@ std::vector<blink::WebElement> QueryAllPierceCombinator(
 }
 
 std::vector<blink::WebElement> QueryAllInDocument(const blink::WebNode& scope,
-                                                 const std::string& selector,
-                                                 bool pierce) {
+                                                  const std::string& selector,
+                                                  bool pierce) {
   std::vector<blink::WebElement> found;
   if (scope.IsNull() || selector.empty())
     return found;
@@ -435,7 +449,8 @@ constexpr size_t kMaxCrossDocumentHops = 64;
 void AppendFrameHop(blink::WebFrame* frame,
                     const std::string& remainder,
                     std::vector<mojom::CrossDocumentHopPtr>* hops) {
-  if (!frame || remainder.empty() || !hops || hops->size() >= kMaxCrossDocumentHops)
+  if (!frame || remainder.empty() || !hops ||
+      hops->size() >= kMaxCrossDocumentHops)
     return;
   auto hop = mojom::CrossDocumentHop::New();
   hop->frame_token = frame->GetFrameToken().value();
@@ -448,7 +463,8 @@ void CollectExplicitFrameHops(const blink::WebDocument& document,
                               const std::string& selector,
                               bool pierce,
                               std::vector<mojom::CrossDocumentHopPtr>* hops) {
-  for (const SelectorAlternative& alternative : SplitSelectorAlternatives(selector)) {
+  for (const SelectorAlternative& alternative :
+       SplitSelectorAlternatives(selector)) {
     const std::vector<SelectorPart>& parts = alternative.parts;
     if (parts.size() < 2)
       continue;
@@ -458,7 +474,8 @@ void CollectExplicitFrameHops(const blink::WebDocument& document,
       if (!CombinatorEntersFrame(parts[i + 1].combinator_before))
         continue;
       const std::string prefix = JoinSelectorParts(parts, 0, i + 1);
-      const std::string remainder = JoinSelectorParts(parts, i + 1, parts.size());
+      const std::string remainder =
+          JoinSelectorParts(parts, i + 1, parts.size());
       if (prefix.empty() || remainder.empty())
         continue;
       for (const blink::WebElement& element :
@@ -503,6 +520,7 @@ mojom::DomElementInfoPtr BuildDomElementInfo(blink::WebElement element) {
     return nullptr;
   const float css_scale = CssScaleForElement(element);
   auto info = mojom::DomElementInfo::New();
+  info->document_id = element.GetDocument().GetDomNodeId();
   info->backend_node_id = element.GetDomNodeId();
   info->tag_name = element.TagName().Utf8();
   const gfx::Rect bounds = element.BoundsInWidget();
@@ -983,6 +1001,285 @@ void ElectronApiServiceImpl::ReceiveSharedTexture(
       argv.data());
 }
 
+void ElectronApiServiceImpl::GetAgentFrameData(
+    uint32_t max_nodes,
+    bool pierce,
+    const std::string& selector,
+    GetAgentFrameDataCallback callback) {
+  auto* frame = render_frame()->GetWebFrame();
+  base::DictValue result;
+  base::ListValue elements;
+  base::ListValue reasons;
+  if (!frame || frame->GetDocument().IsNull()) {
+    result.Set("error", "DOCUMENT_UNAVAILABLE");
+  } else if (frame->GetDocumentLoader() &&
+             frame->GetDocumentLoader()->HasUnreachableURL()) {
+    result.Set("error", "FRAME_LOAD_FAILED");
+  } else {
+    const auto document = frame->GetDocument();
+    result.Set("documentId", document.GetDomNodeId());
+    result.Set("loading", frame->IsLoading());
+    blink::WebAXContext ax_context(document, ui::kAXModeComplete);
+    ax_context.UpdateAXForAllDocuments();
+    const auto deadline = base::TimeTicks::Now() + base::Milliseconds(100);
+    // Iterative preorder: bound visited nodes, output nodes and elapsed time.
+    // Walk DOM children explicitly to retain author closed shadow contents.
+    std::vector<std::pair<blink::WebNode, uint32_t>> pending{{document, 0}};
+    uint32_t visited = 0;
+    size_t output_bytes = 0;
+    max_nodes = std::clamp(max_nodes, 1u, 5000u);
+    while (!pending.empty()) {
+      if (elements.size() >= max_nodes || ++visited > 20000 ||
+          base::TimeTicks::Now() > deadline) {
+        reasons.Append(elements.size() >= max_nodes ? "MAX_NODES"
+                       : visited > 20000            ? "MAX_VISITED_NODES"
+                                                    : "TIME_LIMIT");
+        break;
+      }
+      auto [node, depth] = pending.back();
+      pending.pop_back();
+      if (!node.NextSibling().IsNull())
+        pending.emplace_back(node.NextSibling(), depth);
+      if (depth < 128 && !node.FirstChild().IsNull())
+        pending.emplace_back(node.FirstChild(), depth + 1);
+      else if (!node.FirstChild().IsNull())
+        reasons.Append("MAX_DEPTH");
+      if (!node.IsElementNode())
+        continue;
+      auto element = node.DynamicTo<blink::WebElement>();
+      if (pierce) {
+        auto shadow = element.OpenOrClosedShadowRoot();
+        if (!shadow.IsNull() && depth < 128)
+          pending.emplace_back(shadow, depth + 1);
+        else if (!shadow.IsNull())
+          reasons.Append("MAX_DEPTH");
+      }
+      if (!selector.empty()) {
+        auto matches = element.ParentNode().QuerySelectorAll(
+            blink::WebString::FromUtf8(selector));
+        if (std::find(matches.begin(), matches.end(), element) == matches.end())
+          continue;
+      }
+      const auto tag = base::ToLowerASCII(element.TagName().Utf8());
+      if (tag == "script" || tag == "style" || tag == "meta" || tag == "link")
+        continue;
+      base::DictValue item;
+      item.Set("backendNodeId", element.GetDomNodeId());
+      auto parent = element.ParentOrShadowHostNode();
+      while (!parent.IsNull() && !parent.IsElementNode() &&
+             !parent.IsDocumentNode())
+        parent = parent.ParentOrShadowHostNode();
+      if (!parent.IsNull())
+        item.Set("parentBackendNodeId", parent.GetDomNodeId());
+      item.Set("tagName", tag);
+      auto attr = [&element](const char* name) {
+        return element.GetAttribute(blink::WebString::FromUtf8(name)).Utf8();
+      };
+      item.Set("type", attr("type"));
+      // Do not serialize script/style source through an ancestor's textContent.
+      // Descendant elements are represented separately in this flat snapshot.
+      std::string own_text;
+      unsigned text_children = 0;
+      for (auto child = element.FirstChild();
+           !child.IsNull() && own_text.size() < 8192 && text_children++ < 256;
+           child = child.NextSibling()) {
+        if (child.IsTextNode())
+          own_text += child.NodeValue().Utf8();
+      }
+      item.Set("text", own_text);
+      item.Set("placeholder", attr("placeholder"));
+      auto ax = blink::WebAXObject::FromWebNode(element);
+      if (!ax.IsDetached()) {
+        ui::AXNodeData data;
+        ax.Serialize(&data, ui::kAXModeComplete);
+        item.Set("role", ui::ToString(ax.Role()));
+        item.Set("name", ax.GetName().Utf8());
+        item.Set("description", data.GetStringAttribute(
+                                    ax::mojom::StringAttribute::kDescription));
+        item.Set("disabled",
+                 data.GetRestriction() == ax::mojom::Restriction::kDisabled);
+        item.Set("readOnly",
+                 data.GetRestriction() == ax::mojom::Restriction::kReadOnly);
+        item.Set("checked", ui::ToString(data.GetCheckedState()));
+        item.Set("selected",
+                 data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
+        item.Set("expanded", data.HasState(ax::mojom::State::kExpanded));
+        item.Set("focused", ax.IsFocused());
+      } else {
+        item.Set("role", attr("role"));
+        item.Set("name", attr("aria-label"));
+      }
+      if (element.IsFormControlElement()) {
+        auto control = element.DynamicTo<blink::WebFormControlElement>();
+        const bool secret =
+            tag == "input" &&
+            (base::EqualsCaseInsensitiveASCII(attr("type"), "password") ||
+             base::EqualsCaseInsensitiveASCII(attr("type"), "file"));
+        item.Set("value", secret ? "" : control.Value().Utf8());
+        item.Set("valueRedacted", secret);
+        item.Set("disabled", !control.IsEnabled());
+        item.Set("readOnly", control.IsReadOnly());
+      } else if (!ax.IsDetached() && ax.IsEditable()) {
+        item.Set("value", ax.GetValueForControl().Utf8());
+      }
+      auto select = element.DynamicTo<blink::WebSelectElement>();
+      if (!select.IsNull()) {
+        base::ListValue options;
+        for (auto candidate : select.GetListItems()) {
+          auto option = candidate.DynamicTo<blink::WebOptionElement>();
+          if (option.IsNull())
+            continue;
+          if (options.size() >= 1000) {
+            reasons.Append("MAX_OPTIONS");
+            break;
+          }
+          base::DictValue option_data;
+          option_data.Set("backendNodeId", option.GetDomNodeId());
+          option_data.Set("label", option.Label().Utf8());
+          option_data.Set("text", option.GetText().Utf8());
+          option_data.Set("value", option.Value().Utf8());
+          option_data.Set("selected", option.IsSelected());
+          option_data.Set("disabled", !option.IsEnabled());
+          options.Append(std::move(option_data));
+        }
+        item.Set("options", std::move(options));
+      }
+      // ARIA errors/descriptions are resolved in the element's own tree scope.
+      auto related_text = [&element](const std::string& ids) {
+        std::string text;
+        auto scope = blink::WebNode(element);
+        while (!scope.ParentNode().IsNull())
+          scope = scope.ParentNode();
+        for (const auto& id :
+             base::SplitString(ids, " \t\r\n", base::TRIM_WHITESPACE,
+                               base::SPLIT_WANT_NONEMPTY)) {
+          for (auto candidate :
+               scope.QuerySelectorAll(blink::WebString::FromUtf8("[id]"))) {
+            if (candidate.GetAttribute(blink::WebString::FromUtf8("id"))
+                    .Utf8() == id) {
+              if (!text.empty())
+                text += " ";
+              text += candidate.TextContentAbridged(1024).Utf8();
+              break;
+            }
+          }
+        }
+        return text.substr(0, 4096);
+      };
+      auto label = related_text(attr("aria-labelledby"));
+      if (label.empty() && element.IsFormControlElement() && !ax.IsDetached())
+        label = ax.GetName().Utf8();
+      item.Set("labelText", label);
+      item.Set("errorText", related_text(attr("aria-errormessage")));
+      item.Set("descriptionText", related_text(attr("aria-describedby")));
+      item.Set("invalid", !ax.IsDetached() ? ui::ToString(ax.InvalidState())
+                                           : attr("aria-invalid"));
+      const auto bounds = element.BoundsInWidget();
+      const auto visibility =
+          element.GetComputedValue(blink::WebString::FromUtf8("visibility"))
+              .Utf8();
+      item.Set("visible", !bounds.IsEmpty() && visibility != "hidden" &&
+                              visibility != "collapse");
+      base::DictValue box;
+      box.Set("x", bounds.x());
+      box.Set("y", bounds.y());
+      box.Set("width", bounds.width());
+      box.Set("height", bounds.height());
+      item.Set("bounds", std::move(box));
+      std::string serialized;
+      base::JSONWriter::Write(item, &serialized);
+      output_bytes += serialized.size();
+      if (output_bytes > 2 * 1024 * 1024) {
+        reasons.Append("MAX_BYTES");
+        break;
+      }
+      elements.Append(std::move(item));
+    }
+  }
+  result.Set("elements", std::move(elements));
+  result.Set("truncated", !reasons.empty());
+  result.Set("truncationReasons", std::move(reasons));
+  std::string json;
+  base::JSONWriter::Write(result, &json);
+  std::move(callback).Run(json);
+}
+
+void ElectronApiServiceImpl::PrepareAgentTarget(
+    int32_t document_id,
+    int32_t node_id,
+    bool focus,
+    bool scroll_into_view,
+    bool verify_focus,
+    PrepareAgentTargetCallback callback) {
+  auto* frame = render_frame()->GetWebFrame();
+  if (!frame || frame->GetDocument().IsNull() ||
+      frame->GetDocument().GetDomNodeId() != document_id) {
+    std::move(callback).Run(nullptr, "STALE_DOCUMENT");
+    return;
+  }
+  auto node = blink::WebNode::FromDomNodeId(node_id);
+  auto element = node.DynamicTo<blink::WebElement>();
+  if (element.IsNull() || !element.IsConnected() ||
+      element.GetDocument() != frame->GetDocument()) {
+    std::move(callback).Run(nullptr, "STALE_TARGET");
+    return;
+  }
+  if (element.IsFormControlElement() &&
+      !element.DynamicTo<blink::WebFormControlElement>().IsEnabled()) {
+    std::move(callback).Run(nullptr, "TARGET_DISABLED");
+    return;
+  }
+  const auto tag = base::ToLowerASCII(element.TagName().Utf8());
+  const auto type = base::ToLowerASCII(
+      element.GetAttribute(blink::WebString::FromUtf8("type")).Utf8());
+  if ((tag == "select" && !focus && !verify_focus) ||
+      (tag == "input" && (type == "file" || type == "color" || type == "date" ||
+                          type == "datetime-local" || type == "month" ||
+                          type == "time" || type == "week"))) {
+    std::move(callback).Run(nullptr, "TARGET_NATIVE_POPUP_UNSUPPORTED");
+    return;
+  }
+  if (scroll_into_view)
+    element.ScrollIntoViewIfNeeded();
+  const auto visibility =
+      element.GetComputedValue(blink::WebString::FromUtf8("visibility")).Utf8();
+  if (element.BoundsInWidget().IsEmpty() || visibility == "hidden" ||
+      visibility == "collapse") {
+    std::move(callback).Run(nullptr, "TARGET_NOT_VISIBLE");
+    return;
+  }
+  if (verify_focus) {
+    if (!element.Focused()) {
+      std::move(callback).Run(nullptr, "FOCUS_NOT_REACHED");
+      return;
+    }
+  } else if (focus) {
+    frame->View()->SetFocusedFrame(frame);
+    element.Focus();
+    if (!element.Focused()) {
+      std::move(callback).Run(nullptr, "TARGET_NOT_FOCUSABLE");
+      return;
+    }
+  } else {
+    // Same-process subframes share their local root's widget. Their element
+    // bounds are already expressed in that widget's coordinate space.
+    auto* widget = frame->LocalRoot()->FrameWidget();
+    if (!widget) {
+      std::move(callback).Run(nullptr, "WIDGET_UNAVAILABLE");
+      return;
+    }
+    auto bounds = element.BoundsInWidget();
+    auto hit =
+        widget->HitTestResultAt(gfx::PointF(bounds.CenterPoint())).GetNode();
+    if (hit.IsNull() ||
+        (hit != element && !element.ContainsViaFlatTree(&hit))) {
+      std::move(callback).Run(nullptr, "TARGET_OCCLUDED");
+      return;
+    }
+  }
+  std::move(callback).Run(BuildDomElementInfo(element), "");
+}
+
 void ElectronApiServiceImpl::QuerySelectorDeep(
     const std::string& selector,
     bool pierce,
@@ -1020,8 +1317,7 @@ void ElectronApiServiceImpl::QuerySelectorAcrossDocuments(
   }
 
   blink::WebDocument document = frame->GetDocument();
-  blink::WebElement element =
-      QuerySelectorDeepImpl(document, selector, pierce);
+  blink::WebElement element = QuerySelectorDeepImpl(document, selector, pierce);
   if (!element.IsNull()) {
     if (scroll_into_view)
       element.ScrollIntoViewIfNeeded();
@@ -1040,10 +1336,9 @@ void ElectronApiServiceImpl::QuerySelectorAcrossDocuments(
   std::move(callback).Run(std::move(result));
 }
 
-void ElectronApiServiceImpl::GetNodeBoxModel(
-    int32_t backend_node_id,
-    bool scroll_into_view,
-    GetNodeBoxModelCallback callback) {
+void ElectronApiServiceImpl::GetNodeBoxModel(int32_t backend_node_id,
+                                             bool scroll_into_view,
+                                             GetNodeBoxModelCallback callback) {
   blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
   if (!frame) {
     std::move(callback).Run(false, nullptr);
@@ -1100,7 +1395,8 @@ void ElectronApiServiceImpl::SetFileInputFiles(
     }
   } else {
     if (selector.empty()) {
-      std::move(callback).Run(false, "'selector' or 'backendNodeId' is required");
+      std::move(callback).Run(false,
+                              "'selector' or 'backendNodeId' is required");
       return;
     }
     element = QuerySelectorDeepImpl(frame->GetDocument(), selector, pierce);

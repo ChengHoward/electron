@@ -2380,6 +2380,12 @@ Returns `Promise<void>` - Finds the element (piercing closed shadow when enabled
 dispatches a trusted press+release at its center via the same pipeline as
 `dispatchMouseEvent`.
 
+`clickCount: 2` sends two complete press/release pairs, with event counts 1 and 2.
+Button and modifier options apply to both selector and resolved-target calls.
+Target calls serialize the complete click sequence with other target inputs;
+`pierce` only applies to selector lookup. Invalid button, count, modifier or
+boolean options reject before sending any input.
+
 ```js
 await win.webContents.clickSelector('#login', { pierce: true })
 await win.webContents.clickSelector('x-card >>> button.primary')

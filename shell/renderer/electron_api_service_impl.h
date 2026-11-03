@@ -45,6 +45,16 @@ class ElectronApiServiceImpl
       mojo::PendingAssociatedReceiver<mojom::ElectronFrame> receiver);
 
   // mojom::ElectronRenderer
+  void GetAgentFrameData(uint32_t max_nodes,
+                         bool pierce,
+                         const std::string& selector,
+                         GetAgentFrameDataCallback callback) override;
+  void PrepareAgentTarget(int32_t document_id,
+                          int32_t node_id,
+                          bool focus,
+                          bool scroll_into_view,
+                          bool verify_focus,
+                          PrepareAgentTargetCallback callback) override;
   void Message(bool internal,
                const std::string& channel,
                electron::SerializedValue arguments) override;

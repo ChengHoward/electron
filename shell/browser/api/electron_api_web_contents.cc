@@ -22,9 +22,9 @@
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/containers/span.h"
 #include "base/containers/id_map.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
@@ -35,9 +35,9 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/time/time.h"
 #include "base/task/current_thread.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/unguessable_token.h"
 #include "base/values.h"
@@ -50,17 +50,17 @@
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/input/input_constants.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/input/touch_emulator.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/security_state/content/content_utils.h"
 #include "components/security_state/core/security_state.h"
 #include "content/browser/renderer_host/frame_tree_node.h"  // nogncheck
+#include "content/browser/renderer_host/input/touch_emulator_impl.h"  // nogncheck
 #include "content/browser/renderer_host/navigation_controller_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_host_manager.h"  // nogncheck
 #include "content/browser/renderer_host/render_frame_proxy_host.h"  // nogncheck
-#include "components/input/touch_emulator.h"
-#include "content/browser/renderer_host/input/touch_emulator_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_view_base.h"  // nogncheck
 #include "content/browser/web_contents/web_contents_impl.h"  // nogncheck
@@ -89,6 +89,7 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/visibility.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/child_process_id.h"
 #include "content/public/common/page_visibility_state.h"
@@ -103,8 +104,6 @@
 #include "gin/dictionary.h"
 #include "gin/object_template_builder.h"
 #include "media/base/mime_util.h"
-#include "net/http/http_status_code.h"
-#include "net/http/http_util.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -112,6 +111,8 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "net/http/http_status_code.h"
+#include "net/http/http_util.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
@@ -123,6 +124,7 @@
 #include "shell/browser/api/electron_api_session.h"
 #include "shell/browser/api/electron_api_web_frame_main.h"
 #include "shell/browser/api/frame_subscriber.h"
+#include "shell/browser/api/input_sequence.h"
 #include "shell/browser/api/message_port.h"
 #include "shell/browser/api/save_page_handler.h"
 #include "shell/browser/browser.h"
@@ -130,13 +132,13 @@
 #include "shell/browser/electron_autofill_driver_factory.h"
 #include "shell/browser/electron_browser_client.h"
 #include "shell/browser/electron_browser_context.h"
-#include "shell/browser/net/navigation_response_override_registry.h"
 #include "shell/browser/electron_browser_main_parts.h"
 #include "shell/browser/electron_navigation_throttle.h"
 #include "shell/browser/electron_permission_manager.h"
 #include "shell/browser/file_select_helper.h"
 #include "shell/browser/file_system_access/file_system_access_web_contents_helper.h"
 #include "shell/browser/native_window.h"
+#include "shell/browser/net/navigation_response_override_registry.h"
 #include "shell/browser/osr/osr_render_widget_host_view.h"
 #include "shell/browser/osr/osr_web_contents_view.h"
 #include "shell/browser/preload_script.h"
@@ -209,7 +211,6 @@
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/events/base_event_utils.h"
-#include "ui/views/widget/widget.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -217,6 +218,7 @@
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/range/range.h"
 #include "ui/latency/latency_info.h"
+#include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/cocoa/defaults_utils.h"
@@ -230,6 +232,10 @@
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/window.h"
 #include "ui/gfx/font_render_params.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include "shell/browser/ui/virtual_cursor.h"
 #endif
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
@@ -2568,8 +2574,9 @@ void WebContents::DidFinishLoad(content::RenderFrameHost* render_frame_host,
   Emit("did-frame-finish-load", is_main_frame, frame_process_id,
        frame_routing_id);
 
-  // 閳跨媴绗峎ARNING!閳跨媴绗?  // Emit() triggers JS which can call destroy() on |this|. It's not safe to
-  // assume that |this| points to valid memory at this point.
+  // 閳跨媴绗峎ARNING!閳跨媴绗?  // Emit() triggers JS which can call destroy()
+  // on |this|. It's not safe to assume that |this| points to valid memory at
+  // this point.
   if (is_main_frame && weak_this && web_contents()) {
     load_url_promises_.DidFinishLoad();
     Emit("did-finish-load");
@@ -3109,6 +3116,11 @@ content::WebContents* WebContents::GetOpenDevToolsWebContents() const {
 }
 
 void WebContents::WebContentsDestroyed() {
+  if (input_sequence_)
+    input_sequence_->Cancel("WEBCONTENTS_DESTROYED");
+#if BUILDFLAG(IS_WIN)
+  virtual_cursor_.reset();
+#endif
   NavigationResponseOverrideRegistry::Get()->Unregister(web_contents());
 
   // Drop this instance's contribution to the process-wide caret browsing count.
@@ -3182,6 +3194,20 @@ void WebContents::SetBackgroundThrottling(bool allowed) {
           if (auto* rwh = static_cast<content::RenderWidgetHostImpl*>(
                   view->GetRenderWidgetHost())) {
             rwh->disable_hidden_ = !allowed;
+            // Existing hidden OOPIF widgets do not become visible merely by
+            // disabling future hides. Keep their renderer painting without
+            // showing or activating the native BrowserWindow.
+            auto* frame_view =
+                static_cast<content::RenderWidgetHostViewBase*>(view);
+            if (frame_view->IsRenderWidgetHostViewChildFrame()) {
+              if (!allowed && rwh->IsHidden())
+                rwh->WasShown({});
+              else if (allowed &&
+                       static_cast<content::WebContentsImpl*>(web_contents())
+                               ->GetPageVisibilityState() ==
+                           content::PageVisibilityState::kHidden)
+                rwh->WasHidden();
+            }
           }
         }
         frame->GetRenderViewHost()->SetSchedulerThrottling(allowed);
@@ -3368,8 +3394,9 @@ void WebContents::LoadURLWithParams(
   web_contents()->GetController().DiscardNonCommittedEntries();
   web_contents()->GetController().LoadURLWithParams(params);
 
-  // 閳跨媴绗峎ARNING!閳跨媴绗?  // LoadURLWithParams() triggers JS events which can call destroy() on |this|.
-  // It's not safe to assume that |this| points to valid memory at this point.
+  // 閳跨媴绗峎ARNING!閳跨媴绗?  // LoadURLWithParams() triggers JS events which
+  // can call destroy() on |this|. It's not safe to assume that |this| points to
+  // valid memory at this point.
   if (!weak_this || !web_contents())
     return;
 
@@ -3407,8 +3434,7 @@ void WebContents::LoadURLWithResponse(const GURL& url,
   if (response.Get("headers", &headers)) {
     for (const auto iter : headers) {
       if (iter.second.is_string()) {
-        override_data.headers.emplace_back(iter.first,
-                                           iter.second.GetString());
+        override_data.headers.emplace_back(iter.first, iter.second.GetString());
       } else if (iter.second.is_list()) {
         for (const auto& item : iter.second.GetList()) {
           if (item.is_string())
@@ -4662,6 +4688,11 @@ bool WebContents::IsFocused() const {
 
 void WebContents::SendInputEvent(v8::Isolate* isolate,
                                  v8::Local<v8::Value> input_event) {
+  if (input_sequence_id_) {
+    isolate->ThrowException(
+        v8::Exception::Error(gin::StringToV8(isolate, "INPUT_SEQUENCE_BUSY")));
+    return;
+  }
   content::RenderWidgetHostView* view =
       web_contents()->GetRenderWidgetHostView();
   if (!view)
@@ -4678,6 +4709,7 @@ void WebContents::SendInputEvent(v8::Isolate* isolate,
       } else {
         rwh->ForwardMouseEvent(mouse_event);
       }
+      UpdateVirtualCursor(mouse_event, view);
       return;
     }
   } else if (blink::WebInputEvent::IsKeyboardEventType(type)) {
@@ -4955,15 +4987,93 @@ content::RenderWidgetHostImpl* GetFocusedDispatchWidgetHost(
 
 }  // namespace
 
+namespace {
+class AgentInputDispatchObserver
+    : public content::RenderWidgetHost::InputEventObserver {
+ public:
+  void OnInputEvent(const content::RenderWidgetHost&,
+                    const blink::WebInputEvent&,
+                    InputEventSource) override;
+  bool queued = false;
+};
+
+void AgentInputDispatchObserver::OnInputEvent(const content::RenderWidgetHost&,
+                                              const blink::WebInputEvent&,
+                                              InputEventSource) {
+  queued = true;
+}
+
+content::RenderFrameHost* AgentInputFrame(
+    content::WebContents* contents,
+    const gin_helper::Dictionary& params) {
+  int process = 0, routing = 0;
+  if (!params.Get("_agentProcessId", &process) ||
+      !params.Get("_agentRoutingId", &routing))
+    return nullptr;
+  auto* frame = content::RenderFrameHost::FromID(process, routing);
+  std::string token;
+  if (!frame || !frame->IsRenderFrameLive() ||
+      content::WebContents::FromRenderFrameHost(frame) != contents ||
+      !params.Get("_agentDocumentToken", &token) ||
+      content::RenderFrameHostImpl::From(frame)
+              ->GetDocumentToken()
+              .ToString() != token)
+    return nullptr;
+  return frame;
+}
+
+void RouteAgentInput(
+    content::WebContents* contents,
+    const gin_helper::Dictionary& params,
+    content::RenderWidgetHostViewBase* root,
+    const gfx::PointF& point,
+    base::OnceCallback<void(base::WeakPtr<content::RenderWidgetHostViewBase>,
+                            std::optional<gfx::PointF>)> callback) {
+  int process = 0;
+  if (!params.Get("_agentProcessId", &process)) {
+    static_cast<content::WebContentsImpl*>(contents)
+        ->GetRenderWidgetHostAtPointAsynchronously(root, point,
+                                                   std::move(callback));
+    return;
+  }
+  auto* frame = AgentInputFrame(contents, params);
+  auto* view =
+      frame ? static_cast<content::RenderWidgetHostViewBase*>(frame->GetView())
+            : nullptr;
+  double x = 0, y = 0;
+  if (!view || !params.Get("_agentLocalX", &x) ||
+      !params.Get("_agentLocalY", &y)) {
+    std::move(callback).Run({}, std::nullopt);
+    return;
+  }
+  content::RenderWidgetHostImpl::From(frame->GetRenderWidgetHost())
+      ->ForceFirstFrameAfterNavigationTimeout();
+  std::move(callback).Run(view->GetWeakPtr(), gfx::PointF(x, y));
+}
+}  // namespace
+
 v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
   v8::Isolate* isolate = args->isolate();
-  gin_helper::Promise<void> promise(isolate);
-  v8::Local<v8::Promise> handle = promise.GetHandle();
-
   gin_helper::Dictionary params;
   if (!args->GetNext(&params)) {
+    gin_helper::Promise<void> promise(isolate);
     promise.RejectWithErrorMessage(
         "Expected an object matching CDP Input.dispatchMouseEvent params");
+    return promise.GetHandle();
+  }
+  return DispatchMouseEventParams(isolate, params);
+}
+
+v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
+    v8::Isolate* isolate,
+    gin_helper::Dictionary params) {
+  gin_helper::Promise<void> promise(isolate);
+  auto handle = promise.GetHandle();
+
+  int agent_process = 0;
+  if (params.Get("_agentProcessId", &agent_process) &&
+      !AgentInputFrame(web_contents(), params)) {
+    promise.RejectWithErrorMessage("STALE_DOCUMENT_OR_FRAME");
     return handle;
   }
 
@@ -5001,8 +5111,9 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
   params.Get("buttons", &buttons);
   params.Get("clickCount", &click_count);
 
-  int event_modifiers =
-      GetDispatchMouseEventModifiers(modifiers, buttons) | button_modifiers;
+  int event_modifiers = GetDispatchMouseEventModifiers(modifiers, buttons);
+  if (event_type == blink::WebInputEvent::Type::kMouseDown)
+    event_modifiers |= button_modifiers;
 
   // Optional CDP fields: timestamp / pointerType / pen properties.
   std::optional<double> timestamp;
@@ -5052,8 +5163,7 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
       wheel_event->wheel_ticks_y = wheel_event->delta_y > 0.0f ? 1.0f : -1.0f;
     wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
     wheel_event->delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
-    wheel_event->dispatch_type =
-        blink::WebInputEvent::DispatchType::kBlocking;
+    wheel_event->dispatch_type = blink::WebInputEvent::DispatchType::kBlocking;
     mouse_event = std::move(wheel_event);
   } else {
     std::string validation_error = ValidateDispatchMousePointerProperties(
@@ -5102,8 +5212,7 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
       end.delta_x = 0;
       end.delta_y = 0;
       end.phase = blink::WebMouseWheelEvent::kPhaseEnded;
-      end.dispatch_type =
-          blink::WebInputEvent::DispatchType::kEventNonBlocking;
+      end.dispatch_type = blink::WebInputEvent::DispatchType::kEventNonBlocking;
       GetOffScreenRenderWidgetHostView()->SendMouseWheelEvent(end);
     } else {
       GetOffScreenRenderWidgetHostView()->SendMouseEvent(*mouse_event);
@@ -5113,17 +5222,16 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
   }
 
   auto* root_view = static_cast<content::RenderWidgetHostViewBase*>(view);
-  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents());
-  auto shared_event =
-      std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
-          std::move(mouse_event));
+  auto shared_event = std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
+      std::move(mouse_event));
   auto shared_promise =
       std::make_shared<gin_helper::Promise<void>>(std::move(promise));
 
-  wc_impl->GetRenderWidgetHostAtPointAsynchronously(
-      root_view, point_in_root,
+  RouteAgentInput(
+      web_contents(), params, root_view, point_in_root,
       base::BindOnce(
-          [](base::WeakPtr<WebContents> self,
+          [](base::WeakPtr<WebContents> self, bool require_dispatch,
+             int sequence_id,
              std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>> event,
              std::shared_ptr<gin_helper::Promise<void>> promise,
              base::WeakPtr<content::RenderWidgetHostViewBase> target,
@@ -5131,6 +5239,17 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
             if (!self || !self->web_contents()) {
               promise->RejectWithErrorMessage("WebContents was destroyed");
               return;
+            }
+            if (sequence_id && self->input_sequence_id_ != sequence_id) {
+              promise->RejectWithErrorMessage("SEQUENCE_CANCELLED");
+              return;
+            }
+            if (sequence_id > 0 && self->input_sequence_) {
+              const auto error = self->input_sequence_->DispatchDeadlineError();
+              if (!error.empty()) {
+                promise->RejectWithErrorMessage(error);
+                return;
+              }
             }
             if (!target || !point.has_value()) {
               promise->RejectWithErrorMessage(
@@ -5149,8 +5268,16 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
               return;
             }
 
+            if (widget_host->IsIgnoringInputEvents()) {
+              promise->RejectWithErrorMessage("INPUT_IGNORED");
+              return;
+            }
+            AgentInputDispatchObserver observer;
+            widget_host->AddInputEventObserver(&observer);
+            auto host_alive = widget_host->GetWeakPtr();
             widget_host->Focus();
-            if ((*event)->GetType() == blink::WebInputEvent::Type::kMouseWheel) {
+            if ((*event)->GetType() ==
+                blink::WebInputEvent::Type::kMouseWheel) {
               auto* wheel =
                   static_cast<blink::WebMouseWheelEvent*>(event->get());
               widget_host->ForwardWheelEvent(*wheel);
@@ -5165,19 +5292,31 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEvent(gin::Arguments* args) {
             } else {
               widget_host->ForwardMouseEvent(**event);
             }
+            if (host_alive)
+              host_alive->RemoveInputEventObserver(&observer);
+            if (require_dispatch && !observer.queued) {
+              promise->RejectWithErrorMessage("INPUT_NOT_QUEUED");
+              return;
+            }
+            self->UpdateVirtualCursor(**event, target.get());
+            if (sequence_id > 0 && self->input_sequence_)
+              self->input_sequence_->MouseRouted(widget_host);
             promise->Resolve();
           },
-          GetWeakPtr(), shared_event, shared_promise));
+          GetWeakPtr(), AgentInputFrame(web_contents(), params) != nullptr ||
+                            params.Has("_sequenceId"),
+          params.ValueOrDefault<int>("_sequenceId", 0), shared_event,
+          shared_promise));
 
   return handle;
 }
 
 namespace {
 
-v8::Local<v8::Value> DomElementInfoToV8(
-    v8::Isolate* isolate,
-    const mojom::DomElementInfo& info) {
+v8::Local<v8::Value> DomElementInfoToV8(v8::Isolate* isolate,
+                                        const mojom::DomElementInfo& info) {
   auto dict = gin_helper::Dictionary::CreateEmpty(isolate);
+  dict.Set("documentId", info.document_id);
   dict.Set("backendNodeId", info.backend_node_id);
   dict.Set("tagName", info.tag_name);
   dict.Set("x", info.x);
@@ -5207,7 +5346,7 @@ v8::Local<v8::Value> DomBoxModelToV8(v8::Isolate* isolate,
 constexpr int kMaxCrossDocumentDepth = 16;
 
 void MapDomElementInfoToRootViewport(content::RenderFrameHost* frame,
-                                    mojom::DomElementInfo* info) {
+                                     mojom::DomElementInfo* info) {
   if (!frame || !info)
     return;
   content::RenderWidgetHostView* view = frame->GetView();
@@ -5256,8 +5395,7 @@ content::RenderFrameHost* ResolveCrossDocumentHop(
   return proxy->frame_tree_node()->current_frame_host();
 }
 
-class AcrossDocumentsSearch
-    : public base::RefCounted<AcrossDocumentsSearch> {
+class AcrossDocumentsSearch : public base::RefCounted<AcrossDocumentsSearch> {
  public:
   AcrossDocumentsSearch(gin_helper::Promise<v8::Local<v8::Value>> promise,
                         bool pierce,
@@ -5282,11 +5420,19 @@ class AcrossDocumentsSearch
   void Finish(content::RenderFrameHost* frame, mojom::DomElementInfoPtr info) {
     if (finished_ || !info)
       return;
+    if (!frame || !frame->IsRenderFrameLive()) {
+      FinishNull();
+      return;
+    }
     finished_ = true;
     MapDomElementInfoToRootViewport(frame, info.get());
     v8::Isolate* isolate = promise_.isolate();
     v8::HandleScope scope(isolate);
-    promise_.Resolve(DomElementInfoToV8(isolate, *info));
+    auto value = DomElementInfoToV8(isolate, *info);
+    gin_helper::Dictionary dict(isolate, value.As<v8::Object>());
+    dict.Set("frameProcessId", frame->GetProcess()->GetDeprecatedID());
+    dict.Set("frameRoutingId", frame->GetRoutingID());
+    promise_.Resolve(value);
   }
 
  private:
@@ -5308,13 +5454,12 @@ void ProbeAcrossDocuments(scoped_refptr<AcrossDocumentsSearch> search,
                           int depth,
                           base::OnceClosure on_miss);
 
-void FollowCrossDocumentHops(
-    scoped_refptr<AcrossDocumentsSearch> search,
-    std::vector<mojom::CrossDocumentHopPtr> hops,
-    content::GlobalRenderFrameHostId parent_id,
-    int depth,
-    size_t index,
-    base::OnceClosure on_miss) {
+void FollowCrossDocumentHops(scoped_refptr<AcrossDocumentsSearch> search,
+                             std::vector<mojom::CrossDocumentHopPtr> hops,
+                             content::GlobalRenderFrameHostId parent_id,
+                             int depth,
+                             size_t index,
+                             base::OnceClosure on_miss) {
   if (!search || search->finished() || index >= hops.size() ||
       depth > kMaxCrossDocumentDepth) {
     if (on_miss)
@@ -5324,7 +5469,8 @@ void FollowCrossDocumentHops(
 
   const mojom::CrossDocumentHop& hop = *hops[index];
   const std::string remainder = hop.remainder_selector;
-  content::RenderFrameHost* parent = content::RenderFrameHost::FromID(parent_id);
+  content::RenderFrameHost* parent =
+      content::RenderFrameHost::FromID(parent_id);
   content::RenderFrameHost* child =
       parent ? ResolveCrossDocumentHop(parent, hop) : nullptr;
   const content::GlobalRenderFrameHostId child_id =
@@ -5404,6 +5550,146 @@ content::RenderFrameHost* GetLiveMainFrame(content::WebContents* contents,
 
 }  // namespace
 
+void WebContents::SetAgentInputActive(bool active) {
+  if (!active) {
+    agent_input_capture_.RunAndReset();
+  } else if (!agent_input_capture_) {
+    agent_input_capture_ = web_contents()->IncrementCapturerCount(
+        gfx::Size(), /*stay_hidden=*/true, /*stay_awake=*/false,
+        /*is_activity=*/false);
+  }
+}
+
+v8::Local<v8::Promise> WebContents::FlushAgentInput(int process, int routing) {
+  gin_helper::Promise<void> promise(JavascriptEnvironment::GetIsolate());
+  auto handle = promise.GetHandle();
+  auto* frame = content::RenderFrameHost::FromID(process, routing);
+  if (!frame || !frame->IsRenderFrameLive() ||
+      content::WebContents::FromRenderFrameHost(frame) != web_contents()) {
+    promise.RejectWithErrorMessage("FRAME_UNAVAILABLE");
+    return handle;
+  }
+  auto* host =
+      content::RenderWidgetHostImpl::From(frame->GetRenderWidgetHost());
+  // Unlike WaitForInputProcessed, this does not wait for a CompositorFrame to
+  // be presented on screen (which may never happen for a hidden window).
+  host->GetWidgetInputHandler()->PingMainThread(base::BindOnce(
+      [](gin_helper::Promise<void> promise) { promise.Resolve(); },
+      std::move(promise)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::GetAgentFrameData(gin::Arguments* args) {
+  gin_helper::Promise<std::string> promise(args->isolate());
+  auto handle = promise.GetHandle();
+  int process = 0, routing = 0, limit = 1000;
+  bool pierce = true;
+  std::string selector;
+  if (!args->GetNext(&process) || !args->GetNext(&routing) ||
+      !args->GetNext(&limit) || !args->GetNext(&pierce) ||
+      !args->GetNext(&selector)) {
+    promise.RejectWithErrorMessage("INVALID_AGENT_FRAME_ARGUMENTS");
+    return handle;
+  }
+  auto* frame = content::RenderFrameHost::FromID(process, routing);
+  if (!frame || !frame->IsRenderFrameLive() ||
+      content::WebContents::FromRenderFrameHost(frame) != web_contents()) {
+    promise.RejectWithErrorMessage("FRAME_UNAVAILABLE");
+    return handle;
+  }
+  auto remote = std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame->GetRemoteInterfaces()->GetInterface(
+      remote->BindNewPipeAndPassReceiver());
+  auto* raw = remote.get();
+  (*raw)->GetAgentFrameData(
+      std::clamp(limit, 1, 5000), pierce, selector,
+      base::BindOnce([](gin_helper::Promise<std::string> promise,
+                        std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+                        const std::string& json) { promise.Resolve(json); },
+                     std::move(promise), std::move(remote)));
+  return handle;
+}
+
+v8::Local<v8::Promise> WebContents::PrepareAgentTarget(gin::Arguments* args) {
+  gin_helper::Promise<v8::Local<v8::Value>> promise(args->isolate());
+  auto handle = promise.GetHandle();
+  if (IsOffScreen()) {
+    promise.RejectWithErrorMessage("OFFSCREEN_AGENT_INPUT_UNSUPPORTED");
+    return handle;
+  }
+  int process = 0, routing = 0, document = 0, node = 0;
+  bool focus = false;
+  bool scroll_into_view = true;
+  if (!args->GetNext(&process) || !args->GetNext(&routing) ||
+      !args->GetNext(&document) || !args->GetNext(&node) ||
+      !args->GetNext(&focus)) {
+    promise.RejectWithErrorMessage("INVALID_AGENT_TARGET");
+    return handle;
+  }
+  args->GetNext(&scroll_into_view);
+  auto* frame = content::RenderFrameHost::FromID(process, routing);
+  if (!frame || !frame->IsRenderFrameLive() ||
+      content::WebContents::FromRenderFrameHost(frame) != web_contents()) {
+    promise.RejectWithErrorMessage("STALE_DOCUMENT_OR_FRAME");
+    return handle;
+  }
+  auto remote = std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
+  frame->GetRemoteInterfaces()->GetInterface(
+      remote->BindNewPipeAndPassReceiver());
+  auto* raw = remote.get();
+  (*raw)->PrepareAgentTarget(
+      document, node, focus, scroll_into_view, false,
+      base::BindOnce(
+          [](gin_helper::Promise<v8::Local<v8::Value>> promise,
+             std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+             content::WeakDocumentPtr document, mojom::DomElementInfoPtr info,
+             const std::string& error) {
+            if (!info) {
+              promise.RejectWithErrorMessage(error);
+              return;
+            }
+            auto* frame = document.AsRenderFrameHostIfValid();
+            if (!frame || !frame->IsRenderFrameLive()) {
+              promise.RejectWithErrorMessage("STALE_DOCUMENT_OR_FRAME");
+              return;
+            }
+            content::RenderWidgetHostImpl::From(frame->GetRenderWidgetHost())
+                ->ForceFirstFrameAfterNavigationTimeout();
+            frame->GetRenderWidgetHost()->InsertVisualStateCallback(
+                base::BindOnce(
+                    [](gin_helper::Promise<v8::Local<v8::Value>> promise,
+                       mojom::DomElementInfoPtr info,
+                       content::WeakDocumentPtr document, bool success) {
+                      if (!success) {
+                        promise.RejectWithErrorMessage(
+                            "VISUAL_STATE_UNAVAILABLE");
+                        return;
+                      }
+                      auto* frame = document.AsRenderFrameHostIfValid();
+                      auto* view = frame ? frame->GetView() : nullptr;
+                      if (!view) {
+                        promise.RejectWithErrorMessage(
+                            "STALE_DOCUMENT_OR_FRAME");
+                        return;
+                      }
+                      v8::HandleScope scope(promise.isolate());
+                      auto value = DomElementInfoToV8(promise.isolate(), *info);
+                      gin_helper::Dictionary dict(promise.isolate(),
+                                                  value.As<v8::Object>());
+                      dict.Set("deviceScaleFactor",
+                               view->GetDeviceScaleFactor());
+                      dict.Set("documentToken",
+                               content::RenderFrameHostImpl::From(frame)
+                                   ->GetDocumentToken()
+                                   .ToString());
+                      promise.Resolve(value);
+                    },
+                    std::move(promise), std::move(info), document));
+          },
+          std::move(promise), std::move(remote), frame->GetWeakDocumentPtr()));
+  return handle;
+}
+
 v8::Local<v8::Promise> WebContents::QuerySelectorDeep(gin::Arguments* args) {
   v8::Isolate* isolate = args->isolate();
   gin_helper::Promise<v8::Local<v8::Value>> promise(isolate);
@@ -5438,7 +5724,7 @@ v8::Local<v8::Promise> WebContents::QuerySelectorDeep(gin::Arguments* args) {
   (*raw_ptr)->QuerySelectorDeep(
       selector, pierce, scroll_into_view,
       base::BindOnce(
-          [](std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>> ,
+          [](std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
              gin_helper::Promise<v8::Local<v8::Value>> promise, bool found,
              mojom::DomElementInfoPtr info) {
             v8::Isolate* isolate = promise.isolate();
@@ -5567,6 +5853,12 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
     return handle;
   }
 
+  if (event_button == blink::WebPointerProperties::Button::kNoButton ||
+      click_count < 1 || click_count > 3 || modifiers < 0 || modifiers > 15) {
+    promise.RejectWithErrorMessage("Invalid clickSelector options");
+    return handle;
+  }
+
   if (IsOffScreen()) {
     promise.RejectWithErrorMessage(
         "clickSelector is not supported for offscreen webContents");
@@ -5610,7 +5902,7 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
             const double x = info->x + info->width / 2.0;
             const double y = info->y + info->height / 2.0;
             const int event_modifiers =
-                GetDispatchMouseEventModifiers(modifiers, 0) | button_modifiers;
+                GetDispatchMouseEventModifiers(modifiers, 0);
             const base::TimeTicks event_timestamp =
                 GetDispatchMouseEventTimeTicks(std::nullopt);
             float scale_factor =
@@ -5627,7 +5919,12 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
 
             auto make_event = [&](blink::WebInputEvent::Type type) {
               auto event = std::make_unique<blink::WebMouseEvent>(
-                  type, event_modifiers, event_timestamp);
+                  type,
+                  event_modifiers |
+                      (type == blink::WebInputEvent::Type::kMouseDown
+                           ? button_modifiers
+                           : 0),
+                  event_timestamp);
               event->button = event_button;
               event->click_count = click_count;
               event->pointer_type =
@@ -5659,6 +5956,7 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
                        std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>>
                            released,
                        std::shared_ptr<gin_helper::Promise<void>> promise,
+                       int click_count,
                        base::WeakPtr<content::RenderWidgetHostViewBase> target,
                        std::optional<gfx::PointF> point) {
                       if (!self || !self->web_contents()) {
@@ -5673,10 +5971,11 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
                       }
 
                       gfx::Rect bounds = target->GetViewBounds();
-                      for (auto* event_ptr : {pressed->get(), released->get()}) {
+                      for (auto* event_ptr :
+                           {pressed->get(), released->get()}) {
                         event_ptr->SetPositionInWidget(*point);
-                        event_ptr->SetPositionInScreen(*point +
-                                                       bounds.OffsetFromOrigin());
+                        event_ptr->SetPositionInScreen(
+                            *point + bounds.OffsetFromOrigin());
                       }
 
                       auto* widget_host = content::RenderWidgetHostImpl::From(
@@ -5688,11 +5987,18 @@ v8::Local<v8::Promise> WebContents::ClickSelector(gin::Arguments* args) {
                       }
 
                       widget_host->Focus();
-                      widget_host->ForwardMouseEvent(**pressed);
-                      widget_host->ForwardMouseEvent(**released);
+                      for (int count = 1; count <= click_count; ++count) {
+                        (*pressed)->click_count = count;
+                        (*released)->click_count = count;
+                        widget_host->ForwardMouseEvent(**pressed);
+                        self->UpdateVirtualCursor(**pressed, target.get());
+                        widget_host->ForwardMouseEvent(**released);
+                        self->UpdateVirtualCursor(**released, target.get());
+                      }
                       promise->Resolve();
                     },
-                    self, shared_pressed, shared_released, shared_promise));
+                    self, shared_pressed, shared_released, shared_promise,
+                    click_count));
           },
           GetWeakPtr(), std::move(electron_renderer), event_button,
           button_modifiers, click_count, modifiers, std::move(promise)));
@@ -5751,12 +6057,31 @@ v8::Local<v8::Promise> WebContents::SetFileInputFiles(gin::Arguments* args) {
   if (args->GetNext(&options))
     options.Get("pierce", &pierce);
 
+  std::vector<base::FilePath> file_paths;
+  file_paths.reserve(paths.size());
+  for (const auto& path : paths) {
+    base::FilePath file_path = base::FilePath::FromUTF8Unsafe(path);
+    if (!file_path.IsAbsolute() || file_path.ReferencesParent()) {
+      promise.RejectWithErrorMessage("'files' must contain absolute paths");
+      return handle;
+    }
+    file_paths.push_back(std::move(file_path));
+  }
+
   std::string error;
   auto* frame_host = GetLiveMainFrame(web_contents(), &error);
   if (!frame_host) {
     promise.RejectWithErrorMessage(error);
     return handle;
   }
+
+  // Match the normal file chooser's renderer grants. Without them, navigating
+  // away with selected files serializes an unreadable file into PageState and
+  // Chromium terminates the renderer (RFH_CAN_ACCESS_FILES_OF_PAGE_STATE).
+  auto* security_policy = content::ChildProcessSecurityPolicy::GetInstance();
+  const auto process_id = frame_host->GetProcess()->GetID();
+  for (const auto& file_path : file_paths)
+    security_policy->GrantReadFile(process_id, file_path);
 
   auto electron_renderer =
       std::make_unique<mojo::Remote<mojom::ElectronRenderer>>();
@@ -5782,15 +6107,21 @@ v8::Local<v8::Promise> WebContents::SetFileInputFiles(gin::Arguments* args) {
 
 v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
   v8::Isolate* isolate = args->isolate();
-  gin_helper::Promise<void> promise(isolate);
-  v8::Local<v8::Promise> handle = promise.GetHandle();
-
   gin_helper::Dictionary params;
   if (!args->GetNext(&params)) {
+    gin_helper::Promise<void> promise(isolate);
     promise.RejectWithErrorMessage(
         "Expected an object matching CDP Input.dispatchKeyEvent params");
-    return handle;
+    return promise.GetHandle();
   }
+  return DispatchKeyEventParams(isolate, params);
+}
+
+v8::Local<v8::Promise> WebContents::DispatchKeyEventParams(
+    v8::Isolate* isolate,
+    gin_helper::Dictionary params) {
+  gin_helper::Promise<void> promise(isolate);
+  auto handle = promise.GetHandle();
 
   std::string type;
   if (!params.Get("type", &type)) {
@@ -5819,8 +6150,8 @@ v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
   if (params.Get("timestamp", &timestamp_value))
     timestamp = timestamp_value;
 
-  int event_modifiers = GetDispatchKeyEventModifiers(modifiers, auto_repeat,
-                                                     is_keypad, location);
+  int event_modifiers =
+      GetDispatchKeyEventModifiers(modifiers, auto_repeat, is_keypad, location);
   input::NativeWebKeyboardEvent event(
       event_type, event_modifiers, GetDispatchMouseEventTimeTicks(timestamp));
 
@@ -5871,8 +6202,18 @@ v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
     return handle;
   }
 
+  int agent_process = 0;
+  const bool agent = params.Get("_agentProcessId", &agent_process);
+  auto* agent_frame = agent ? AgentInputFrame(web_contents(), params) : nullptr;
+  if (agent && !agent_frame) {
+    promise.RejectWithErrorMessage("STALE_DOCUMENT_OR_FRAME");
+    return handle;
+  }
   content::RenderWidgetHostImpl* widget_host =
-      GetFocusedDispatchWidgetHost(web_contents());
+      agent ? (agent_frame ? content::RenderWidgetHostImpl::From(
+                                 agent_frame->GetRenderWidgetHost())
+                           : nullptr)
+            : GetFocusedDispatchWidgetHost(web_contents());
   if (!widget_host) {
     promise.RejectWithErrorMessage("No RenderWidgetHost available");
     return handle;
@@ -5885,9 +6226,23 @@ v8::Local<v8::Promise> WebContents::DispatchKeyEvent(gin::Arguments* args) {
   for (const std::string& command : commands)
     edit_commands.push_back(blink::mojom::EditCommand::New(command, ""));
 
+  if (widget_host->IsIgnoringInputEvents()) {
+    promise.RejectWithErrorMessage("INPUT_IGNORED");
+    return handle;
+  }
+  AgentInputDispatchObserver observer;
+  widget_host->AddInputEventObserver(&observer);
+  auto host_alive = widget_host->GetWeakPtr();
+  widget_host->ForceFirstFrameAfterNavigationTimeout();
   widget_host->Focus();
   widget_host->ForwardKeyboardEventWithCommands(event, ui::LatencyInfo(),
                                                 std::move(edit_commands));
+  if (host_alive)
+    host_alive->RemoveInputEventObserver(&observer);
+  if (agent && !observer.queued) {
+    promise.RejectWithErrorMessage("INPUT_NOT_QUEUED");
+    return handle;
+  }
   promise.Resolve();
   return handle;
 }
@@ -5901,6 +6256,13 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
   if (!args->GetNext(&params)) {
     promise.RejectWithErrorMessage(
         "Expected an object matching CDP Input.dispatchTouchEvent params");
+    return handle;
+  }
+
+  int agent_process = 0;
+  if (params.Get("_agentProcessId", &agent_process) &&
+      !AgentInputFrame(web_contents(), params)) {
+    promise.RejectWithErrorMessage("STALE_DOCUMENT_OR_FRAME");
     return handle;
   }
 
@@ -5924,8 +6286,7 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
     promise.RejectWithErrorMessage("'touchPoints' must be an array");
     return handle;
   }
-  v8::Local<v8::Array> touch_points_array =
-      touch_points_value.As<v8::Array>();
+  v8::Local<v8::Array> touch_points_array = touch_points_value.As<v8::Array>();
 
   int modifiers = 0;
   params.Get("modifiers", &modifiers);
@@ -5960,6 +6321,10 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
   }
 
   float scale_factor = GetDispatchMouseEventScaleFactor(web_contents());
+  double agent_scale = 1;
+  if (params.Get("_agentScale", &agent_scale) && std::isfinite(agent_scale) &&
+      agent_scale > 0)
+    scale_factor = agent_scale;
   int event_modifiers = GetDispatchMouseEventModifiers(modifiers, 0);
   base::TimeTicks event_timestamp = GetDispatchMouseEventTimeTicks(timestamp);
 
@@ -6087,15 +6452,14 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
   }
 
   auto* root_view = static_cast<content::RenderWidgetHostViewBase*>(view);
-  auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents());
   gfx::PointF point_in_root = events[0].touches[0].PositionInWidget();
   auto shared_events =
       std::make_shared<std::vector<blink::WebTouchEvent>>(std::move(events));
   auto shared_promise =
       std::make_shared<gin_helper::Promise<void>>(std::move(promise));
 
-  wc_impl->GetRenderWidgetHostAtPointAsynchronously(
-      root_view, point_in_root,
+  RouteAgentInput(
+      web_contents(), params, root_view, point_in_root,
       base::BindOnce(
           [](base::WeakPtr<WebContents> self,
              std::shared_ptr<std::vector<blink::WebTouchEvent>> events,
@@ -6132,13 +6496,21 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
                 gfx::PointF touch_point = event.touches[j].PositionInWidget();
                 gfx::PointF position_in_widget(touch_point.x() + delta.x(),
                                                touch_point.y() + delta.y());
-                event.touches[j].SetPositionInWidget(position_in_widget);
+                // TouchEmulator injects in root-view coordinates and its
+                // router transforms them into the child's coordinates again.
+                event.touches[j].SetPositionInWidget(
+                    target->TransformPointToRootCoordSpaceF(
+                        position_in_widget));
                 gfx::Rect bounds = target->GetViewBounds();
-                event.touches[j].SetPositionInScreen(
-                    position_in_widget + bounds.OffsetFromOrigin());
+                event.touches[j].SetPositionInScreen(position_in_widget +
+                                                     bounds.OffsetFromOrigin());
               }
             }
 
+            if (widget_host->IsIgnoringInputEvents()) {
+              promise->RejectWithErrorMessage("INPUT_IGNORED");
+              return;
+            }
             widget_host->Focus();
             auto* emulator =
                 widget_host->GetTouchEmulator(/*create_if_necessary=*/true);
@@ -6146,9 +6518,8 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
               promise->RejectWithErrorMessage("Touch emulator unavailable");
               return;
             }
-            emulator->Enable(
-                input::TouchEmulator::Mode::kInjectingTouchEvents,
-                ui::GestureProviderConfigType::CURRENT_PLATFORM);
+            emulator->Enable(input::TouchEmulator::Mode::kInjectingTouchEvents,
+                             ui::GestureProviderConfigType::CURRENT_PLATFORM);
             for (size_t i = 0; i < events->size(); ++i) {
               emulator->InjectTouchEvent(
                   (*events)[i], target.get(),
@@ -6160,6 +6531,10 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
                             promise)
                       : base::OnceClosure());
             }
+            // Flush the renderer input queue without waiting for an on-screen
+            // presentation; hidden widgets may never produce that signal.
+            widget_host->GetWidgetInputHandler()->PingMainThread(
+                base::DoNothing());
           },
           GetWeakPtr(), shared_events, shared_promise));
 
@@ -7483,8 +7858,21 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::IsFocused>("isFocused")
       .SetMethod<&WebContents::SendInputEvent>("sendInputEvent")
       .SetMethod<&WebContents::DispatchMouseEvent>("dispatchMouseEvent")
+      .SetMethod<&WebContents::SetVirtualCursorEnabled>(
+          "setVirtualCursorEnabled")
+      .SetMethod<&WebContents::SetVirtualCursorImage>("setVirtualCursorImage")
+      .SetMethod<&WebContents::SetVirtualCursorFrameRate>(
+          "setVirtualCursorFrameRate")
+      .SetMethod<&WebContents::GetVirtualCursorState>("_getVirtualCursorState")
+      .SetMethod<&WebContents::RunInputSequence>("_runInputSequence")
+      .SetMethod<&WebContents::CancelInputSequence>("_cancelInputSequence")
+      .SetMethod<&WebContents::GetAgentFrameData>("_getAgentFrameData")
+      .SetMethod<&WebContents::PrepareAgentTarget>("_prepareAgentTarget")
+      .SetMethod<&WebContents::FlushAgentInput>("_flushAgentInput")
+      .SetMethod<&WebContents::SetAgentInputActive>("_setAgentInputActive")
       .SetMethod<&WebContents::QuerySelectorDeep>("querySelectorDeep")
-      .SetMethod<&WebContents::QuerySelectorAcrossDocuments>("querySelectorAcrossDocuments")
+      .SetMethod<&WebContents::QuerySelectorAcrossDocuments>(
+          "querySelectorAcrossDocuments")
       .SetMethod<&WebContents::GetNodeBoxModel>("getNodeBoxModel")
       .SetMethod<&WebContents::ClickSelector>("clickSelector")
       .SetMethod<&WebContents::SetFileInputFiles>("setFileInputFiles")

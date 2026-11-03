@@ -71,6 +71,23 @@ void ServiceWorkerData::TakeHeapSnapshot(mojo::ScopedHandle file,
   std::move(callback).Run(false);
 }
 
+void ServiceWorkerData::GetAgentFrameData(uint32_t,
+                                          bool,
+                                          const std::string&,
+                                          GetAgentFrameDataCallback callback) {
+  std::move(callback).Run("{\"error\":\"DOCUMENT_UNAVAILABLE\"}");
+}
+
+void ServiceWorkerData::PrepareAgentTarget(
+    int32_t,
+    int32_t,
+    bool,
+    bool,
+    bool,
+    PrepareAgentTargetCallback callback) {
+  std::move(callback).Run(nullptr, "DOCUMENT_UNAVAILABLE");
+}
+
 void ServiceWorkerData::QuerySelectorDeep(const std::string& selector,
                                           bool pierce,
                                           bool scroll_into_view,
@@ -94,12 +111,11 @@ void ServiceWorkerData::GetNodeBoxModel(int32_t backend_node_id,
   std::move(callback).Run(false, nullptr);
 }
 
-void ServiceWorkerData::SetFileInputFiles(
-    const std::string& selector,
-    int32_t backend_node_id,
-    bool pierce,
-    const std::vector<std::string>& paths,
-    SetFileInputFilesCallback callback) {
+void ServiceWorkerData::SetFileInputFiles(const std::string& selector,
+                                          int32_t backend_node_id,
+                                          bool pierce,
+                                          const std::vector<std::string>& paths,
+                                          SetFileInputFilesCallback callback) {
   NOTIMPLEMENTED();
   std::move(callback).Run(false, "Not supported in service worker");
 }

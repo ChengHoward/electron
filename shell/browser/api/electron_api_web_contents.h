@@ -14,6 +14,7 @@
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/weak_ptr.h"
@@ -48,9 +49,9 @@
 #include "shell/common/gin_helper/constructible.h"
 #include "shell/common/gin_helper/pinnable.h"
 #include "shell/common/gin_helper/wrappable.h"
-#include "third_party/skia/include/core/SkRegion.h"
 #include "third_party/blink/public/common/input/pointer_id.h"
 #include "third_party/blink/public/common/input/web_touch_point.h"
+#include "third_party/skia/include/core/SkRegion.h"
 #include "v8/include/cppgc/persistent.h"
 
 #if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_MAC)
@@ -113,6 +114,7 @@ namespace electron {
 
 class DevToolsContextMenu;
 class DraggableRegionDebugger;
+class VirtualCursor;
 class ElectronBrowserContext;
 class InspectableWebContents;
 class WebContentsZoomController;
@@ -127,6 +129,7 @@ class BaseWindow;
 class Debugger;
 class FrameSubscriber;
 class Session;
+class InputSequence;
 
 // Wrapper around the content::WebContents.
 class WebContents final : public ExclusiveAccessContext,
@@ -346,6 +349,26 @@ class WebContents final : public ExclusiveAccessContext,
 
   // CDP Input.dispatchMouseEvent equivalent without attaching the debugger.
   v8::Local<v8::Promise> DispatchMouseEvent(gin::Arguments* args);
+  v8::Local<v8::Promise> DispatchMouseEventParams(
+      v8::Isolate* isolate,
+      gin_helper::Dictionary params);
+  v8::Local<v8::Promise> DispatchKeyEventParams(v8::Isolate* isolate,
+                                                gin_helper::Dictionary params);
+  v8::Local<v8::Promise> SetVirtualCursorEnabled(gin::Arguments* args);
+  void SetVirtualCursorImage(gin::Arguments* args);
+  void SetVirtualCursorFrameRate(gin::Arguments* args);
+  base::DictValue GetVirtualCursorState();
+  v8::Local<v8::Promise> RunInputSequence(gin::Arguments* args);
+  void CancelInputSequence(int id);
+  void UpdateVirtualCursor(const blink::WebMouseEvent& event,
+                           content::RenderWidgetHostView* view);
+  bool CanDragEnter(content::WebContents*,
+                    const content::DropData&,
+                    blink::DragOperationsMask) override;
+  v8::Local<v8::Promise> GetAgentFrameData(gin::Arguments* args);
+  v8::Local<v8::Promise> PrepareAgentTarget(gin::Arguments* args);
+  v8::Local<v8::Promise> FlushAgentInput(int process, int routing);
+  void SetAgentInputActive(bool active);
 
   // Blink C++ querySelector that can pierce closed author shadow roots.
   // Returns null when not found.
@@ -951,6 +974,13 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Whether background throttling is disabled.
   bool background_throttling_ = true;
+  friend class InputSequence;
+  std::unique_ptr<InputSequence> input_sequence_;
+  int input_sequence_id_ = 0;
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<VirtualCursor> virtual_cursor_;
+  uint64_t virtual_cursor_epoch_ = 0;
+#endif
 
   bool ignore_menu_shortcuts_ = false;
 
@@ -1058,6 +1088,7 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Active touch points for CDP-style dispatchTouchEvent sessions.
   base::flat_map<blink::PointerId, blink::WebTouchPoint> dispatch_touch_points_;
+  base::ScopedClosureRunner agent_input_capture_;
 
   base::WeakPtrFactory<WebContents> weak_factory_{this};
 };

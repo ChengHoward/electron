@@ -10,7 +10,7 @@
 
 本文档描述相对上游 Electron 的**定制 API、行为差异、Chromium 补丁与源码位置**，面向使用方与二次编译维护者。
 
-变更流水账见 [定制变更简述.md](./定制变更简述.md) / [定制变更详细.md](./定制变更详细.md)。私有 npm / 二进制镜像见下文 **§7.2** 与 [私有镜像.md](./私有镜像.md)。
+变更流水账见 [定制变更简述.md](./定制变更简述.md) / [定制变更详细.md](./定制变更详细.md)。开发、编译和升版本见 [定制开发编译与更新.md](./定制开发编译与更新.md)。私有 npm / 二进制镜像见下文 **§7.2** 与 [私有镜像.md](./私有镜像.md)。
 
 ---
 
@@ -694,3 +694,7 @@ cd <repo>/mirror
 | `src/electron/docs/api/session.md` / `net.md` | 含 `headerOrder` |
 | `src/electron/docs/api/structures/user-agent-*.md` | options / metadata 结构 |
 | `src/electron/docs/api/structures/dom-*.md` 等 | DOM 自动化结构体 |
+
+## 2026-11-03：原生虚拟光标与批量输入（.4）
+
+新增 `setVirtualCursorEnabled`、`setVirtualCursorImage`、`setVirtualCursorFrameRate`、`dispatchInputSequence`。Windows 原生 UI 光标与页面截图隔离；支持独立阻断真实指针/键盘、限帧、鼠标键盘统一 atMs 时间线、有界焦点确认、取消及失败清理。完整参数、实测和未覆盖硬件边界见 [Agent 自动化](./Agent自动化.md)。本版本同时包含 clickSelector 修复；不新增页面自动化标识，不承诺行为无法识别。

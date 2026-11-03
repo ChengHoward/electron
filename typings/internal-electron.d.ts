@@ -1,3 +1,4 @@
+/// <reference path="./agent-automation.d.ts" />
 /// <reference path="../electron.d.ts" />
 
 /**
@@ -93,30 +94,44 @@ declare namespace Electron {
   }
 
   interface WebContents {
+    _getAgentFrameData(
+      process: number,
+      routing: number,
+      limit: number,
+      pierce: boolean,
+      selector: string
+    ): Promise<string>;
+    _flushAgentInput(process: number, routing: number): Promise<void>;
+    _setAgentInputActive(active: boolean): void;
+    _runInputSequence(
+      steps: (Electron.InputSequenceMouseStep | Electron.InputSequenceKeyStep)[],
+      options: Omit<Electron.InputSequenceOptions, 'signal'>,
+      id: number
+    ): Promise<Electron.InputSequenceResult>;
+    _cancelInputSequence(id: number): void;
+    _getVirtualCursorState(): Record<string, unknown>;
+    _prepareAgentTarget(
+      process: number,
+      routing: number,
+      document: number,
+      node: number,
+      focus: boolean,
+      scrollIntoView?: boolean
+    ): Promise<DomElementInfo & { deviceScaleFactor: number; documentToken: string }>;
     _awaitNextLoad(expectedUrl: string): Promise<void>;
     _setConsoleMessageObserved(observed: boolean): void;
-    _loadURLWithResponse(
-      url: string,
-      response: ElectronInternal.LoadURLWithResponseOptions
-    ): void;
-    loadURLWithResponse(
-      url: string,
-      response: ElectronInternal.LoadURLWithResponseOptions
-    ): Promise<void>;
+    _loadURLWithResponse(url: string, response: ElectronInternal.LoadURLWithResponseOptions): void;
+    loadURLWithResponse(url: string, response: ElectronInternal.LoadURLWithResponseOptions): Promise<void>;
     getOwnerBrowserWindow(): Electron.BrowserWindow | null;
     getLastWebPreferences(): Electron.WebPreferences | null;
     _getProcessMemoryInfo(processId?: number): Electron.ProcessMemoryInfo;
     _getPreloadScript(): Electron.PreloadScript | null;
     browserWindowOptions: BrowserWindowConstructorOptions;
     _windowOpenHandler: ((details: Electron.HandlerDetails) => any) | null;
-    _jsDialogHandler:
-      | ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined)
-      | null;
+    _jsDialogHandler: ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined) | null;
     _jsDialogTimeoutMs: number;
     setJsDialogHandler(
-      handler:
-        | ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined)
-        | null
+      handler: ((details: Electron.JsDialogDetails) => Electron.JsDialogResponse | null | undefined) | null
     ): void;
     setJsDialogTimeout(ms: number): void;
     _callWindowOpenHandler(
@@ -224,10 +239,7 @@ declare namespace Electron {
   // Deprecated / undocumented BrowserWindow methods
   interface BrowserWindow {
     getURL(): string;
-    loadURLWithResponse(
-      url: string,
-      response: ElectronInternal.LoadURLWithResponseOptions
-    ): Promise<void>;
+    loadURLWithResponse(url: string, response: ElectronInternal.LoadURLWithResponseOptions): Promise<void>;
     send(channel: string, ...args: any[]): void;
     openDevTools(options?: Electron.OpenDevToolsOptions): void;
     closeDevTools(): void;

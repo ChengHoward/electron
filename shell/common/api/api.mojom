@@ -81,6 +81,7 @@ interface ElectronFrame {
 // Element info from Blink C++ (pierces closed shadow). backend_node_id matches
 // CDP DOM BackendNodeId / blink::Node::GetDomNodeId().
 struct DomElementInfo {
+  int32 document_id;
   int32 backend_node_id;
   string tag_name;
   // Bounds relative to the local RenderWidget (same space as BoundsInWidget).
@@ -122,6 +123,11 @@ struct DomBoxModel {
 };
 
 interface ElectronRenderer {
+  // Native DOM/AX reads, including author closed shadow roots. No page script.
+  GetAgentFrameData(uint32 max_nodes, bool pierce, string selector) => (string json);
+  PrepareAgentTarget(int32 document_id, int32 node_id, bool focus,
+                     bool scroll_into_view, bool verify_focus) =>
+      (DomElementInfo? info, string error);
   Message(
       bool internal,
       string channel,

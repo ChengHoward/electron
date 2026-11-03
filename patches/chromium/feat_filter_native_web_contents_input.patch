@@ -1,0 +1,220 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Tue, 3 Nov 2026 09:00:00 +0800
+Subject: feat: filter native WebContents input before Aura and IME dispatch
+
+Allow the embedder to block native pointer or keyboard input independently.
+Injected renderer input continues through RenderWidgetHost, bypassing the
+OS-facing view entry. TextInputClient mutations share the keyboard gate.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_aura.cc b/content/browser/renderer_host/render_widget_host_view_aura.cc
+index cd8f8a1ac8971..51f7c780e1f76 100644
+--- a/content/browser/renderer_host/render_widget_host_view_aura.cc
++++ b/content/browser/renderer_host/render_widget_host_view_aura.cc
+@@ -1613,6 +1613,8 @@ base::WeakPtr<ui::TextInputClient> RenderWidgetHostViewAura::AsWeakPtr() {
+ 
+ void RenderWidgetHostViewAura::SetCompositionText(
+     const ui::CompositionText& composition) {
++  if (IsNativeInputBlocked(true))
++    return;
+   if (!text_input_manager_ || !text_input_manager_->GetActiveWidget())
+     return;
+ 
+@@ -1627,6 +1629,10 @@ void RenderWidgetHostViewAura::SetCompositionText(
+ }
+ 
+ size_t RenderWidgetHostViewAura::ConfirmCompositionText(bool keep_selection) {
++  if (IsNativeInputBlocked(true)) {
++    has_composition_text_ = false;
++    return 0;
++  }
+   if (text_input_manager_ && text_input_manager_->GetActiveWidget() &&
+       has_composition_text_) {
+     text_input_manager_->GetActiveWidget()->ImeFinishComposingText(
+@@ -1639,6 +1645,10 @@ size_t RenderWidgetHostViewAura::ConfirmCompositionText(bool keep_selection) {
+ }
+ 
+ void RenderWidgetHostViewAura::ClearCompositionText() {
++  if (IsNativeInputBlocked(true)) {
++    has_composition_text_ = false;
++    return;
++  }
+   if (text_input_manager_ && text_input_manager_->GetActiveWidget() &&
+       has_composition_text_)
+     text_input_manager_->GetActiveWidget()->ImeCancelComposition();
+@@ -1648,6 +1658,8 @@ void RenderWidgetHostViewAura::ClearCompositionText() {
+ void RenderWidgetHostViewAura::InsertText(
+     const std::u16string& text,
+     InsertTextCursorBehavior cursor_behavior) {
++  if (IsNativeInputBlocked(true))
++    return;
+   CHECK_NE(GetTextInputType(), ui::TEXT_INPUT_TYPE_NONE);
+ 
+   if (text_input_manager_ && text_input_manager_->GetActiveWidget()) {
+@@ -1663,6 +1675,8 @@ void RenderWidgetHostViewAura::InsertText(
+ }
+ 
+ void RenderWidgetHostViewAura::InsertChar(const ui::KeyEvent& event) {
++  if (IsNativeInputBlocked(true))
++    return;
+   if (popup_child_host_view_ && popup_child_host_view_->NeedsInputGrab()) {
+     popup_child_host_view_->InsertChar(event);
+     return;
+@@ -1701,6 +1715,8 @@ bool RenderWidgetHostViewAura::CanInsertImage() {
+ }
+ 
+ void RenderWidgetHostViewAura::InsertImage(const GURL& src) {
++  if (IsNativeInputBlocked(true))
++    return;
+   auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+ 
+   if (!input_handler) {
+@@ -1712,11 +1728,26 @@ void RenderWidgetHostViewAura::InsertImage(const GURL& src) {
+ }
+ 
+ ui::TextInputType RenderWidgetHostViewAura::GetTextInputType() const {
++  if (IsNativeInputBlocked(true))
++    return ui::TEXT_INPUT_TYPE_NONE;
+   if (text_input_manager_ && text_input_manager_->GetTextInputState())
+     return text_input_manager_->GetTextInputState()->type;
+   return ui::TEXT_INPUT_TYPE_NONE;
+ }
+ 
++void RenderWidgetHostViewAura::SetNativeInputFilter(
++    base::RepeatingCallback<bool(bool)> filter) {
++  const bool was_blocked = native_keyboard_blocked_;
++  native_input_filter_ = std::move(filter);
++  native_keyboard_blocked_ = IsNativeInputBlocked(true);
++  auto* input_method = GetInputMethod();
++  if (!input_method || input_method->GetTextInputClient() != this)
++    return;
++  if (was_blocked || native_keyboard_blocked_)
++    input_method->CancelComposition(this);
++  input_method->OnTextInputTypeChanged(this);
++}
++
+ ui::TextInputMode RenderWidgetHostViewAura::GetTextInputMode() const {
+   if (text_input_manager_ && text_input_manager_->GetTextInputState())
+     return text_input_manager_->GetTextInputState()->mode;
+@@ -2004,6 +2035,8 @@ bool RenderWidgetHostViewAura::GetEditableSelectionRange(
+ 
+ bool RenderWidgetHostViewAura::SetEditableSelectionRange(
+     const gfx::Range& range) {
++  if (IsNativeInputBlocked(true))
++    return false;
+   // TODO(crbug.com/41432062): Write an unit test for this method.
+   auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+   if (!input_handler)
+@@ -2056,6 +2089,8 @@ void RenderWidgetHostViewAura::OnInputMethodChanged() {
+ 
+ bool RenderWidgetHostViewAura::ChangeTextDirectionAndLayoutAlignment(
+       base::i18n::TextDirection direction) {
++  if (IsNativeInputBlocked(true))
++    return false;
+   if (!GetTextInputManager() && !GetTextInputManager()->GetActiveWidget())
+     return false;
+ 
+@@ -2066,6 +2101,8 @@ bool RenderWidgetHostViewAura::ChangeTextDirectionAndLayoutAlignment(
+ 
+ void RenderWidgetHostViewAura::ExtendSelectionAndDelete(
+     size_t before, size_t after) {
++  if (IsNativeInputBlocked(true))
++    return;
+   auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+   if (!input_handler)
+     return;
+@@ -2138,6 +2175,8 @@ bool RenderWidgetHostViewAura::ShouldDoLearning() {
+ bool RenderWidgetHostViewAura::SetCompositionFromExistingText(
+     const gfx::Range& range,
+     const std::vector<ui::ImeTextSpan>& ui_ime_text_spans) {
++  if (IsNativeInputBlocked(true))
++    return false;
+   auto* input_handler = GetFrameWidgetInputHandlerForFocusedWidget();
+   if (!input_handler)
+     return false;
+@@ -2540,6 +2579,11 @@ bool RenderWidgetHostViewAura::RequiresDoubleTapGestureEvents() const {
+ // RenderWidgetHostViewAura, ui::EventHandler implementation:
+ 
+ void RenderWidgetHostViewAura::OnKeyEvent(ui::KeyEvent* event) {
++  if (IsNativeInputBlocked(true)) {
++    event->SetHandled();
++    event->StopPropagation();
++    return;
++  }
+   if (destroy_pending()) {
+     event->SetHandled();
+     return;
+@@ -2582,6 +2626,11 @@ void RenderWidgetHostViewAura::OnKeyEvent(ui::KeyEvent* event) {
+ }
+ 
+ void RenderWidgetHostViewAura::OnMouseEvent(ui::MouseEvent* event) {
++  if (IsNativeInputBlocked(false)) {
++    event->SetHandled();
++    event->StopPropagation();
++    return;
++  }
+   if (destroy_pending()) {
+     event->SetHandled();
+     return;
+@@ -2822,6 +2871,11 @@ void RenderWidgetHostViewAura::OnFocusHandwritingTarget(
+ #endif  // BUILDFLAG(IS_WIN)
+ 
+ void RenderWidgetHostViewAura::OnScrollEvent(ui::ScrollEvent* event) {
++  if (IsNativeInputBlocked(false)) {
++    event->SetHandled();
++    event->StopPropagation();
++    return;
++  }
+   if (destroy_pending()) {
+     event->SetHandled();
+     return;
+@@ -2831,6 +2885,11 @@ void RenderWidgetHostViewAura::OnScrollEvent(ui::ScrollEvent* event) {
+ }
+ 
+ void RenderWidgetHostViewAura::OnTouchEvent(ui::TouchEvent* event) {
++  if (IsNativeInputBlocked(false)) {
++    event->SetHandled();
++    event->StopPropagation();
++    return;
++  }
+   if (destroy_pending()) {
+     event->SetHandled();
+     return;
+@@ -2876,6 +2935,11 @@ void RenderWidgetHostViewAura::OnTouchEvent(ui::TouchEvent* event) {
+ }
+ 
+ void RenderWidgetHostViewAura::OnGestureEvent(ui::GestureEvent* event) {
++  if (IsNativeInputBlocked(false)) {
++    event->SetHandled();
++    event->StopPropagation();
++    return;
++  }
+   if (destroy_pending()) {
+     event->SetHandled();
+     return;
+diff --git a/content/browser/renderer_host/render_widget_host_view_aura.h b/content/browser/renderer_host/render_widget_host_view_aura.h
+index fdf2d0fffe65e..273b834d0be0f 100644
+--- a/content/browser/renderer_host/render_widget_host_view_aura.h
++++ b/content/browser/renderer_host/render_widget_host_view_aura.h
+@@ -148,6 +148,12 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
+       const gfx::Rect& keyboard_rect) override;
+   bool IsHTMLFormPopup() const override;
+   void ResetGestureDetection() override;
++  // Embedder gate for OS/UI input. Direct RenderWidgetHost injection bypasses
++  // this gate, so trusted automation remains independent of physical devices.
++  void SetNativeInputFilter(base::RepeatingCallback<bool(bool)> filter);
++  bool IsNativeInputBlocked(bool keyboard) const {
++    return native_input_filter_ && native_input_filter_.Run(keyboard);
++  }
+   void SetShouldUseDefaultDeadlineOnResize(bool enable) override;
+ 
+   // Overridden from RenderWidgetHostViewBase:
+@@ -868,6 +874,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
+   // While this is a ui::EventHandler for targetting, |event_handler_| actually
+   // provides an implementation, and directs events to |host_|.
+   std::unique_ptr<RenderWidgetHostViewEventHandler> event_handler_;
++  base::RepeatingCallback<bool(bool)> native_input_filter_;
++  bool native_keyboard_blocked_ = false;
+ 
+   // If this object is the main view of a RenderWidgetHostImpl, this value
+   // equals to the FrameSinkId of that widget.

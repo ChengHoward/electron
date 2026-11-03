@@ -208,7 +208,11 @@ if (current_toolchain == default_toolchain) {
   npm_action("build_electron_definitions") {
     script = "gn-typescript-definitions"
     args = [ rebase_path("$target_gen_dir/tsc/typings/electron.d.ts") ]
-    inputs = auto_filenames.api_docs + [ "yarn.lock" ]
+    inputs = auto_filenames.api_docs + [
+               "yarn.lock",
+               "typings/agent-automation.d.ts",
+               "script/append-agent-types.mjs",
+             ]
 
     outputs = [ "$target_gen_dir/tsc/typings/electron.d.ts" ]
   }
@@ -219,7 +223,10 @@ if (current_toolchain == default_toolchain) {
     deps = [ ":build_electron_definitions" ]
 
     script = "typecheck"
-    inputs = auto_filenames.lib_typecheck_sources + [ "yarn.lock" ]
+    inputs = auto_filenames.lib_typecheck_sources + [
+               "yarn.lock",
+               "typings/agent-automation.d.ts",
+             ]
     outputs = [ "$target_gen_dir/electron_lib_typecheck.stamp" ]
     args = [
       "--project",

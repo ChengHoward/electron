@@ -52,6 +52,16 @@ class ServiceWorkerData : public mojom::ElectronRenderer {
   }
 
   // mojom::ElectronRenderer
+  void GetAgentFrameData(uint32_t,
+                         bool,
+                         const std::string&,
+                         GetAgentFrameDataCallback callback) override;
+  void PrepareAgentTarget(int32_t,
+                          int32_t,
+                          bool,
+                          bool,
+                          bool,
+                          PrepareAgentTargetCallback callback) override;
   void Message(bool internal,
                const std::string& channel,
                electron::SerializedValue arguments) override;
