@@ -207,6 +207,7 @@ def controls(hwnd, pid):
                             'width': rect.right - rect.left,
                             'height': rect.bottom - rect.top}}
         if name.value == 'ComboBox':
+            entry['selectedIndex'] = user.SendMessageW(child, 0x0147, 0, 0)
             count = user.SendMessageW(child, 0x0146, 0, 0)
             entry['items'] = []
             for index in range(min(max(count, 0), 100)):
@@ -215,6 +216,12 @@ def controls(hwnd, pid):
                     value = ctypes.create_unicode_buffer(length + 1)
                     user.SendMessageW(child, 0x0148, index, ctypes.addressof(value))
                     entry['items'].append(value.value)
+        elif name.value == 'Edit':
+            # GetWindowText cannot read another process's Edit contents. This
+            # child has already passed the same PID guard as its dialog.
+            value = ctypes.create_unicode_buffer(32769)
+            user.SendMessageW(child, 0x000D, len(value), ctypes.addressof(value))
+            entry['text'] = value.value
         found.append(entry)
         return True
 
@@ -223,6 +230,12 @@ def controls(hwnd, pid):
 
 
 request = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+text_interval_ms = request.get('textIntervalMs', 0)
+if (not isinstance(text_interval_ms, int) or isinstance(text_interval_ms, bool)
+        or not 0 <= text_interval_ms <= 50):
+    raise ValueError('textIntervalMs must be an integer from 0 to 50')
+if 'textIntervalMs' in request and request.get('action') != 'text':
+    raise ValueError('textIntervalMs is only valid for text input')
 pid = int(request['pid'])
 allowed_pids = {pid, *map(int, request.get('allowedPids', []))}
 action = request['action']
@@ -388,6 +401,8 @@ else:
             code = int.from_bytes(text[offset:offset + 2], 'little')
             send(INPUT(type=1, ki=KEYBDINPUT(wScan=code, dwFlags=4)), pid)
             send(INPUT(type=1, ki=KEYBDINPUT(wScan=code, dwFlags=6)), pid)
+            if text_interval_ms:
+                time.sleep(text_interval_ms / 1000)
     elif action == 'key':
         modifiers = request.get('modifiers', [])
         answer['before'] = {name: bool(user.GetAsyncKeyState(vk) & 0x8000)

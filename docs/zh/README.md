@@ -2,7 +2,7 @@
 
 本目录为 fork 定制功能的中文说明（与仓库根旁 `main/docs` 同步维护）。
 
-2026-11-04 Windows x64 发行版本为 [`45.0.0-cloudbypass.6`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)，本地镜像已提供，安装验证及附件见该版本发布记录。Linux x64 仍使用已有 `45.0.0-cloudbypass.2`；本次不提供 Linux 或 macOS `.6` 包。
+2026-11-04 Windows x64 发行版本为 [`45.0.0-cloudbypass.7`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.7)，安装验证及附件见该版本发布记录，同版本焦点框修订以[当前验收记录](./原生亚克力与滚动条.md)中的 SHA-256 区分。Linux x64 仍使用已有 `45.0.0-cloudbypass.2`；本次仅提供 Windows x64 包。
 
 | 文档 | 说明 |
 |------|------|
@@ -20,4 +20,5 @@
 - [原生界面与菜单定制规划](./原生界面定制规划.md)：PageInfo 本地化、NativePanel 样式、地址建议、下载和悬浮输入，以及独立原生 Menu 样式与行内控件的范围、参考图和验收要求。
 - [原生界面定制实现与测试](./原生界面定制实现与测试.md)：Windows `.6` 对应的 NativePanel 样式、原生 Menu 行内控件、Chromium 原版证书查看器及实机截图。安装验证及附件见 [`.6` 发布记录](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)。
 - [原生多行便笺](./原生多行便笺.md)：早期 Textarea 预览的接口、示例及历史验收；后续随 Windows `.7` 提供，最新整体记录见下一项。
-- [原生亚克力与滚动条](./原生亚克力与滚动条.md)：Windows [`45.0.0-cloudbypass.7`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.7) 的 Textarea、系统亚克力、细滚动条与 `overlay`／`gutter` 位置配置；验收通过，准备发布。已发布 `.6` 不包含这些新增能力。
+- [原生亚克力与滚动条](./原生亚克力与滚动条.md)：Windows [`45.0.0-cloudbypass.7`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.7) 的 Textarea、系统亚克力、细滚动条与 `overlay`／`gutter` 位置配置，以及同版本 PageInfo／图标按钮焦点框修订；发行验收通过，当前构建与首发历史按 SHA-256 区分。已发布 `.6` 不包含这些新增能力。
+- [原生界面测试流程](./原生界面测试流程.md)：按模块运行、失败单项补测，以及发布时仅安装验证一次的精简流程。

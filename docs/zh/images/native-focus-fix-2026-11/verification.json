@@ -1,0 +1,725 @@
+{
+  "completedUtc": "2026-11-04T11:12:13.951685+00:00",
+  "status": "same-version-refresh-tested-not-yet-published",
+  "published": false,
+  "distributionVersion": "45.0.0-cloudbypass.7",
+  "revision": "focus-ring-correction-20261104",
+  "platform": "win32",
+  "arch": "x64",
+  "executable": "D:\\electron\\main\\src\\out\\Release\\electron.exe",
+  "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+  "sourceBaseline": "782f7d28c0e92aa670287a1592f51bb4868f9518",
+  "sourceState": "Uncommitted focus-ring correction and Save As test-driver pacing on top of the initial .7 publication; original records preserved",
+  "initialAttempts": {
+    "reason": "The initial Save As click was occluded by a pre-existing system dialog. A later full run and an original .7 control run also showed a malformed native filename. The filename corruption was read back from the own-process Edit control; a timing/autocomplete interaction is an inference. Final driver uses paced physical input and exact readback.",
+    "assertionsRetained": true,
+    "unrelatedWindowsUntouched": true,
+    "records": [
+      {
+        "source": "final-verified\\zh-CN\\results.json",
+        "sourceSha256": "e8619dfe7cabe85bd1297ae7d1e13e12f33e291580e0b5e12cac2416d7addc17",
+        "selected": "zh-CN/results.json",
+        "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+        "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+        "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+        "summary": {
+          "total": 43,
+          "passed": 43,
+          "failed": 0
+        }
+      },
+      {
+        "source": "final-verified\\en-US\\results.json",
+        "sourceSha256": "a83a2405a3a1169130562fde654a8b0506a662acfd5cf41c20187bc84558add0",
+        "selected": "en-US/results.json",
+        "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+        "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+        "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+        "summary": {
+          "total": 3,
+          "passed": 3,
+          "failed": 0
+        }
+      },
+      {
+        "source": "final-verified\\ar\\results.json",
+        "sourceSha256": "25c8c5a5fd19e9343e80e73936ce694b6064a18544208c3c7ac9053f54888306",
+        "selected": "ar/results.json",
+        "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+        "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+        "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+        "summary": {
+          "total": 3,
+          "passed": 3,
+          "failed": 0
+        }
+      }
+    ],
+    "originalReportArchive": "pre-driver-fix-archive",
+    "supplementalRerun": {
+      "reason": "The full run observed the native hover flag before its scheduled thumb repaint (4 vs 6 DIP). The same unchanged fixture and executable passed this complete case in a dedicated process.",
+      "originalSummary": {
+        "total": 43,
+        "passed": 42,
+        "failed": 1
+      },
+      "originalReport": "final-verified/zh-CN-full/results.json",
+      "originalReportSha256": "be5cc15cc95e7a0c8589e4f6fbf9a7a766f4095f1cf1472f5bcf24745e49b9cc",
+      "rerunReport": "final-verified/list-scrollbar-targeted/results.json",
+      "rerunReportSha256": "2fcdc787d97f29201c86156c4fcb5c915ea888431a0a7b397c15444612649b26",
+      "case": "scrollbars: list uses a thin rounded arrowless thumb, transparent track, native paging/drag and hover",
+      "assertionsUnchanged": true,
+      "selectedResultsAreActualPasses": true,
+      "completedUtc": "2026-11-04T11:11:28.044210+00:00"
+    },
+    "additionalAttempts": [
+      "safe-window-rerun",
+      "safe-window-rerun-final",
+      "old-baseline-control",
+      "tls-diagnostic"
+    ],
+    "completedUtc": "2026-11-04T11:11:49.104665+00:00"
+  },
+  "rerunRelation": [
+    {
+      "source": "final-verified\\zh-CN\\results.json",
+      "sourceSha256": "e8619dfe7cabe85bd1297ae7d1e13e12f33e291580e0b5e12cac2416d7addc17",
+      "selected": "zh-CN/results.json",
+      "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+      "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+      "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+      "summary": {
+        "total": 43,
+        "passed": 43,
+        "failed": 0
+      }
+    },
+    {
+      "source": "final-verified\\en-US\\results.json",
+      "sourceSha256": "a83a2405a3a1169130562fde654a8b0506a662acfd5cf41c20187bc84558add0",
+      "selected": "en-US/results.json",
+      "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+      "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+      "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+      "summary": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "source": "final-verified\\ar\\results.json",
+      "sourceSha256": "25c8c5a5fd19e9343e80e73936ce694b6064a18544208c3c7ac9053f54888306",
+      "selected": "ar/results.json",
+      "executableSha256": "c737bce9ba686cd08a63511a8c9b8c80edc001209895867b2c6cc0847c70518a",
+      "fixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+      "helperSha256": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+      "summary": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  ],
+  "versions": {
+    "node": "24.22.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "150",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.11",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026e",
+    "undici": "7.29.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.6.75.16-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "45.0.0-beta.5",
+    "chrome": "156.0.8078.36"
+  },
+  "summary": {
+    "total": 138,
+    "passed": 138,
+    "failed": 0
+  },
+  "suites": [
+    {
+      "name": "zh-CN",
+      "total": 43,
+      "passed": 43,
+      "failed": 0
+    },
+    {
+      "name": "high-contrast",
+      "total": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "baseline",
+      "total": 42,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "name": "en-US",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "ar",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "agent",
+      "total": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    {
+      "name": "input",
+      "total": 26,
+      "passed": 26,
+      "failed": 0
+    },
+    {
+      "name": "click",
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    }
+  ],
+  "schemaSuites": [
+    {
+      "report": "material-schema-validation.json",
+      "total": 42,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "report": "scrollbar-placement-schema-validation.json",
+      "total": 84,
+      "passed": 84,
+      "failed": 0
+    }
+  ],
+  "schemaSummary": {
+    "total": 126,
+    "passed": 126,
+    "failed": 0
+  },
+  "typescriptGenerationAndSmokePassed": true,
+  "gnDependencyTargetsPassed": 1,
+  "implementation": "Native Chromium Views FocusRing inset 1 DIP with 2 DIP stroke; action radius follows style.radius",
+  "regressionProof": {
+    "oldExecutableSha256": "bbd02f3fed48537a5a1b7f66d313a7a73a64cfb20e80f74aea35898e4809b468",
+    "oldSummary": {
+      "total": 3,
+      "passed": 0,
+      "failed": 3
+    },
+    "newSummary": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    "fixtureSha256": "4a704b35a8981f25d74a1206e557f8d9ad0dcb621f9cbfe49c93f92e07b408b0",
+    "finalFixtureSha256": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+    "finalFocusCaseNames": [
+      "focus ring: PageInfo security row paints a complete mouse and Tab outline before native navigation",
+      "focus ring: full-width rows retain four pixel edges with mouse, Tab, arrows and activation in light/dark",
+      "focus ring: icon button radius updates retain rounded pixels, focus and keyboard activation"
+    ],
+    "beforeScreenshots": [
+      "before-focus-page-info-light-mouse.png",
+      "before-focus-page-info-dark-mouse.png"
+    ],
+    "note": "Original before/after focus proof uses one identical fixture. The final full fixture adds Save As driver pacing; focus cases also pass there."
+  },
+  "materialEvidence": {
+    "none": {
+      "requested": "none",
+      "applied": "none",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 0,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "light": {
+      "requested": "acrylic",
+      "applied": "acrylic",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 3,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "dark": {
+      "requested": "acrylic",
+      "applied": "acrylic",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 3,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "contrast": {
+      "images": {
+        "reference": {
+          "highDeviation": 127.5,
+          "lowContrast": 192
+        },
+        "none": {
+          "highDeviation": 0,
+          "lowContrast": 0
+        },
+        "light": {
+          "highDeviation": 4.108939855546846,
+          "lowContrast": 52.25803879883074,
+          "relativeHighFrequency": 0.11840436725120859
+        },
+        "dark": {
+          "highDeviation": 4.116746800855988,
+          "lowContrast": 52.256444326335355,
+          "relativeHighFrequency": 0.11863295405676567
+        }
+      }
+    }
+  },
+  "fallbackEvidence": {
+    "environment": {
+      "attribute": 38,
+      "hresult": 0,
+      "backdrop": 1,
+      "composition": true,
+      "windowsBuild": 26100,
+      "transparencyEnabled": true,
+      "highContrast": false,
+      "energySaver": false
+    },
+    "reference": {
+      "pixels": [
+        {
+          "x": 430,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 434,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 438,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 442,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 446,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 454,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 458,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "opaque": {
+      "pixels": [
+        {
+          "x": 430,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 434,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 438,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 442,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 446,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 450,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 454,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 458,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "nonePixels": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "systemPalette": {
+      "window": [
+        255,
+        255,
+        255
+      ],
+      "text": [
+        0,
+        0,
+        0
+      ],
+      "highlight": [
+        0,
+        120,
+        215
+      ]
+    },
+    "scrollbarPixels": {
+      "pixels": [
+        {
+          "x": 938,
+          "y": 537,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 938,
+          "y": 719,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "hoverPixels": {
+      "pixels": [
+        {
+          "x": 938,
+          "y": 537,
+          "rgb": [
+            0,
+            120,
+            215
+          ]
+        }
+      ]
+    }
+  },
+  "sourceHashes": {
+    "lib/browser/api/native-panel.ts": "d4e9450135902a229d33a9a27ed0f3adf8803715bdca937bfe0b5332f01bbbf5",
+    "shell/browser/api/electron_api_native_panel.cc": "7c18f56153ce168f06d25a4c312dbc3e63c623ab9aa6b553e76043bfc37b6542",
+    "shell/browser/api/electron_api_native_panel.h": "590e8e74fb567fad3a4f4fc2103394dd759cab1caad063b35d5501229c191823",
+    "shell/browser/ui/views/native_panel.cc": "c3c47abe74d5c289085f2db210f5ab05b46fb2281847db0d96c30cff1bbe9840",
+    "shell/browser/ui/views/native_panel.h": "2e9051688f197b56f793e6179788c31fcb07f2c38908f6a5d4ba2f036847a626",
+    "test/native-panels/native-ui-preview.cjs": "98d536a7b939d984307ea9c2640ecf47d243f5611e81a2802009ebe043b44ae1",
+    "test/native-panels/native-panels-win.py": "721a07df66de32278ca732a671036bcd5a189387ba12d424dd767032eefd3d30",
+    "test/native-panels/run_native_ui_preview.py": "c1e894e3619ed3e4a7af85a0b68c8321c86fb80336abb6dc64dcf050efe278ac",
+    "test/native-panels/run_native_ui_checks.py": "567cebeeff34f29c360e4c5397f41ea450388b67811e8cc593514bf6c70b84ea",
+    "electron.d.ts": "c53f57357bc5a4aafcee927147eb8ba0814a57c10060dffbc1f96502f83b1a88"
+  },
+  "resourceHashes": {
+    "resources.pak": "f17aefec32e2dd9fd323c6e232b7618e6f0c1202f30378bb0979f8ec3a52368d",
+    "chrome_100_percent.pak": "1e3faad5a13060a8f134029dfd92604b54c79fd0c46df82ea483d66396561712",
+    "chrome_200_percent.pak": "abf4ea81e8fb9d278d3fed6b123341b2a1f7c87f79691da7ad547f47a4a7d291",
+    "locales/zh-CN.pak": "d0730df6b91ce1eda800b80c1985bba4f491b4a8d1fb66859ed16f87f4d67932",
+    "locales/en-US.pak": "de43db43fe0072543ab225f6d762cce3656a1639bf9e25f371fe0e80d9eabba7",
+    "locales/ar.pak": "5fb4f8b4fd74830c553d57270fd95ea262c1f062fcbb5324b4fb5dc8e951db5c"
+  },
+  "screenshotsSha256": {
+    "acrylic-dark.png": "231be97a866b9c387df24f250257558ffac284a88c092262967535247ee44826",
+    "acrylic-light.png": "1f15975cbbd225c23d18054de39f49355aed7a0e8c42011deee6f0dc45b326cb",
+    "acrylic-note-dark.png": "22038ae2324613e1b979cf6cfa7a1188402e345b4d33cc82b158e52d6deaa3c0",
+    "acrylic-note-light.png": "2af2d71de89888037c302e7bbb0350bccc7fffaa7045ed817980c002669aa4ea",
+    "before-focus-page-info-dark-mouse.png": "1bc9b677bf5a89a54496e6964eec757a43074ec08c6f559712ef42010bba8947",
+    "before-focus-page-info-light-mouse.png": "6495cc3ccd26c5e31f4ccff4d86e27e90950eb34d0a2bb3c3fe631bc87ba16a3",
+    "focus-icon-dark-before.png": "76e1d26088dd09cdba6bbf14a248ad4d09321965eecfd3fa0bdaae732ace95ee",
+    "focus-icon-dark-radius-14.png": "8a68013baf1078839dc0c8ef740538c7bbe15d996284ebff7220bd80eb37e989",
+    "focus-icon-dark-radius-4.png": "b73d41f75aa4fe84fe715ac6b333c5c5a7b4c5fa163c97e16ab570a40f8b031a",
+    "focus-icon-light-before.png": "d2c4cba0c38b5f102b39524836618901348b4e6e244ae95950e712ae1fe1fb23",
+    "focus-icon-light-radius-14.png": "82a1b472a718d2b003175909580eff8315feb147dd9c0713501552031e56eb81",
+    "focus-icon-light-radius-4.png": "be8583441d7436d3dcff7deba833293bba1ce469a7620f1db641a9691013e120",
+    "focus-page-info-dark-before.png": "10cd4605f86fc6be1660e793da2c53253e3f334020546b7d143c2d27b06d0c50",
+    "focus-page-info-dark-mouse.png": "cba720bb98f3903c43f513693b8f0887d6efd14d80a3d5fcdc04f5d7a7597913",
+    "focus-page-info-dark-security.png": "7aa1f32c3348f361d6daeae10dee6338c9da6d1fcfbde236435d5352596ed85a",
+    "focus-page-info-dark-tab.png": "cba720bb98f3903c43f513693b8f0887d6efd14d80a3d5fcdc04f5d7a7597913",
+    "focus-page-info-light-before.png": "207c7fb32268c38fddbd3fe5578bb2847fd91707a2ce3743c43872be5176c300",
+    "focus-page-info-light-mouse.png": "2b28cf0c19dc1f036f51d642cc7abdaa0b2a4451c972d68d4d934a931fe910ce",
+    "focus-page-info-light-security.png": "ec4aac6e58a0dccf981002a7ee057fb06d082db421b0c20b3f5ffa04f082f52e",
+    "focus-page-info-light-tab.png": "2b28cf0c19dc1f036f51d642cc7abdaa0b2a4451c972d68d4d934a931fe910ce",
+    "focus-rows-dark-before.png": "dc94d1dc61970fb2e26b38d55b1e4518957ad4113fc24f1fbd082aa14d297beb",
+    "focus-rows-dark-mouse.png": "ef36012de4a7b2933683e3ac35f9b3eb7bc8d5f5e2c861ba25c7700a95b5e3f5",
+    "focus-rows-dark-tab.png": "dc94d1dc61970fb2e26b38d55b1e4518957ad4113fc24f1fbd082aa14d297beb",
+    "focus-rows-light-before.png": "49d70ce63acf2faff4f87a8087ce2e9b54baeb7f31ea1e14de18f8c5404d4d78",
+    "focus-rows-light-mouse.png": "e3607a5c75a2703d0325bd9d80e13e98d12c4a7896619e254706f47d04dda9d9",
+    "focus-rows-light-tab.png": "49d70ce63acf2faff4f87a8087ce2e9b54baeb7f31ea1e14de18f8c5404d4d78",
+    "scrollbar-list-dark.png": "301773d3e25de17049f1f9bb8e4dce1c1458ec0b42fdf9fd8edf62a2941859a8",
+    "scrollbar-list-light.png": "8a589529c353507f9eb4e3ecc1732305f793bbee0b132a07db890c7970618e07",
+    "scrollbar-outer-dark.png": "c7d0adad00dbbfce70c866ad0b7b59b65e17f9b06b22527b07b4eedb458b791f",
+    "scrollbar-outer-light.png": "348400711f639477ba8c73af99e7fb787ad0ac9dd3e84a8e7301ef1a19f3a774",
+    "scrollbar-textarea-dark.png": "1adb4247ec70e34e26771524f2ac3c900c55c85b4b556e3ecfe530c87c8bfb78",
+    "scrollbar-textarea-light.png": "d1fe49927f6197d6306bd86588fa1985be2b74590e82a452ddc9efd5be808af3",
+    "textarea-placement-gutter-dark.png": "cb7e805f9079477ca4883c56abe170751d3a958d6a8e926d899520120b38cfb0",
+    "textarea-placement-gutter-light.png": "bbd2c80792449fccd37f1199ef5577676e631199e008a0284824ba5bc4bfc510",
+    "textarea-placement-overlay-dark.png": "cb7e805f9079477ca4883c56abe170751d3a958d6a8e926d899520120b38cfb0",
+    "textarea-placement-overlay-light.png": "bbd2c80792449fccd37f1199ef5577676e631199e008a0284824ba5bc4bfc510"
+  },
+  "reportHashes": {
+    "ar\\observer-runmeta.json": "83257d3f2b9092cc6d61682cf1f95e8f7a5b65c1530bd034015109a1d2973b2c",
+    "ar\\own-dialog-positioning.json": "c402f6942f9479b628c39e9e3e7a70f518f3929bfc35a5e300823a6a9653e675",
+    "ar\\results.json": "25c8c5a5fd19e9343e80e73936ce694b6064a18544208c3c7ac9053f54888306",
+    "ar\\window-observations.json": "2c33191631504fa120ee74ac59ffd4b15d76a1aa0a2229848217a024107167f3",
+    "baseline\\native-panels-results-page-info-edges.json": "3d519850e5a42bf00101e6d3d7fee42f52581a2a5b839054540f789e443f04c0",
+    "baseline\\native-panels-results.json": "c42fd24a11dccb80521cc04a6c591d8bb79c375696043898d138c059ed18630a",
+    "en-US\\observer-runmeta.json": "b839a4bfcbdc8c270917444fca3bd4212ba1f98ca9e8a961ca1962c3f30f2c3f",
+    "en-US\\own-dialog-positioning.json": "fd26ef43a586811468bb6169527afe0d3421de3cec4ae6ea88e86c30fadb3099",
+    "en-US\\results.json": "a83a2405a3a1169130562fde654a8b0506a662acfd5cf41c20187bc84558add0",
+    "en-US\\window-observations.json": "258ddb97f1085572592122756fc8d5756fc065ceb5bd10c61440df32661a766f",
+    "final-run.json": "0cdeb29c9bba78b2b257d7440af8af14c7672e94a39a7bb99db4eff2a9b99f51",
+    "final-verified\\ar\\observer-runmeta.json": "83257d3f2b9092cc6d61682cf1f95e8f7a5b65c1530bd034015109a1d2973b2c",
+    "final-verified\\ar\\own-dialog-positioning.json": "c402f6942f9479b628c39e9e3e7a70f518f3929bfc35a5e300823a6a9653e675",
+    "final-verified\\ar\\results.json": "25c8c5a5fd19e9343e80e73936ce694b6064a18544208c3c7ac9053f54888306",
+    "final-verified\\ar\\window-observations.json": "2c33191631504fa120ee74ac59ffd4b15d76a1aa0a2229848217a024107167f3",
+    "final-verified\\driver-parameter-validation.json": "92691ecaf6370c52d466c7cd3806ac8f98a38c27c4e4b0b2b67eaf768bdaaf29",
+    "final-verified\\en-US\\observer-runmeta.json": "b839a4bfcbdc8c270917444fca3bd4212ba1f98ca9e8a961ca1962c3f30f2c3f",
+    "final-verified\\en-US\\own-dialog-positioning.json": "fd26ef43a586811468bb6169527afe0d3421de3cec4ae6ea88e86c30fadb3099",
+    "final-verified\\en-US\\results.json": "a83a2405a3a1169130562fde654a8b0506a662acfd5cf41c20187bc84558add0",
+    "final-verified\\en-US\\window-observations.json": "258ddb97f1085572592122756fc8d5756fc065ceb5bd10c61440df32661a766f",
+    "final-verified\\list-scrollbar-targeted\\observer-runmeta.json": "f0aef18bcb2c01a657d6696a4ef61d50ae45599c1fcdbaf1ce0779698eb04659",
+    "final-verified\\list-scrollbar-targeted\\results.json": "2fcdc787d97f29201c86156c4fcb5c915ea888431a0a7b397c15444612649b26",
+    "final-verified\\list-scrollbar-targeted\\window-observations.json": "f6b8758a31886eeccbd9852dfc7f350eb81fc960edfa71a1755876b52fb62301",
+    "final-verified\\reconciliation.json": "bed29e70234951c5ca2439016c635968f9963337d604ef71198d355001eb9544",
+    "final-verified\\scrollbar-rerun-selection.json": "97b8997284de543d69810a48053a0cc4237a8df4cc0b2f50492d093b688c73e1",
+    "final-verified\\verification-provenance.json": "7c128dac3fc17495630810e417974ab7ff255c9cfea51506525e7fbec9531302",
+    "final-verified\\zh-CN\\observer-runmeta.json": "2e06ae070b5c938a2afe5a85613602a3fddfe2e368c90c5bcc3243fb7c989467",
+    "final-verified\\zh-CN\\own-dialog-positioning.json": "368b7993b96f70b98e8d48890b751f0df905eaaf78436b09ed453403c430a5c4",
+    "final-verified\\zh-CN\\results.json": "e8619dfe7cabe85bd1297ae7d1e13e12f33e291580e0b5e12cac2416d7addc17",
+    "final-verified\\zh-CN\\window-observations.json": "f04e14b3203aeb31183b76327cbe72e8debf42a2e1e20a7bd1fbf8036a82d9ca",
+    "final-verified\\zh-CN-full\\observer-runmeta.json": "2e06ae070b5c938a2afe5a85613602a3fddfe2e368c90c5bcc3243fb7c989467",
+    "final-verified\\zh-CN-full\\own-dialog-positioning.json": "368b7993b96f70b98e8d48890b751f0df905eaaf78436b09ed453403c430a5c4",
+    "final-verified\\zh-CN-full\\results.json": "be5cc15cc95e7a0c8589e4f6fbf9a7a766f4095f1cf1472f5bcf24745e49b9cc",
+    "final-verified\\zh-CN-full\\window-observations.json": "f04e14b3203aeb31183b76327cbe72e8debf42a2e1e20a7bd1fbf8036a82d9ca",
+    "final-verified\\zh-CN-locale3\\observer-runmeta.json": "28fc7727b5c0b57512b2b0b19b2ace28defbf54c10054d806c0b7d8630c02492",
+    "final-verified\\zh-CN-locale3\\own-dialog-positioning.json": "664753634a2f3f90b376d2b0bcddbdafae70228176b4b2d9b63ee2e5d299e45d",
+    "final-verified\\zh-CN-locale3\\results.json": "c18f93d9a54fb1e6f0bb53c375f16f227ece91fd0314e1d7406e2f67b3f2fc7c",
+    "final-verified\\zh-CN-locale3\\window-observations.json": "ac31f85869e1ac552a5f3fb05a91630db956af24d9d57ef7000eb44124ca54fe",
+    "focus-targeted-final\\results.json": "659cfa35908588ffef28bebb4c75eb57b8291d8d4508e199b41b50d2198611c3",
+    "focus-targeted-pixels\\results.json": "86b6e6acaf78c6d92f1675b41a0454d8cfa860e8ab2054c1eabe0b720396a586",
+    "high-contrast\\results.json": "78840474f7940b73310d2542f281ea1ce05608b2e8d992cb65f376cf9953f14d",
+    "initial-reproduction-final\\results.json": "482d8b08627cb503691120f44249c4df0b052fdea5e0aa6bc536a14d31078924",
+    "initial-reproduction-pixels\\results.json": "39a5be0d139606a41a8ab93e004af72817caedd14c015c4b8c051946ce7ac6cf",
+    "material-schema-validation.json": "bb62279391ded94520c49f78949c384c543e6660bf34227576e780093c397f5e",
+    "old-baseline-control\\observer-runmeta.json": "0e482dc2bbc386c65d619b811fecb7d59244d4e9f5003b2d58d66a74ed6428eb",
+    "old-baseline-control\\own-dialog-positioning.json": "709ff23a60a48e67a66a073d0bf11d9f27d93930c2dcc4f4e039da18020362be",
+    "old-baseline-control\\results.json": "de4dc452ad7c037c70dd3d9e180ebe3754448112186c03d9c9ef5c13d58463e5",
+    "old-baseline-control\\window-observations.json": "1f4f57940e62aeb222000cfaf073ca23fd9102c1627bfff999fa228f3eb2492e",
+    "pre-driver-fix-archive\\ar\\results.json": "69a174857b920befa7cbe6bea22073032ffa251a9a793ba21178f30f32cd6fa7",
+    "pre-driver-fix-archive\\en-US\\results.json": "5d56eaade37ca547ae669a260b7de5bbbb987190fb54b56f7e9087741cd71803",
+    "pre-driver-fix-archive\\final-run.json": "9e0259f184740f589ca2ba648676aa5300edf8567daa5c906c18619a05e67dbb",
+    "pre-driver-fix-archive\\zh-CN\\results.json": "f8338221c647464d0d0baa299c0997385d0b0d515842b4b477c1bf55ef72a063",
+    "regressions\\native-panels-regression-agent.json": "cbd06ee9dd52a33546e4bfc8a2fe14628d371def86fb76496a7fbb71f55bbe20",
+    "regressions\\native-panels-regression-agent.json.focus.json": "1b2573cfcddea45f18449dfcf515b88112586ec9d164d7debca8bf3e0ec2dc11",
+    "regressions\\native-panels-regression-click.json": "9a2b7eb5ce0b366866aaf155f287db9f6a6f085d965b9bfaaebea4dc8a5778b9",
+    "regressions\\native-panels-regression-input.json": "a67a5783c988c91c43ce7d46b92e83be16e30927e0bee2f6a5ccc96a73086ac6",
+    "regressions\\native-panels-regressions.json": "b4f7be7084cead43729b8f6b4a9590a0923409b71d013bf8c4cc56b3b320f2d1",
+    "safe-window-rerun\\zh-CN\\own-dialog-positioning.json": "218725607572e3dfe3930b837fb38ae0f9571106d63ffbf201d2f944d5c2d222",
+    "safe-window-rerun\\zh-CN\\results.json": "0a655f2372246462159d57d2703f684397552afd2572ccc3f29eaca4e908394c",
+    "safe-window-rerun\\zh-CN\\window-observations.json": "b23575a4097e1320e9051a1a8ad9d3e390c54c32a0941f09068561fab6391a53",
+    "safe-window-rerun-final\\en-US\\results.json": "2e478b4687d385dd2272708cafdabb76939b32087ae963b4b5163e549e2ead63",
+    "safe-window-rerun-final\\en-US\\window-observations.json": "5a900badfb09d568e9116b9990c4cfbd482f38b91d96ba647640744014b1ec11",
+    "schema-verification-manifest.json": "c9111cb1bb044e3760b4c3f9f80603bd7c6669fe4509dc3c9f7bb46e26cf3689",
+    "scrollbar-placement-schema-validation.json": "874c4ca9c0ca7db829d433bbf31c6d861c3af7eac73d0b43304b77508d76c915",
+    "tls-diagnostic\\diagnosis.json": "f9178711b3d79fb2af3cbece37849873ed195f5ccfa8fd2ab672c9e9dda3f7ba",
+    "tls-diagnostic\\safe-position-targeted\\own-dialog-positioning.json": "6069a71b47890f8d881a2d9a7bc8526e91e9197f8689e7e457ab6c8e34a5dffc",
+    "tls-diagnostic\\safe-position-targeted\\results.json": "c1c7932ae4f129d5f1f05e77d145613fe08f33d40bfc9add2d9af5792f6bd468",
+    "tls-diagnostic\\safe-position-targeted\\window-observations.json": "8199b144f3e9afe4aa00a7a6fc3ec09f4409a56c3d4f569cc65e42139db5267c",
+    "tls-diagnostic\\zh-CN\\results.json": "72138715aeaf0ad3153381cd8f5ac8601625af74198bf9f0251eae10890bf05c",
+    "tls-diagnostic\\zh-CN\\window-observations.json": "9fcdf22471bc5013ac4bc7fd8fdfd8db77d32207272de74e7606ae35a1120f75",
+    "zh-CN\\observer-runmeta.json": "2e06ae070b5c938a2afe5a85613602a3fddfe2e368c90c5bcc3243fb7c989467",
+    "zh-CN\\own-dialog-positioning.json": "368b7993b96f70b98e8d48890b751f0df905eaaf78436b09ed453403c430a5c4",
+    "zh-CN\\results.json": "e8619dfe7cabe85bd1297ae7d1e13e12f33e291580e0b5e12cac2416d7addc17",
+    "zh-CN\\window-observations.json": "f04e14b3203aeb31183b76327cbe72e8debf42a2e1e20a7bd1fbf8036a82d9ca"
+  },
+  "limitations": [
+    "The same-version refresh is distinguished by executable/ZIP/npm digests; installed packages must be refreshed explicitly.",
+    "The forced-colors fallback is process-local; Windows global policies were not changed.",
+    "Only the existing single-display 175% Windows environment and installed Microsoft Pinyin IME were exercised."
+  ]
+}

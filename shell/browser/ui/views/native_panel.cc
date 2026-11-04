@@ -63,6 +63,7 @@
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/focus_ring.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -517,6 +518,11 @@ class PanelAction final : public views::Button {
  public:
   explicit PanelAction(PressedCallback callback) : Button(std::move(callback)) {
     SetFocusBehavior(FocusBehavior::ALWAYS);
+    // Rows can fill a clipped ScrollView. Keep the native focus outline inside
+    // the action instead of allowing its default outset to lose both sides.
+    auto* ring = views::FocusRing::Get(this);
+    ring->SetOutsetFocusRingDisabled(true);
+    ring->SetHaloInset(1.f);
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal));
   }
@@ -532,6 +538,13 @@ class PanelAction final : public views::Button {
     style_ = style.Clone();
     selected_ = selected;
     hover_ = hover;
+    const int radius = Integer(style_, "radius", 8);
+    if (focus_radius_ != radius) {
+      focus_radius_ = radius;
+      views::FocusRing::Get(this)->SetPathGenerator(
+          std::make_unique<views::RoundRectHighlightPathGenerator>(
+              gfx::Insets(), radius));
+    }
     SchedulePaint();
   }
 
@@ -577,6 +590,7 @@ class PanelAction final : public views::Button {
   bool selected_ = false;
   bool row_ = false;
   SkColor hover_ = SK_ColorTRANSPARENT;
+  int focus_radius_ = -1;
 };
 
 gfx::Insets ControlInsets(const base::DictValue& style, int fallback = 0) {
@@ -2447,6 +2461,15 @@ base::DictValue NativePanelHost::GetState() const {
     control.Set("id", id);
     control.Set("type", entry->type);
     control.Set("bounds", RectValue(entry->control->GetBoundsInScreen()));
+    if (entry->type == "item" || entry->type == "iconButton") {
+      const auto* ring = views::FocusRing::Get(entry->view);
+      control.Set("focusRing",
+                  base::DictValue()
+                      .Set("visible", ring->GetVisible())
+                      .Set("bounds", RectValue(ring->GetBoundsInScreen()))
+                      .Set("haloInset", ring->GetHaloInset())
+                      .Set("haloThickness", ring->GetHaloThickness()));
+    }
     if (entry->label)
       control.Set("text", base::UTF16ToUTF8(entry->label->GetText()));
     if (entry->linked_label) {

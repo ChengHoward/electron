@@ -205,6 +205,309 @@ async function capturePanel(panel, name) {
   });
   screenshots[name] = { path: file, state };
 }
+function blueFocusPixel(rgb) {
+  return rgb[2] > rgb[0] + 25 && rgb[2] > rgb[1] + 12;
+}
+function nearPixel(actual, expected, tolerance = 20) {
+  return actual.every((channel, i) => Math.abs(channel - expected[i]) <= tolerance);
+}
+async function tabTo(panel, id) {
+  for (let step = 0; step < 12; step++) {
+    if (panelState(panel).focusedId === id) return;
+    await key(panel, 0x09);
+  }
+  assert.equal(panelState(panel).focusedId, id, 'Physical Tab reaches ' + id);
+}
+async function observeFocusRing(panel, id, name) {
+  // Capture first so an old binary without diagnostics still leaves physical
+  // evidence of its clipped outline before the pixel assertion fails.
+  const initial = panelState(panel);
+  await native('move', {
+    hwnd: Number(initial.windowHandle),
+    ...physicalPoint({ x: initial.contentBounds.x + initial.contentBounds.width / 2, y: initial.contentBounds.y + 4 }),
+    keepCursor: true
+  });
+  await capturePanel(panel, name);
+  const state = panelState(panel);
+  const control = node(panel, id);
+  const bounds = screen.dipToScreenRect(parent, control.bounds);
+  const body = screen.dipToScreenRect(parent, state.contentBounds);
+  const scale = screen.getDisplayMatching(control.bounds).scaleFactor;
+  const bodyMargin = Math.ceil(2 * scale);
+  const insideBody = (point) =>
+    point.x >= body.x + bodyMargin &&
+    point.x < body.x + body.width - bodyMargin &&
+    point.y >= body.y + bodyMargin &&
+    point.y < body.y + body.height - bodyMargin;
+  const edges = {};
+  const points = [];
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    edges[side] = [];
+    for (let depth = -Math.ceil(4 * scale); depth <= Math.ceil(6 * scale); depth++) {
+      const point =
+        side === 'top'
+          ? { x: bounds.x + Math.floor(bounds.width / 2), y: bounds.y + depth }
+          : side === 'bottom'
+            ? { x: bounds.x + Math.floor(bounds.width / 2), y: bounds.y + bounds.height - 1 - depth }
+            : side === 'left'
+              ? { x: bounds.x + depth, y: bounds.y + Math.floor(bounds.height / 2) }
+              : { x: bounds.x + bounds.width - 1 - depth, y: bounds.y + Math.floor(bounds.height / 2) };
+      if (!insideBody(point)) continue;
+      edges[side].push({ index: points.length, depth });
+      points.push(point);
+    }
+  }
+  const cornerInset = Math.max(1, Math.round(1.5 * scale));
+  const corners = [
+    { x: bounds.x + cornerInset, y: bounds.y + cornerInset },
+    { x: bounds.x + bounds.width - 1 - cornerInset, y: bounds.y + cornerInset },
+    { x: bounds.x + cornerInset, y: bounds.y + bounds.height - 1 - cornerInset },
+    { x: bounds.x + bounds.width - 1 - cornerInset, y: bounds.y + bounds.height - 1 - cornerInset }
+  ].map((point) => {
+    point.x = Math.max(body.x + bodyMargin, Math.min(point.x, body.x + body.width - bodyMargin - 1));
+    point.y = Math.max(body.y + bodyMargin, Math.min(point.y, body.y + body.height - bodyMargin - 1));
+    assert.ok(insideBody(point), 'Rounded-corner observation belongs to the panel HWND');
+    const index = points.length;
+    points.push(point);
+    return index;
+  });
+  // At radius 4 this crosses the straight left edge; at radius 14 it lies
+  // outside the rounded arc. The image itself starts below this probe.
+  const curve = [];
+  for (let depth = 0; depth <= Math.floor(2.5 * scale); depth++) {
+    const point = { x: bounds.x + depth, y: bounds.y + Math.round(7 * scale) };
+    if (!insideBody(point)) continue;
+    curve.push(points.length);
+    points.push(point);
+  }
+  const { pixels } = await native('pixels', { hwnd: Number(state.windowHandle), points });
+  const topBlue = edges.top.map(({ index }) => pixels[index]).filter((pixel) => blueFocusPixel(pixel.rgb));
+  topBlue.sort((a, b) => b.rgb[2] - b.rgb[0] - (a.rgb[2] - a.rgb[0]));
+  const reference = topBlue[0]?.rgb;
+  return {
+    id,
+    name,
+    bounds: control.bounds,
+    scale,
+    focusedId: state.focusedId,
+    focusRing: control.focusRing,
+    reference,
+    edges: Object.fromEntries(
+      Object.entries(edges).map(([side, entries]) => [
+        side,
+        entries.map(({ index, depth }) => ({ ...pixels[index], depth }))
+      ])
+    ),
+    corners: corners.map((index) => pixels[index]),
+    curve: curve.map((index) => pixels[index])
+  };
+}
+function assertCompleteFocusRing(observation) {
+  const { id, name, bounds, reference, focusRing } = observation;
+  assert.equal(observation.focusedId, id, name + ': the real native control retains focus');
+  assert.ok(reference, name + ': a blue top edge must remain visible');
+  for (const [side, pixels] of Object.entries(observation.edges)) {
+    assert.ok(
+      pixels.some((pixel) => pixel.depth >= 0 && nearPixel(pixel.rgb, reference)),
+      name + ': the ' + side + ' focus edge must be painted inside the control, matching ' + JSON.stringify(reference)
+    );
+  }
+  for (const corner of observation.corners) {
+    assert.ok(!nearPixel(corner.rgb, reference, 30), name + ': the rounded corner remains background, not blue');
+  }
+  assert.ok(focusRing?.visible, name + ': the native focus ring is visible');
+  assert.equal(focusRing.haloInset, 1);
+  assert.equal(focusRing.haloThickness, 2);
+  for (const side of ['x', 'y']) assert.ok(focusRing.bounds[side] >= bounds[side] - 1, name + ': inner ring origin');
+  assert.ok(focusRing.bounds.x + focusRing.bounds.width <= bounds.x + bounds.width + 1, name + ': inner ring right');
+  assert.ok(focusRing.bounds.y + focusRing.bounds.height <= bounds.y + bounds.height + 1, name + ': inner ring bottom');
+}
+async function focusRingChecks(wc) {
+  await check(
+    'focus ring: full-width rows retain four pixel edges with mouse, Tab, arrows and activation in light/dark',
+    async () => {
+      const observations = [];
+      const tree = () => ({
+        type: 'column',
+        id: 'focus-rows',
+        width: 320,
+        gap: 0,
+        children: [
+          text('focus-heading', 'Native focus outline', { height: 28 }),
+          ...['first', 'second'].map((name) => ({
+            type: 'item',
+            id: 'focus-' + name,
+            height: 48,
+            style: { radius: 8, paddingLeft: 12, paddingRight: 12 },
+            children: [text('focus-' + name + '-label', name)]
+          }))
+        ]
+      });
+      for (const dark of [false, true]) {
+        const theme = dark ? 'dark' : 'light';
+        const p = newPanel(tree(), { contentInset: 0, radius: 0, shadow: false, theme: noteTheme(dark) });
+        const actions = [];
+        p.on('action', (action) => actions.push(action));
+        try {
+          await show(p, 180, 140);
+          await click(p, 'focus-second');
+          await capturePanel(p, `focus-rows-${theme}-before`);
+          const initialClicks = actions.length;
+          await click(p, 'focus-first');
+          await click(p, 'focus-first');
+          assert.equal(actions.length, initialClicks + 2, 'Repeated physical clicks still activate the focused row');
+          observations.push(await observeFocusRing(p, 'focus-first', `focus-rows-${theme}-mouse`));
+          await key(p, 0x09);
+          assert.equal(panelState(p).focusedId, 'focus-second');
+          observations.push(await observeFocusRing(p, 'focus-second', `focus-rows-${theme}-tab`));
+          await key(p, 0x26);
+          assert.equal(panelState(p).focusedId, 'focus-first');
+          await key(p, 0x28);
+          assert.equal(panelState(p).focusedId, 'focus-second');
+          const beforeKeys = actions.length;
+          await key(p, 0x0d);
+          await key(p, 0x20);
+          assert.equal(actions.length, beforeKeys + 2, 'Enter and Space retain native row activation');
+          assert.ok(actions.every((action) => action.type === 'click'));
+        } finally {
+          p.destroy();
+        }
+      }
+      snapshot.focusRows = observations;
+      observations.forEach(assertCompleteFocusRing);
+    }
+  );
+  await check(
+    'focus ring: icon button radius updates retain rounded pixels, focus and keyboard activation',
+    async () => {
+      const observations = [];
+      const tree = (radius) => ({
+        type: 'column',
+        id: 'focus-icons',
+        width: 180,
+        padding: 12,
+        gap: 8,
+        children: [
+          { type: 'button', id: 'focus-before', text: 'Before', height: 28 },
+          {
+            type: 'row',
+            id: 'focus-icon-row',
+            height: 48,
+            children: [
+              iconButton('focus-icon', 'settings', 'Native icon focus', {
+                width: 48,
+                height: 48,
+                tooltip: '',
+                style: { radius }
+              })
+            ]
+          },
+          { type: 'button', id: 'focus-after', text: 'After', height: 28 }
+        ]
+      });
+      const p = newPanel(tree(4), { theme: noteTheme() });
+      const actions = [];
+      p.on('action', (action) => actions.push(action));
+      try {
+        await show(p, 180, 140);
+        const hwnd = panelState(p).windowHandle;
+        for (const dark of [false, true]) {
+          const theme = dark ? 'dark' : 'light';
+          p.update({ content: tree(4), theme: noteTheme(dark) });
+          await tabTo(p, 'focus-before');
+          await capturePanel(p, `focus-icon-${theme}-before`);
+          await key(p, 0x09);
+          assert.equal(panelState(p).focusedId, 'focus-icon');
+          const small = await observeFocusRing(p, 'focus-icon', `focus-icon-${theme}-radius-4`);
+          p.update({ content: tree(14) });
+          assert.equal(panelState(p).windowHandle, hwnd);
+          assert.equal(panelState(p).focusedId, 'focus-icon');
+          const large = await observeFocusRing(p, 'focus-icon', `focus-icon-${theme}-radius-14`);
+          observations.push({ theme, small, large });
+          const beforeClicks = actions.filter((action) => action.id === 'focus-icon').length;
+          await click(p, 'focus-icon');
+          await click(p, 'focus-icon');
+          await key(p, 0x0d);
+          await key(p, 0x20);
+          assert.equal(actions.filter((action) => action.id === 'focus-icon').length, beforeClicks + 4);
+          await key(p, 0x09);
+          assert.equal(panelState(p).focusedId, 'focus-after');
+          await key(p, 0x09, [0x10]);
+          assert.equal(panelState(p).focusedId, 'focus-icon');
+        }
+      } finally {
+        p.destroy();
+      }
+      snapshot.focusIcons = observations;
+      for (const { theme, small, large } of observations) {
+        assertCompleteFocusRing(small);
+        assertCompleteFocusRing(large);
+        assert.ok(
+          small.curve.some((pixel) => nearPixel(pixel.rgb, small.reference)),
+          theme + ': radius 4 has a straight edge at 7 DIP'
+        );
+        assert.ok(
+          large.curve.every((pixel) => !nearPixel(pixel.rgb, large.reference)),
+          theme + ': radius 14 rounds away the same edge'
+        );
+      }
+    }
+  );
+  await check(
+    'focus ring: PageInfo security row paints a complete mouse and Tab outline before native navigation',
+    async () => {
+      const observations = [];
+      const originalTheme = nativeTheme.themeSource;
+      try {
+        for (const dark of [false, true]) {
+          const theme = dark ? 'dark' : 'light';
+          nativeTheme.themeSource = theme;
+          wc.showPageInfoDialog({ anchorBounds: anchor(120, 76) });
+          await delay(220);
+          const p = panels.at(-1);
+          try {
+            await capturePanel(p, `focus-page-info-${theme}-before`);
+            const row = node(p, 'page-info-security').bounds;
+            const heading = node(p, 'page-info-title').bounds;
+            // A real press focuses the row. Dragging out before release cancels
+            // activation, allowing its mouse focus outline to be observed first.
+            await native('drag', {
+              hwnd: Number(panelState(p).windowHandle),
+              ...physicalPoint({ x: Math.round(row.x + row.width / 2), y: Math.round(row.y + row.height / 2) }),
+              end: physicalPoint({
+                x: Math.round(heading.x + heading.width / 2),
+                y: Math.round(heading.y + heading.height / 2)
+              })
+            });
+            await delay(100);
+            assert.equal(node(p, 'page-info-security').type, 'item', 'Cancelled mouse press must not navigate');
+            observations.push(await observeFocusRing(p, 'page-info-security', `focus-page-info-${theme}-mouse`));
+            await key(p, 0x09);
+            assert.equal(panelState(p).focusedId, 'page-info-site-settings');
+            await key(p, 0x09, [0x10]);
+            assert.equal(panelState(p).focusedId, 'page-info-security');
+            observations.push(await observeFocusRing(p, 'page-info-security', `focus-page-info-${theme}-tab`));
+            await key(p, 0x0d);
+            assert.ok(node(p, 'page-info-description').text, 'Enter opens the real security subpage');
+            await capturePanel(p, `focus-page-info-${theme}-security`);
+            await click(p, 'page-info-back');
+            await click(p, 'page-info-security');
+            assert.ok(node(p, 'page-info-description').text, 'Mouse activation still opens the security subpage');
+            await tabTo(p, 'page-info-back');
+            await key(p, 0x20);
+            assert.equal(node(p, 'page-info-security').type, 'item', 'Space activates the native back icon');
+          } finally {
+            p.destroy();
+          }
+        }
+      } finally {
+        nativeTheme.themeSource = originalTheme;
+      }
+      snapshot.focusPageInfo = observations;
+      observations.forEach(assertCompleteFocusRing);
+    }
+  );
+}
 function downloads() {
   const names = [
     'Sudo Rom v1.zip',
@@ -1751,12 +2054,38 @@ async function certificateExport(state, format, expected) {
   await native('key', { hwnd: dialog.hwnd, vk: 0x24 });
   for (let i = 0; i < format; ++i) await native('key', { hwnd: dialog.hwnd, vk: 0x28 });
   await native('key', { hwnd: dialog.hwnd, vk: 0x0d });
+  let previousName;
+  let settled = 0;
+  for (let i = 0; i < 20 && settled < 2; ++i) {
+    const current = (await native('controls', { hwnd: dialog.hwnd })).controls;
+    const selected = current.find((c) => c.hwnd === formats.hwnd)?.selectedIndex;
+    const name = current.find((c) => c.hwnd === filename.hwnd)?.text;
+    settled = selected === format && name === previousName ? settled + 1 : 0;
+    previousName = name;
+    await delay(100);
+  }
+  assert.equal(settled, 2, 'Native export format and automatic filename suffix settle before typing');
   const suffix = ['pem', 'pem', 'der', 'p7c', 'p7c'][format];
   const file = path.join(output, `certificate-export-${format}.${suffix}`);
   fs.rmSync(file, { force: true });
-  await native('click', { hwnd: dialog.hwnd, ...point(filename) });
-  await native('key', { hwnd: dialog.hwnd, vk: 0x41, modifiers: [0x11] });
-  await native('text', { hwnd: dialog.hwnd, text: file });
+  let verified = false;
+  for (let attempt = 1; attempt <= 2 && !verified; ++attempt) {
+    await native('click', { hwnd: dialog.hwnd, ...point(filename) });
+    await native('key', { hwnd: dialog.hwnd, vk: 0x41, modifiers: [0x11] });
+    await native('text', { hwnd: dialog.hwnd, text: file, textIntervalMs: 10 });
+    const observations = [];
+    let exactReads = 0;
+    for (let i = 0; i < 10 && exactReads < 2; ++i) {
+      const current = (await native('controls', { hwnd: dialog.hwnd })).controls;
+      const actual = current.find((c) => c.hwnd === filename.hwnd)?.text;
+      observations.push(actual);
+      exactReads = actual === file ? exactReads + 1 : 0;
+      await delay(100);
+    }
+    verified = exactReads === 2;
+    (snapshot.exportFilenameInput ??= []).push({ format, attempt, expected: file, observations, verified });
+  }
+  assert.ok(verified, 'Native filename Edit must exactly retain the requested path before Save');
   await native('click', { hwnd: dialog.hwnd, ...point(save) });
   for (let i = 0; i < 60 && !fs.existsSync(file); ++i) await delay(100);
   assert.ok(fs.existsSync(file), 'Exported certificate file');
@@ -2638,6 +2967,7 @@ async function all() {
       }
     }
   );
+  await focusRingChecks(wc);
   await check('PageInfo: Chromium locale, native security subpage/back and website settings event', async () => {
     let settings;
     const listener = (_e, detail) => {
