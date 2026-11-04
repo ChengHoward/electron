@@ -1,0 +1,830 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Wed, 4 Nov 2026 12:00:00 +0800
+Subject: feat: share Chromium certificate viewer data and resource setup
+
+Extract the existing certificate view data construction for reuse by embedders
+without Chrome Profile. Chrome and Electron call the same helpers. Keep the
+original certificate viewer HTML, CSS, TypeScript and tree components intact.
+
+diff --git a/chrome/browser/ui/webui/certificate_viewer/BUILD.gn b/chrome/browser/ui/webui/certificate_viewer/BUILD.gn
+index 11e7fb19919ca..6513773d93acc 100644
+--- a/chrome/browser/ui/webui/certificate_viewer/BUILD.gn
++++ b/chrome/browser/ui/webui/certificate_viewer/BUILD.gn
+@@ -13,7 +13,10 @@ if (enable_webui_certificate_viewer) {
+       "certificate_viewer_webui.h",
+     ]
+ 
+-    public_deps = [ "//chrome/browser:browser_public_dependencies" ]
++    public_deps = [
++      ":resources_util",
++      "//chrome/browser:browser_public_dependencies",
++    ]
+ 
+     deps = [
+       "//base",
+@@ -41,3 +44,22 @@ if (enable_webui_certificate_viewer) {
+     }
+   }
+ }
++
++if (enable_webui_certificate_viewer) {
++  source_set("resources_util") {
++    sources = [
++      "certificate_viewer_resources_util.cc",
++      "certificate_viewer_resources_util.h",
++    ]
++    deps = [
++      "//base",
++      "//chrome:strings",
++      "//chrome/browser/resources/certificate_viewer:resources",
++      "//components/strings",
++      "//content/public/browser",
++      "//ui/base",
++      "//ui/web_dialogs",
++      "//ui/webui",
++    ]
++  }
++}
+diff --git a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.cc b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.cc
+index aa58e2a3fd4bc..74a875df7b7c8 100644
+--- a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.cc
++++ b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.cc
+@@ -1,79 +1,14 @@
+ // Copyright 2012 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+-
+ #include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.h"
+ 
+-#include "chrome/browser/profiles/profile.h"
+-#include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.h"
+-#include "chrome/common/url_constants.h"
+-#include "chrome/grit/certificate_viewer_resources.h"
+-#include "chrome/grit/certificate_viewer_resources_map.h"
+-#include "chrome/grit/generated_resources.h"
+-#include "components/strings/grit/components_strings.h"
+-#include "content/public/browser/render_view_host.h"
++#include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_ui.h"
+-#include "content/public/browser/web_ui_data_source.h"
+-#include "ui/base/webui/web_ui_util.h"
+-#include "ui/web_dialogs/web_dialog_delegate.h"
+-#include "ui/webui/webui_util.h"
+-
+-namespace {
+-
+-void CreateAndAddWebUIDataSource(Profile* profile, const std::string& host) {
+-  content::WebUIDataSource* html_source =
+-      content::WebUIDataSource::CreateAndAdd(profile, host);
+-
+-  static constexpr webui::LocalizedString kStrings[] = {
+-      {"general", IDS_CERT_INFO_GENERAL_TAB_LABEL},
+-      {"details", IDS_CERT_INFO_DETAILS_TAB_LABEL},
+-      {"modifications", IDS_CERT_INFO_MODIFICATIONS_TAB_LABEL},
+-      {"close", IDS_CLOSE},
+-      {"export", IDS_CERT_DETAILS_EXPORT_CERTIFICATE},
+-      {"exportA11yLabel", IDS_CERT_DETAILS_EXPORT_CERTIFICATE_A11Y_LABEL},
+-      {"issuedTo", IDS_CERT_INFO_SUBJECT_GROUP},
+-      {"issuedBy", IDS_CERT_INFO_ISSUER_GROUP},
+-      {"cn", IDS_CERT_INFO_COMMON_NAME_LABEL},
+-      {"o", IDS_CERT_INFO_ORGANIZATION_LABEL},
+-      {"ou", IDS_CERT_INFO_ORGANIZATIONAL_UNIT_LABEL},
+-      {"validity", IDS_CERT_INFO_VALIDITY_GROUP},
+-      {"issuedOn", IDS_CERT_INFO_ISSUED_ON_LABEL},
+-      {"expiresOn", IDS_CERT_INFO_EXPIRES_ON_LABEL},
+-      {"fingerprints", IDS_CERT_INFO_FINGERPRINTS_GROUP},
+-      {"sha256", IDS_CERT_INFO_SHA256_FINGERPRINT_LABEL},
+-      {"spki", IDS_CERT_INFO_SHA256_SPKI_FINGERPRINT_LABEL},
+-      {"hierarchy", IDS_CERT_DETAILS_CERTIFICATE_HIERARCHY_LABEL},
+-      {"certFields", IDS_CERT_DETAILS_CERTIFICATE_FIELDS_LABEL},
+-      {"certFieldVal", IDS_CERT_DETAILS_CERTIFICATE_FIELD_VALUE_LABEL},
+-      {"certError", IDS_CERT_DUMP_ERROR},
+-      {"trust", IDS_CERT_INFO_TRUST_LABEL},
+-      {"trustState", IDS_CERT_INFO_TRUST_STATE_LABEL},
+-      {"trustStateDistrusted", IDS_CERT_INFO_TRUST_STATE_DISTRUSTED},
+-      {"trustStateHint", IDS_CERT_INFO_TRUST_STATE_HINT},
+-      {"trustStateTrusted", IDS_CERT_INFO_TRUST_STATE_TRUSTED},
+-      {"constraints", IDS_CERT_INFO_CONSTRAINTS_LABEL},
+-      {"add", IDS_CERT_INFO_ADD_CONSTRAINTS_BUTTON_LABEL},
+-      {"addConstraints", IDS_CERT_INFO_ADD_CONSTRAINTS_LABEL},
+-      {"addConstraintsPlaceholder", IDS_CERT_INFO_ADD_CONSTRAINTS_PLACEHOLDER},
+-      {"addConstraintErrorMessage", IDS_CERT_INFO_ADD_CONSTRAINT_ERROR_MESSAGE},
+-      {"deleteConstraintErrorMessage",
+-       IDS_CERT_INFO_DELETE_CONSTRAINT_ERROR_MESSAGE},
+-      {"trustStateErrorMessage", IDS_CERT_INFO_TRUST_STATE_ERROR_MESSAGE},
+-  };
+-  html_source->AddLocalizedStrings(kStrings);
+-
+-  webui::SetupWebUIDataSource(html_source, kCertificateViewerResources,
+-                              IDR_CERTIFICATE_VIEWER_CERTIFICATE_VIEWER_HTML);
+-}
+-
+-}  // namespace
+-
+ CertificateViewerUI::CertificateViewerUI(content::WebUI* web_ui)
+     : ConstrainedWebDialogUI(web_ui) {
+-  // Set up the chrome://view-cert source.
+-  CreateAndAddWebUIDataSource(Profile::FromWebUI(web_ui),
+-                              chrome::kChromeUICertificateViewerHost);
++  certificate_viewer::AddDataSource(
++      web_ui->GetWebContents()->GetBrowserContext());
+ }
+-
+ CertificateViewerUI::~CertificateViewerUI() = default;
+diff --git a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.cc b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.cc
+index eb1521277bd4b..ec9ba3969182a 100644
+--- a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.cc
++++ b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.cc
+@@ -29,6 +29,7 @@
+ #include "chrome/browser/ui/certificate_dialogs.h"
+ #include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.h"
+ #include "chrome/browser/ui/webui/constrained_web_dialog_ui.h"
++#include "chrome/common/net/certificate_viewer_model.h"
+ #include "chrome/common/net/x509_certificate_model.h"
+ #include "chrome/common/url_constants.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -129,91 +130,6 @@ int ConvertTrustToInt(CertificateTrust::CertificateTrustType trust) {
+ }
+ // LINT.ThenChange(//chrome/browser/resources/certificate_viewer/certificate_viewer.ts:CertificateTrustType)
+ 
+-// Helper class for building a Value representation of a certificate. The class
+-// gathers data for a single node of the representation tree and builds a
+-// `base::DictValue` out of that.
+-class CertNodeBuilder {
+- public:
+-  // Starts the node with "label" set to |label|.
+-  explicit CertNodeBuilder(std::string_view label);
+-
+-  // Convenience version: Converts |label_id| to the corresponding resource
+-  // string, then delegates to the other constructor.
+-  explicit CertNodeBuilder(int label_id);
+-
+-  CertNodeBuilder(const CertNodeBuilder&) = delete;
+-  CertNodeBuilder& operator=(const CertNodeBuilder&) = delete;
+-
+-  // Builder methods all return |*this| so that they can be chained in single
+-  // expressions.
+-
+-  // Sets the "payload.val" field. Call this at most once.
+-  CertNodeBuilder& Payload(std::string_view payload);
+-
+-  // Adds |child| in the list keyed "children". Can be called multiple times.
+-  CertNodeBuilder& Child(base::DictValue child);
+-
+-  // Similar to Child, but if the argument is null, then this does not add
+-  // anything.
+-  CertNodeBuilder& ChildIfNotNullopt(std::optional<base::DictValue> child);
+-
+-  // Creates a base::DictValue representation of the collected information.
+-  // Only call this once.
+-  base::DictValue Build();
+-
+- private:
+-  base::DictValue node_;
+-  base::ListValue children_;
+-  // |built_| is false until Build() is called. Once it is |true|, |node_| and
+-  // |children_| are no longer valid for use.
+-  bool built_ = false;
+-};
+-
+-CertNodeBuilder::CertNodeBuilder(std::string_view label) {
+-  node_.Set("label", label);
+-}
+-
+-CertNodeBuilder::CertNodeBuilder(int label_id)
+-    : CertNodeBuilder(l10n_util::GetStringUTF8(label_id)) {}
+-
+-CertNodeBuilder& CertNodeBuilder::Payload(std::string_view payload) {
+-  DCHECK(!node_.FindByDottedPath("payload.val"));
+-  node_.SetByDottedPath("payload.val", payload);
+-  return *this;
+-}
+-
+-CertNodeBuilder& CertNodeBuilder::Child(base::DictValue child) {
+-  children_.Append(std::move(child));
+-  return *this;
+-}
+-
+-CertNodeBuilder& CertNodeBuilder::ChildIfNotNullopt(
+-    std::optional<base::DictValue> child) {
+-  if (child) {
+-    return Child(std::move(*child));
+-  }
+-  return *this;
+-}
+-
+-base::DictValue CertNodeBuilder::Build() {
+-  DCHECK(!built_);
+-  if (!children_.empty()) {
+-    node_.Set("children", std::move(children_));
+-  }
+-  built_ = true;
+-  return std::move(node_);
+-}
+-
+-std::string HandleOptionalOrError(
+-    const x509_certificate_model::OptionalStringOrError& s) {
+-  if (std::holds_alternative<x509_certificate_model::Error>(s)) {
+-    return l10n_util::GetStringUTF8(IDS_CERT_DUMP_ERROR);
+-  } else if (std::holds_alternative<x509_certificate_model::NotPresent>(s)) {
+-    return l10n_util::GetStringUTF8(IDS_CERT_INFO_FIELD_NOT_PRESENT);
+-  }
+-  return std::get<std::string>(s);
+-}
+-
+ base::ListValue GenerateConstraintList(
+     const chrome_browser_server_certificate_database::Constraints constraints) {
+   base::ListValue list;
+@@ -240,84 +156,8 @@ std::string DialogArgsForCertList(
+         chrome_browser_server_certificate_database::CertificateMetadata>&
+         cert_metadata,
+     CertMetadataModificationsCallback modifications_callback) {
+-  std::string data;
+-
+-  // Certificate information. The keys in this dictionary's general key
+-  // correspond to the IDs in the Html page.
+-  base::DictValue cert_info;
+-  const x509_certificate_model::X509CertificateModel& model = certs.front();
+-
+-  cert_info.Set("isError", !model.is_valid());
+-  cert_info.SetByDottedPath(
+-      "general.title",
+-      l10n_util::GetStringFUTF8(IDS_CERT_INFO_DIALOG_TITLE,
+-                                base::UTF8ToUTF16(model.GetTitle())));
+-
+-  if (model.is_valid()) {
+-    // Standard certificate details.
+-    const std::string alternative_text =
+-        l10n_util::GetStringUTF8(IDS_CERT_INFO_FIELD_NOT_PRESENT);
+-
+-    // Issued to information.
+-    cert_info.SetByDottedPath(
+-        "general.issued-cn",
+-        HandleOptionalOrError(model.GetSubjectCommonName()));
+-    cert_info.SetByDottedPath("general.issued-o",
+-                              HandleOptionalOrError(model.GetSubjectOrgName()));
+-    cert_info.SetByDottedPath(
+-        "general.issued-ou",
+-        HandleOptionalOrError(model.GetSubjectOrgUnitName()));
+-
+-    // Issuer information.
+-    cert_info.SetByDottedPath(
+-        "general.issuer-cn",
+-        HandleOptionalOrError(model.GetIssuerCommonName()));
+-    cert_info.SetByDottedPath("general.issuer-o",
+-                              HandleOptionalOrError(model.GetIssuerOrgName()));
+-    cert_info.SetByDottedPath(
+-        "general.issuer-ou",
+-        HandleOptionalOrError(model.GetIssuerOrgUnitName()));
+-
+-    // Validity period.
+-    base::Time issued, expires;
+-    std::string issued_str, expires_str;
+-    if (model.GetTimes(&issued, &expires)) {
+-      issued_str =
+-          base::UTF16ToUTF8(base::TimeFormatFriendlyDateAndTime(issued));
+-      expires_str =
+-          base::UTF16ToUTF8(base::TimeFormatFriendlyDateAndTime(expires));
+-    } else {
+-      issued_str = alternative_text;
+-      expires_str = alternative_text;
+-    }
+-    cert_info.SetByDottedPath("general.issue-date", issued_str);
+-    cert_info.SetByDottedPath("general.expiry-date", expires_str);
+-    cert_info.SetByDottedPath("general.spki", model.HashSpkiSHA256());
+-  }
+-
+-  // We always have a cert hash. We don't always have a SPKI hash, if the cert
+-  // is not valid.
+-  cert_info.SetByDottedPath("general.sha256", model.HashCertSHA256());
+-
+-  // Certificate hierarchy is constructed from bottom up.
+-  base::ListValue children;
+-  int index = 0;
+-  for (const auto& cert : certs) {
+-    base::DictValue cert_node;
+-    cert_node.Set("label", base::Value(cert.GetTitle()));
+-    cert_node.SetByDottedPath("payload.index", base::Value(index));
+-    // Add the child from the previous iteration.
+-    if (!children.empty()) {
+-      cert_node.Set("children", std::move(children));
+-    }
+-
+-    // Add this node to the children list for the next iteration.
+-    children = base::ListValue();
+-    children.Append(std::move(cert_node));
+-    ++index;
+-  }
+-  // Set the last node as the top of the certificate hierarchy.
+-  cert_info.Set("hierarchy", std::move(children));
++  base::DictValue cert_info =
++      x509_certificate_model::CertificateViewerDialogArgs(certs);
+ 
+   if (cert_metadata.has_value()) {
+     base::DictValue dict;
+@@ -753,97 +593,8 @@ void CertificateViewerDialogHandler::HandleRequestCertificateFields(
+   const x509_certificate_model::X509CertificateModel& model =
+       certs_[cert_index];
+ 
+-  CertNodeBuilder contents_builder(IDS_CERT_DETAILS_CERTIFICATE);
+-
+-  if (model.is_valid()) {
+-    CertNodeBuilder issued_node_builder(IDS_CERT_DETAILS_NOT_BEFORE);
+-    CertNodeBuilder expires_node_builder(IDS_CERT_DETAILS_NOT_AFTER);
+-    base::Time issued, expires;
+-    if (model.GetTimes(&issued, &expires)) {
+-      issued_node_builder.Payload(base::UTF16ToUTF8(
+-          base::TimeFormatShortDateAndTimeWithTimeZone(issued)));
+-      expires_node_builder.Payload(base::UTF16ToUTF8(
+-          base::TimeFormatShortDateAndTimeWithTimeZone(expires)));
+-    }
+-
+-    std::vector<x509_certificate_model::Extension> extensions =
+-        model.GetExtensions(
+-            l10n_util::GetStringUTF8(IDS_CERT_EXTENSION_CRITICAL),
+-            l10n_util::GetStringUTF8(IDS_CERT_EXTENSION_NON_CRITICAL));
+-
+-    std::optional<base::DictValue> details_extensions;
+-    if (!extensions.empty()) {
+-      CertNodeBuilder details_extensions_builder(IDS_CERT_DETAILS_EXTENSIONS);
+-      for (const x509_certificate_model::Extension& extension : extensions) {
+-        details_extensions_builder.Child(
+-            CertNodeBuilder(extension.name).Payload(extension.value).Build());
+-      }
+-      details_extensions = details_extensions_builder.Build();
+-    }
+-
+-    contents_builder
+-        // Main certificate fields.
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_VERSION)
+-                   .Payload(l10n_util::GetStringFUTF8(
+-                       IDS_CERT_DETAILS_VERSION_FORMAT,
+-                       base::UTF8ToUTF16(model.GetVersion())))
+-                   .Build())
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_SERIAL_NUMBER)
+-                   .Payload(model.GetSerialNumberHexified())
+-                   .Build())
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_ALG)
+-                   .Payload(model.ProcessSecAlgorithmSignature())
+-                   .Build())
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_ISSUER)
+-                   .Payload(HandleOptionalOrError(model.GetIssuerName()))
+-                   .Build())
+-        // Validity period.
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_VALIDITY)
+-                   .Child(issued_node_builder.Build())
+-                   .Child(expires_node_builder.Build())
+-                   .Build())
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT)
+-                   .Payload(HandleOptionalOrError(model.GetSubjectName()))
+-                   .Build())
+-        // Subject key information.
+-        .Child(
+-            CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY_INFO)
+-                .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY_ALG)
+-                           .Payload(model.ProcessSecAlgorithmSubjectPublicKey())
+-                           .Build())
+-                .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY)
+-                           .Payload(model.ProcessSubjectPublicKeyInfo())
+-                           .Build())
+-                .Build())
+-        // Extensions.
+-        .ChildIfNotNullopt(std::move(details_extensions))
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_ALG)
+-                   .Payload(model.ProcessSecAlgorithmSignatureWrap())
+-                   .Build())
+-        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_VALUE)
+-                   .Payload(model.ProcessRawBitsSignatureWrap())
+-                   .Build());
+-  }
+-  CertNodeBuilder fingerprint_builder =
+-      CertNodeBuilder(IDS_CERT_INFO_FINGERPRINTS_GROUP);
+-  fingerprint_builder.Child(
+-      CertNodeBuilder(IDS_CERT_INFO_SHA256_FINGERPRINT_LABEL)
+-          .Payload(model.HashCertSHA256())
+-          .Build());
+-  if (model.is_valid()) {
+-    fingerprint_builder.Child(
+-        CertNodeBuilder(IDS_CERT_INFO_SHA256_SPKI_FINGERPRINT_LABEL)
+-            .Payload(model.HashSpkiSHA256())
+-            .Build());
+-  }
+-  contents_builder.Child(fingerprint_builder.Build());
+-
+-  base::ListValue root_list;
+-  root_list.Append(CertNodeBuilder(model.GetTitle())
+-                       .Child(contents_builder.Build())
+-                       .Build());
+-  // Send certificate information to javascript.
+-  ResolveJavascriptCallback(callback_id, root_list);
++  ResolveJavascriptCallback(
++      callback_id, x509_certificate_model::CertificateViewerFields(model));
+ }
+ 
+ int CertificateViewerDialogHandler::GetCertificateIndex(
+diff --git a/chrome/common/net/BUILD.gn b/chrome/common/net/BUILD.gn
+index 61d69ed429bcd..f8ee75118ea43 100644
+--- a/chrome/common/net/BUILD.gn
++++ b/chrome/common/net/BUILD.gn
+@@ -32,6 +32,8 @@ static_library("net") {
+ 
+   if (enable_webui_certificate_viewer) {
+     sources += [
++      "certificate_viewer_model.cc",
++      "certificate_viewer_model.h",
+       "x509_certificate_model.cc",
+       "x509_certificate_model.h",
+     ]
+diff --git a/chrome/common/net/certificate_viewer_model.cc b/chrome/common/net/certificate_viewer_model.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/common/net/certificate_viewer_model.cc
+@@ -0,0 +1,282 @@
++// Copyright 2012 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++// Shared, unchanged data construction extracted from
++// certificate_viewer_webui.cc.
++#include "chrome/common/net/certificate_viewer_model.h"
++
++#include <optional>
++#include <string>
++#include <utility>
++#include <variant>
++#include <vector>
++
++#include "base/check.h"
++#include "base/i18n/time_formatting.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/time/time.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/strings/grit/components_strings.h"
++#include "ui/base/l10n/l10n_util.h"
++namespace {
++// Helper class for building a Value representation of a certificate. The class
++// gathers data for a single node of the representation tree and builds a
++// `base::DictValue` out of that.
++class CertNodeBuilder {
++ public:
++  // Starts the node with "label" set to |label|.
++  explicit CertNodeBuilder(std::string_view label);
++
++  // Convenience version: Converts |label_id| to the corresponding resource
++  // string, then delegates to the other constructor.
++  explicit CertNodeBuilder(int label_id);
++
++  CertNodeBuilder(const CertNodeBuilder&) = delete;
++  CertNodeBuilder& operator=(const CertNodeBuilder&) = delete;
++
++  // Builder methods all return |*this| so that they can be chained in single
++  // expressions.
++
++  // Sets the "payload.val" field. Call this at most once.
++  CertNodeBuilder& Payload(std::string_view payload);
++
++  // Adds |child| in the list keyed "children". Can be called multiple times.
++  CertNodeBuilder& Child(base::DictValue child);
++
++  // Similar to Child, but if the argument is null, then this does not add
++  // anything.
++  CertNodeBuilder& ChildIfNotNullopt(std::optional<base::DictValue> child);
++
++  // Creates a base::DictValue representation of the collected information.
++  // Only call this once.
++  base::DictValue Build();
++
++ private:
++  base::DictValue node_;
++  base::ListValue children_;
++  // |built_| is false until Build() is called. Once it is |true|, |node_| and
++  // |children_| are no longer valid for use.
++  bool built_ = false;
++};
++
++CertNodeBuilder::CertNodeBuilder(std::string_view label) {
++  node_.Set("label", label);
++}
++
++CertNodeBuilder::CertNodeBuilder(int label_id)
++    : CertNodeBuilder(l10n_util::GetStringUTF8(label_id)) {}
++
++CertNodeBuilder& CertNodeBuilder::Payload(std::string_view payload) {
++  DCHECK(!node_.FindByDottedPath("payload.val"));
++  node_.SetByDottedPath("payload.val", payload);
++  return *this;
++}
++
++CertNodeBuilder& CertNodeBuilder::Child(base::DictValue child) {
++  children_.Append(std::move(child));
++  return *this;
++}
++
++CertNodeBuilder& CertNodeBuilder::ChildIfNotNullopt(
++    std::optional<base::DictValue> child) {
++  if (child) {
++    return Child(std::move(*child));
++  }
++  return *this;
++}
++
++base::DictValue CertNodeBuilder::Build() {
++  DCHECK(!built_);
++  if (!children_.empty()) {
++    node_.Set("children", std::move(children_));
++  }
++  built_ = true;
++  return std::move(node_);
++}
++
++std::string HandleOptionalOrError(
++    const x509_certificate_model::OptionalStringOrError& s) {
++  if (std::holds_alternative<x509_certificate_model::Error>(s)) {
++    return l10n_util::GetStringUTF8(IDS_CERT_DUMP_ERROR);
++  } else if (std::holds_alternative<x509_certificate_model::NotPresent>(s)) {
++    return l10n_util::GetStringUTF8(IDS_CERT_INFO_FIELD_NOT_PRESENT);
++  }
++  return std::get<std::string>(s);
++}
++
++}  // namespace
++namespace x509_certificate_model {
++base::DictValue CertificateViewerDialogArgs(
++    base::span<const X509CertificateModel> certs) {
++  // Certificate information. The keys in this dictionary's general key
++  // correspond to the IDs in the Html page.
++  base::DictValue cert_info;
++  const x509_certificate_model::X509CertificateModel& model = certs.front();
++
++  cert_info.Set("isError", !model.is_valid());
++  cert_info.SetByDottedPath(
++      "general.title",
++      l10n_util::GetStringFUTF8(IDS_CERT_INFO_DIALOG_TITLE,
++                                base::UTF8ToUTF16(model.GetTitle())));
++
++  if (model.is_valid()) {
++    // Standard certificate details.
++    const std::string alternative_text =
++        l10n_util::GetStringUTF8(IDS_CERT_INFO_FIELD_NOT_PRESENT);
++
++    // Issued to information.
++    cert_info.SetByDottedPath(
++        "general.issued-cn",
++        HandleOptionalOrError(model.GetSubjectCommonName()));
++    cert_info.SetByDottedPath("general.issued-o",
++                              HandleOptionalOrError(model.GetSubjectOrgName()));
++    cert_info.SetByDottedPath(
++        "general.issued-ou",
++        HandleOptionalOrError(model.GetSubjectOrgUnitName()));
++
++    // Issuer information.
++    cert_info.SetByDottedPath(
++        "general.issuer-cn",
++        HandleOptionalOrError(model.GetIssuerCommonName()));
++    cert_info.SetByDottedPath("general.issuer-o",
++                              HandleOptionalOrError(model.GetIssuerOrgName()));
++    cert_info.SetByDottedPath(
++        "general.issuer-ou",
++        HandleOptionalOrError(model.GetIssuerOrgUnitName()));
++
++    // Validity period.
++    base::Time issued, expires;
++    std::string issued_str, expires_str;
++    if (model.GetTimes(&issued, &expires)) {
++      issued_str =
++          base::UTF16ToUTF8(base::TimeFormatFriendlyDateAndTime(issued));
++      expires_str =
++          base::UTF16ToUTF8(base::TimeFormatFriendlyDateAndTime(expires));
++    } else {
++      issued_str = alternative_text;
++      expires_str = alternative_text;
++    }
++    cert_info.SetByDottedPath("general.issue-date", issued_str);
++    cert_info.SetByDottedPath("general.expiry-date", expires_str);
++    cert_info.SetByDottedPath("general.spki", model.HashSpkiSHA256());
++  }
++
++  // We always have a cert hash. We don't always have a SPKI hash, if the cert
++  // is not valid.
++  cert_info.SetByDottedPath("general.sha256", model.HashCertSHA256());
++
++  // Certificate hierarchy is constructed from bottom up.
++  base::ListValue children;
++  int index = 0;
++  for (const auto& cert : certs) {
++    base::DictValue cert_node;
++    cert_node.Set("label", base::Value(cert.GetTitle()));
++    cert_node.SetByDottedPath("payload.index", base::Value(index));
++    // Add the child from the previous iteration.
++    if (!children.empty()) {
++      cert_node.Set("children", std::move(children));
++    }
++
++    // Add this node to the children list for the next iteration.
++    children = base::ListValue();
++    children.Append(std::move(cert_node));
++    ++index;
++  }
++  // Set the last node as the top of the certificate hierarchy.
++  cert_info.Set("hierarchy", std::move(children));
++
++  return cert_info;
++}
++base::ListValue CertificateViewerFields(const X509CertificateModel& model) {
++  CertNodeBuilder contents_builder(IDS_CERT_DETAILS_CERTIFICATE);
++
++  if (model.is_valid()) {
++    CertNodeBuilder issued_node_builder(IDS_CERT_DETAILS_NOT_BEFORE);
++    CertNodeBuilder expires_node_builder(IDS_CERT_DETAILS_NOT_AFTER);
++    base::Time issued, expires;
++    if (model.GetTimes(&issued, &expires)) {
++      issued_node_builder.Payload(base::UTF16ToUTF8(
++          base::TimeFormatShortDateAndTimeWithTimeZone(issued)));
++      expires_node_builder.Payload(base::UTF16ToUTF8(
++          base::TimeFormatShortDateAndTimeWithTimeZone(expires)));
++    }
++
++    std::vector<x509_certificate_model::Extension> extensions =
++        model.GetExtensions(
++            l10n_util::GetStringUTF8(IDS_CERT_EXTENSION_CRITICAL),
++            l10n_util::GetStringUTF8(IDS_CERT_EXTENSION_NON_CRITICAL));
++
++    std::optional<base::DictValue> details_extensions;
++    if (!extensions.empty()) {
++      CertNodeBuilder details_extensions_builder(IDS_CERT_DETAILS_EXTENSIONS);
++      for (const x509_certificate_model::Extension& extension : extensions) {
++        details_extensions_builder.Child(
++            CertNodeBuilder(extension.name).Payload(extension.value).Build());
++      }
++      details_extensions = details_extensions_builder.Build();
++    }
++
++    contents_builder
++        // Main certificate fields.
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_VERSION)
++                   .Payload(l10n_util::GetStringFUTF8(
++                       IDS_CERT_DETAILS_VERSION_FORMAT,
++                       base::UTF8ToUTF16(model.GetVersion())))
++                   .Build())
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_SERIAL_NUMBER)
++                   .Payload(model.GetSerialNumberHexified())
++                   .Build())
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_ALG)
++                   .Payload(model.ProcessSecAlgorithmSignature())
++                   .Build())
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_ISSUER)
++                   .Payload(HandleOptionalOrError(model.GetIssuerName()))
++                   .Build())
++        // Validity period.
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_VALIDITY)
++                   .Child(issued_node_builder.Build())
++                   .Child(expires_node_builder.Build())
++                   .Build())
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT)
++                   .Payload(HandleOptionalOrError(model.GetSubjectName()))
++                   .Build())
++        // Subject key information.
++        .Child(
++            CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY_INFO)
++                .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY_ALG)
++                           .Payload(model.ProcessSecAlgorithmSubjectPublicKey())
++                           .Build())
++                .Child(CertNodeBuilder(IDS_CERT_DETAILS_SUBJECT_KEY)
++                           .Payload(model.ProcessSubjectPublicKeyInfo())
++                           .Build())
++                .Build())
++        // Extensions.
++        .ChildIfNotNullopt(std::move(details_extensions))
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_ALG)
++                   .Payload(model.ProcessSecAlgorithmSignatureWrap())
++                   .Build())
++        .Child(CertNodeBuilder(IDS_CERT_DETAILS_CERTIFICATE_SIG_VALUE)
++                   .Payload(model.ProcessRawBitsSignatureWrap())
++                   .Build());
++  }
++  CertNodeBuilder fingerprint_builder =
++      CertNodeBuilder(IDS_CERT_INFO_FINGERPRINTS_GROUP);
++  fingerprint_builder.Child(
++      CertNodeBuilder(IDS_CERT_INFO_SHA256_FINGERPRINT_LABEL)
++          .Payload(model.HashCertSHA256())
++          .Build());
++  if (model.is_valid()) {
++    fingerprint_builder.Child(
++        CertNodeBuilder(IDS_CERT_INFO_SHA256_SPKI_FINGERPRINT_LABEL)
++            .Payload(model.HashSpkiSHA256())
++            .Build());
++  }
++  contents_builder.Child(fingerprint_builder.Build());
++
++  base::ListValue root_list;
++  root_list.Append(CertNodeBuilder(model.GetTitle())
++                       .Child(contents_builder.Build())
++                       .Build());
++  return root_list;
++}
++}  // namespace x509_certificate_model
+diff --git a/chrome/common/net/certificate_viewer_model.h b/chrome/common/net/certificate_viewer_model.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/common/net/certificate_viewer_model.h
+@@ -0,0 +1,14 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef CHROME_COMMON_NET_CERTIFICATE_VIEWER_MODEL_H_
++#define CHROME_COMMON_NET_CERTIFICATE_VIEWER_MODEL_H_
++#include "base/containers/span.h"
++#include "base/values.h"
++#include "chrome/common/net/x509_certificate_model.h"
++namespace x509_certificate_model {
++base::DictValue CertificateViewerDialogArgs(
++    base::span<const X509CertificateModel> certs);
++base::ListValue CertificateViewerFields(const X509CertificateModel& model);
++}  // namespace x509_certificate_model
++#endif  // CHROME_COMMON_NET_CERTIFICATE_VIEWER_MODEL_H_
+diff --git a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.cc b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.cc
+@@ -0,0 +1,63 @@
++// Copyright 2012 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.h"
++
++#include "chrome/grit/certificate_viewer_resources.h"
++#include "chrome/grit/certificate_viewer_resources_map.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/strings/grit/components_strings.h"
++#include "content/public/browser/web_ui_data_source.h"
++#include "ui/base/webui/web_ui_util.h"
++#include "ui/webui/webui_util.h"
++
++namespace certificate_viewer {
++
++void AddDataSource(content::BrowserContext* context) {
++  content::WebUIDataSource* html_source =
++      content::WebUIDataSource::CreateAndAdd(context, "view-cert");
++
++  static constexpr webui::LocalizedString kStrings[] = {
++      {"general", IDS_CERT_INFO_GENERAL_TAB_LABEL},
++      {"details", IDS_CERT_INFO_DETAILS_TAB_LABEL},
++      {"modifications", IDS_CERT_INFO_MODIFICATIONS_TAB_LABEL},
++      {"close", IDS_CLOSE},
++      {"export", IDS_CERT_DETAILS_EXPORT_CERTIFICATE},
++      {"exportA11yLabel", IDS_CERT_DETAILS_EXPORT_CERTIFICATE_A11Y_LABEL},
++      {"issuedTo", IDS_CERT_INFO_SUBJECT_GROUP},
++      {"issuedBy", IDS_CERT_INFO_ISSUER_GROUP},
++      {"cn", IDS_CERT_INFO_COMMON_NAME_LABEL},
++      {"o", IDS_CERT_INFO_ORGANIZATION_LABEL},
++      {"ou", IDS_CERT_INFO_ORGANIZATIONAL_UNIT_LABEL},
++      {"validity", IDS_CERT_INFO_VALIDITY_GROUP},
++      {"issuedOn", IDS_CERT_INFO_ISSUED_ON_LABEL},
++      {"expiresOn", IDS_CERT_INFO_EXPIRES_ON_LABEL},
++      {"fingerprints", IDS_CERT_INFO_FINGERPRINTS_GROUP},
++      {"sha256", IDS_CERT_INFO_SHA256_FINGERPRINT_LABEL},
++      {"spki", IDS_CERT_INFO_SHA256_SPKI_FINGERPRINT_LABEL},
++      {"hierarchy", IDS_CERT_DETAILS_CERTIFICATE_HIERARCHY_LABEL},
++      {"certFields", IDS_CERT_DETAILS_CERTIFICATE_FIELDS_LABEL},
++      {"certFieldVal", IDS_CERT_DETAILS_CERTIFICATE_FIELD_VALUE_LABEL},
++      {"certError", IDS_CERT_DUMP_ERROR},
++      {"trust", IDS_CERT_INFO_TRUST_LABEL},
++      {"trustState", IDS_CERT_INFO_TRUST_STATE_LABEL},
++      {"trustStateDistrusted", IDS_CERT_INFO_TRUST_STATE_DISTRUSTED},
++      {"trustStateHint", IDS_CERT_INFO_TRUST_STATE_HINT},
++      {"trustStateTrusted", IDS_CERT_INFO_TRUST_STATE_TRUSTED},
++      {"constraints", IDS_CERT_INFO_CONSTRAINTS_LABEL},
++      {"add", IDS_CERT_INFO_ADD_CONSTRAINTS_BUTTON_LABEL},
++      {"addConstraints", IDS_CERT_INFO_ADD_CONSTRAINTS_LABEL},
++      {"addConstraintsPlaceholder", IDS_CERT_INFO_ADD_CONSTRAINTS_PLACEHOLDER},
++      {"addConstraintErrorMessage", IDS_CERT_INFO_ADD_CONSTRAINT_ERROR_MESSAGE},
++      {"deleteConstraintErrorMessage",
++       IDS_CERT_INFO_DELETE_CONSTRAINT_ERROR_MESSAGE},
++      {"trustStateErrorMessage", IDS_CERT_INFO_TRUST_STATE_ERROR_MESSAGE},
++  };
++  html_source->AddLocalizedStrings(kStrings);
++
++  webui::SetupWebUIDataSource(html_source, kCertificateViewerResources,
++                              IDR_CERTIFICATE_VIEWER_CERTIFICATE_VIEWER_HTML);
++}
++
++}  // namespace certificate_viewer
+diff --git a/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.h b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/webui/certificate_viewer/certificate_viewer_resources_util.h
+@@ -0,0 +1,12 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef CHROME_BROWSER_UI_WEBUI_CERTIFICATE_VIEWER_CERTIFICATE_VIEWER_RESOURCES_UTIL_H_
++#define CHROME_BROWSER_UI_WEBUI_CERTIFICATE_VIEWER_CERTIFICATE_VIEWER_RESOURCES_UTIL_H_
++namespace content {
++class BrowserContext;
++}
++namespace certificate_viewer {
++void AddDataSource(content::BrowserContext* context);
++}
++#endif  // CHROME_BROWSER_UI_WEBUI_CERTIFICATE_VIEWER_CERTIFICATE_VIEWER_RESOURCES_UTIL_H_

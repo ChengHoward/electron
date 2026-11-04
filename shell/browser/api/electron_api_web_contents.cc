@@ -4,6 +4,13 @@
 
 #include "shell/browser/api/electron_api_web_contents.h"
 
+#if BUILDFLAG(IS_WIN)
+#include "base/i18n/rtl.h"
+#include "components/vector_icons/vector_icons.h"
+#include "shell/browser/ui/views/native_page_info.h"
+#include "ui/gfx/paint_vector_icon.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1372,6 +1379,7 @@ void WebContents::InitWithWebContents(
 }
 
 WebContents::~WebContents() {
+  CloseCertificateViewer();
   // Release this instance's contribution to the process-wide caret browsing
   // refcount. Runs before any of the early returns below so a WebContents
   // destroyed with caret browsing on cannot leak a count and pin the platform
@@ -3324,6 +3332,58 @@ int WebContents::GetOwnerWindowID() const {
   return owner_window() ? owner_window()->base_window_id() : 0;
 }
 
+bool WebContents::ShowCertificateViewer(gin_helper::ErrorThrower thrower) {
+#if BUILDFLAG(IS_WIN)
+  auto* entry = web_contents()->GetController().GetLastCommittedEntry();
+  if (!entry || !entry->GetSSL().certificate || !owner_window() ||
+      !owner_window()->widget() || owner_window()->widget()->IsClosed()) {
+    thrower.ThrowError(
+        "Certificate viewer requires a committed certificate and live owner");
+    return false;
+  }
+  CloseCertificateViewer();
+  certificate_viewer_ = electron::ShowCertificateViewer(
+      web_contents(), owner_window()->widget(),
+      entry->GetSSL().certificate.get(),
+      base::BindOnce(
+          [](base::WeakPtr<WebContents> self) {
+            if (self)
+              self->EmitWithoutEvent("-page-info-certificate-closed");
+          },
+          GetWeakPtr()));
+  return !!certificate_viewer_.widget;
+#else
+  return false;
+#endif
+}
+
+void WebContents::CloseCertificateViewer() {
+#if BUILDFLAG(IS_WIN)
+  auto viewer = certificate_viewer_;
+  certificate_viewer_ = {};
+  if (viewer.widget && !viewer.widget->IsClosed())
+    viewer.widget->Close();
+#endif
+}
+
+v8::Local<v8::Promise> WebContents::GetCertificateViewerState(
+    v8::Isolate* isolate) {
+  gin_helper::Promise<base::Value> promise(isolate);
+  auto handle = promise.GetHandle();
+#if BUILDFLAG(IS_WIN)
+  InspectCertificateViewer(
+      certificate_viewer_,
+      base::BindOnce(
+          [](gin_helper::Promise<base::Value> promise, base::Value state) {
+            promise.Resolve(std::move(state));
+          },
+          std::move(promise)));
+#else
+  promise.Resolve(base::Value(base::DictValue()));
+#endif
+  return handle;
+}
+
 v8::Local<v8::Value> WebContents::GetPageInfo(
     v8::Isolate* isolate,
     gin_helper::ErrorThrower thrower,
@@ -3382,6 +3442,36 @@ v8::Local<v8::Value> WebContents::GetPageInfo(
   result.Set("documentId", document_id);
   result.Set("ownerWindowId", owner_id);
   result.Set("securityState", std::string(security));
+#if BUILDFLAG(IS_WIN)
+  const bool dark =
+      ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+      ui::NativeTheme::PreferredColorScheme::kDark;
+  auto presentation =
+      NativePageInfoPresentation(ssl.certificate.get(), security);
+  presentation.Set("dark", dark);
+  result.Set("presentation", std::move(presentation));
+  auto icons = gin_helper::Dictionary::CreateEmpty(isolate);
+  const struct {
+    const char* name;
+    const gfx::VectorIcon* icon;
+  } page_icons[] = {
+      {"lock", &vector_icons::kLockIcon},
+      {"warning", &vector_icons::kWarningIcon},
+      {"settings", &vector_icons::kSettingsIcon},
+      {"close", &vector_icons::kCloseIcon},
+      {"back", base::i18n::IsRTL() ? &vector_icons::kArrowForwardIcon
+                                   : &vector_icons::kArrowBackIcon},
+      {"next", &vector_icons::kSubmenuArrowChromeRefreshOldIcon},
+      {"launch", &vector_icons::kLaunchOldIcon},
+      {"certificate", &vector_icons::kCertificateOldIcon},
+  };
+  for (const auto& icon : page_icons)
+    icons.Set(icon.name, gfx::Image(gfx::CreateVectorIcon(
+                             *icon.icon, 20,
+                             dark ? SkColorSetRGB(210, 212, 214)
+                                  : SkColorSetRGB(90, 92, 94))));
+  result.Set("icons", icons);
+#endif
   result.Set("certificateStatus", static_cast<double>(ssl.cert_status));
   result.Set("contentStatus", ssl.content_status);
   if (ssl.certificate)
@@ -7928,6 +8018,11 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::LoadURL>("loadURL")
       .SetMethod<&WebContents::LoadURLWithResponse>("_loadURLWithResponse")
       .SetMethod<&WebContents::GetPageInfo>("_getPageInfo")
+      .SetMethod<&WebContents::ShowCertificateViewer>("_showCertificateViewer")
+      .SetMethod<&WebContents::CloseCertificateViewer>(
+          "_closeCertificateViewer")
+      .SetMethod<&WebContents::GetCertificateViewerState>(
+          "_getCertificateViewerState")
       .SetMethod<&WebContents::GetOwnerWindowID>("_getOwnerWindowId")
       .SetMethod<&WebContents::Reload>("reload")
       .SetMethod<&WebContents::ReloadIgnoringCache>("reloadIgnoringCache")

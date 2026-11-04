@@ -10,6 +10,7 @@
 #include "base/containers/flat_map.h"
 #include "gin/weak_cell.h"
 #include "shell/browser/api/electron_api_menu.h"
+#include "shell/browser/ui/views/native_menu.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 namespace electron::api {
@@ -20,6 +21,8 @@ class MenuViews : public Menu {
   ~MenuViews() override;
 
   void Trace(cppgc::Visitor*) const override;
+  void Refresh(gin::Arguments* args) override;
+  base::ListValue GetPopupState() const override;
 
  protected:
   // Menu
@@ -34,9 +37,11 @@ class MenuViews : public Menu {
 
  private:
   void OnClosed(int32_t window_id, base::OnceClosure callback);
+  bool initializing_ = false;
 
   // window ID -> open context menu
   base::flat_map<int32_t, std::unique_ptr<views::MenuRunner>> menu_runners_;
+  base::flat_map<int32_t, std::unique_ptr<NativeMenuAdapter>> menu_adapters_;
 
   gin::WeakCellFactory<MenuViews> weak_cell_factory_{this};
 };

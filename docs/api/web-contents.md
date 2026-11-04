@@ -1218,13 +1218,21 @@ requested to show, or `false` on unsupported platforms. The initial target is
 Windows x64. Invalid arguments, destroyed contents, an uncommitted page, or a
 missing owner window throw an error.
 
-Displays the committed origin, actual connection security, certificate summary,
-and application permission checks. False permission checks mean the permission
-is not preauthorized; they are not permanent user denials. Permission changes
-are delegated to the host application's website settings.
+Displays the committed origin, actual connection security, a native security
+subpage and website settings. The certificate action opens a read-only native
+Chromium WebUI viewer with general information, detailed fields and the actual certificate
+chain. Cookie management and a full permissions settings page are not included.
+Permission changes are delegated to the host application's website settings.
+
+Built-in labels use Chromium locale resources and follow the application's
+startup language (`--lang` or `app.commandLine.appendSwitch('lang', locale)`).
+Custom NativePanel or Menu labels are supplied and translated by the host.
 
 The panel overlaps WebContentsView, can extend outside its owner, and does not
 create a renderer, hide or capture the page, or change its input protection.
+The certificate viewer uses one dedicated internal WebUI WebContents. The
+main panel and security subpage continue to use native controls. Node and host
+preloads are not enabled in the certificate viewer.
 Navigation, destruction, or transfer to another window closes the old panel.
 Only one page information panel is kept per WebContents.
 

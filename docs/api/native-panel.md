@@ -42,6 +42,12 @@ app.whenReady().then(() => {
 })
 ```
 
+Overflow areas and `list` controls use a native vertical scrollbar with a 15 DIP
+track, gray rounded thumb, and up/down arrows. It follows the panel's light or
+dark theme, supports native dragging and scrolling, and disappears when all
+content fits. Its geometry is built in, with no per-panel CSS or process-wide
+scrollbar changes.
+
 ## Class: NativePanel
 
 > Create native controls in an owned popup window.
@@ -122,7 +128,8 @@ Returns:
 
 * `action` [NativePanelAction](structures/native-panel-action.md)
 
-Emitted for a native control action. A button emits `click`, a toggle or option
+Emitted for a native control action. A button, clickable row, icon button or
+inline text link emits `click`; a toggle or option
 emits `change`, and a single-line input emits `change` while editing and `submit`
 when committed with Enter.
 The application performs the requested operation. Opening, focusing, hovering,

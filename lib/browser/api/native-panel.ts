@@ -10,6 +10,8 @@ export type NativePanelContent = Electron.NativePanelContent;
 type RecordValue = Record<string, any>;
 const types = new Set([
   'row',
+  'item',
+  'iconButton',
   'column',
   'text',
   'icon',
@@ -23,14 +25,16 @@ const types = new Set([
 ]);
 const placements = new Set(['auto', 'bottom-start', 'bottom-end', 'top-start', 'top-end']);
 const modes = new Set(['system', 'light', 'dark']);
-const common = ['type', 'id', 'disabled', 'visible', 'width', 'height', 'flex', 'tooltip'];
+const common = ['type', 'id', 'disabled', 'visible', 'width', 'height', 'maxWidth', 'flex', 'tooltip', 'style'];
 const fields: Record<string, string[]> = {
   row: ['children', 'gap', 'padding'],
+  item: ['children', 'gap', 'padding', 'selected', 'accessibleName'],
+  iconButton: ['image', 'accessibleName'],
   column: ['children', 'gap', 'padding'],
   list: ['children', 'gap', 'padding'],
-  text: ['text', 'muted', 'fontSize'],
+  text: ['text', 'muted', 'fontSize', 'singleLine', 'highlights', 'linkRange'],
   icon: ['image'],
-  button: ['text'],
+  button: ['text', 'variant', 'image'],
   toggle: ['text', 'checked'],
   input: ['value', 'placeholder', 'maxLength'],
   option: ['items', 'value'],
@@ -66,6 +70,33 @@ function boolean(value: unknown, name: string) {
   if (typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean`);
 }
 
+function style(value: unknown): RecordValue {
+  object(value, 'style');
+  const colors = [
+    'background',
+    'hoverBackground',
+    'pressedBackground',
+    'selectedBackground',
+    'disabledBackground',
+    'color',
+    'borderColor'
+  ];
+  const sizes = ['radius', 'borderWidth', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft'];
+  keys(value, [...colors, ...sizes, 'fontWeight', 'align', 'borderless'], 'style');
+  for (const key of colors) {
+    if (key in value && (typeof value[key] !== 'string' || !/^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value[key]))) {
+      throw new TypeError(`style.${key} must be #RRGGBB or #AARRGGBB`);
+    }
+  }
+  for (const key of sizes) if (key in value) number(value[key], `style.${key}`, 0, 1000);
+  if ('fontWeight' in value && !['normal', 'medium', 'bold'].includes(value.fontWeight)) {
+    throw new TypeError('Invalid style.fontWeight');
+  }
+  if ('align' in value && !['start', 'center', 'end'].includes(value.align)) throw new TypeError('Invalid style.align');
+  if ('borderless' in value) boolean(value.borderless, 'style.borderless');
+  return { ...value };
+}
+
 export function validateNativePanelAnchor(value: unknown): Electron.Rectangle {
   object(value, 'anchorBounds');
   keys(value, ['x', 'y', 'width', 'height'], 'anchorBounds');
@@ -88,18 +119,56 @@ function content(value: unknown): RecordValue {
     if (!node.id || ids.has(node.id)) throw new TypeError('NativePanel controls require unique, nonempty ids');
     ids.add(node.id);
     const result = { ...node };
-    for (const key of ['disabled', 'visible', 'muted']) if (key in node) boolean(node[key], key);
-    for (const key of ['width', 'height', 'gap', 'padding']) {
+    for (const key of ['disabled', 'visible', 'muted', 'selected', 'singleLine']) {
+      if (key in node) boolean(node[key], key);
+    }
+    if ('style' in node) result.style = style(node.style);
+    if ('accessibleName' in node) string(node.accessibleName, 'accessibleName');
+    if (node.type === 'iconButton' && !node.accessibleName) throw new TypeError('iconButton requires accessibleName');
+    if ('variant' in node && !['default', 'plain', 'outlined'].includes(node.variant)) {
+      throw new TypeError('Invalid button.variant');
+    }
+    for (const key of ['width', 'height', 'maxWidth', 'gap', 'padding']) {
       if (key in node) number(node[key], key, 0, 100000);
     }
     if ('fontSize' in node) number(node.fontSize, 'fontSize', 6, 96);
     if ('flex' in node) number(node.flex, 'flex', 0, 1000);
     if ('tooltip' in node) string(node.tooltip, 'tooltip');
-    if (['row', 'column', 'list'].includes(node.type)) {
+    if (['row', 'column', 'list', 'item'].includes(node.type)) {
       if (!Array.isArray(node.children)) throw new TypeError('Container children must be an array');
       result.children = node.children.map((child) => visit(child, depth + 1));
     }
     if (['text', 'button', 'toggle'].includes(node.type)) string(node.text, 'text');
+    if ('highlights' in node) {
+      if (!Array.isArray(node.highlights) || node.highlights.length > 256) {
+        throw new TypeError('Invalid text.highlights');
+      }
+      result.highlights = node.highlights.map((range: unknown) => {
+        object(range, 'highlight');
+        keys(range, ['start', 'end'], 'highlight');
+        number(range.start, 'highlight.start', 0, node.text.length);
+        number(range.end, 'highlight.end', range.start, node.text.length);
+        if (!Number.isInteger(range.start) || !Number.isInteger(range.end)) {
+          throw new TypeError('Highlight offsets must be integers');
+        }
+        return { ...range };
+      });
+    }
+    if ('linkRange' in node) {
+      object(node.linkRange, 'linkRange');
+      keys(node.linkRange, ['start', 'end'], 'linkRange');
+      number(node.linkRange.start, 'linkRange.start', 0, node.text.length);
+      number(node.linkRange.end, 'linkRange.end', node.linkRange.start + 1, node.text.length);
+      if (
+        !Number.isInteger(node.linkRange.start) ||
+        !Number.isInteger(node.linkRange.end) ||
+        node.singleLine ||
+        'highlights' in node
+      ) {
+        throw new TypeError('linkRange requires integer UTF-16 offsets on multiline text without highlights');
+      }
+      result.linkRange = { ...node.linkRange };
+    }
     if (node.type === 'toggle') boolean(node.checked, 'checked');
     if (node.type === 'input') {
       if ('value' in node) string(node.value, 'value');
@@ -138,7 +207,7 @@ function content(value: unknown): RecordValue {
     if (node.type === 'progress') {
       if (node.value !== -1) number(node.value, 'progress value', 0, 1);
     }
-    if (node.type === 'icon') {
+    if (node.type === 'icon' || node.type === 'iconButton' || 'image' in node) {
       if (
         !node.image ||
         typeof node.image.toPNG !== 'function' ||
@@ -170,13 +239,17 @@ function theme(value: unknown): RecordValue {
 
 function patch(value: unknown): RecordValue {
   object(value, 'patch');
-  keys(value, ['content', 'anchorBounds', 'theme', 'radius', 'shadow'], 'patch');
+  keys(value, ['content', 'anchorBounds', 'theme', 'radius', 'shadow', 'contentInset'], 'patch');
   const result: RecordValue = { ...value };
   if ('content' in value) result.content = content(value.content);
   if ('anchorBounds' in value) result.anchorBounds = validateNativePanelAnchor(value.anchorBounds);
   if ('theme' in value) result.theme = theme(value.theme);
   if ('radius' in value) number(value.radius, 'radius', 0, 1000);
   if ('shadow' in value) boolean(value.shadow, 'shadow');
+  if ('contentInset' in value) {
+    number(value.contentInset, 'contentInset', 0, 64);
+    if (!Number.isInteger(value.contentInset)) throw new TypeError('contentInset must be an integer');
+  }
   return result;
 }
 
@@ -191,6 +264,7 @@ function options(value: unknown): RecordValue {
       'content',
       'theme',
       'radius',
+      'contentInset',
       'shadow',
       'focusMode',
       'dismissOnOutsideClick',
@@ -221,11 +295,16 @@ function options(value: unknown): RecordValue {
     content: content(value.content),
     theme: theme(value.theme ?? 'system'),
     radius: value.radius ?? 12,
+    contentInset: value.contentInset ?? 12,
     shadow: value.shadow ?? true,
     focusMode: value.focusMode ?? 'menu',
     dismissOnOutsideClick: value.dismissOnOutsideClick ?? true,
     dismissOnEscape: value.dismissOnEscape ?? true,
-    ...patch(Object.fromEntries(['radius', 'shadow'].filter((key) => key in value).map((key) => [key, value[key]])))
+    ...patch(
+      Object.fromEntries(
+        ['radius', 'shadow', 'contentInset'].filter((key) => key in value).map((key) => [key, value[key]])
+      )
+    )
   };
 }
 

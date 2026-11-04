@@ -20,6 +20,9 @@ user.GetWindow.restype = HWND
 user.GetWindowRect.argtypes = [HWND, ctypes.POINTER(wintypes.RECT)]
 user.GetWindowTextW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
 user.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
+user.GetDlgCtrlID.argtypes = [HWND]
+user.SendMessageW.argtypes = [HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user.SendMessageW.restype = ctypes.c_ssize_t
 user.GetForegroundWindow.restype = HWND
 user.GetWindowLongW.argtypes = [HWND, ctypes.c_int]
 user.SetForegroundWindow.argtypes = [HWND]
@@ -86,7 +89,8 @@ def allowed(hwnd, pid):
 
 def activate(hwnd, pid):
     allowed(hwnd, pid)
-    if (request['action'] in ('click', 'key', 'text', 'ime', 'layout')
+    if (request['action'] in ('click', 'key', 'text', 'ime', 'layout', 'move')
+            and not request.get('forceActivation', False)
             and process_of(user.GetForegroundWindow()) in allowed_pids):
         # Keep an already focused control or related native menu in this probe.
         # Re-activating the owner would cancel a transient combobox menu.
@@ -149,7 +153,7 @@ def windows(pid):
 
     @callback_type
     def callback(hwnd, _):
-        if process_of(hwnd) == pid:
+        if process_of(hwnd) in allowed_pids:
             rect = wintypes.RECT()
             user.GetWindowRect(hwnd, ctypes.byref(rect))
             title, name = ctypes.create_unicode_buffer(1024), ctypes.create_unicode_buffer(256)
@@ -170,6 +174,41 @@ def windows(pid):
     return found
 
 
+def controls(hwnd, pid):
+    allowed(hwnd, pid)
+    found = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, HWND, wintypes.LPARAM)
+
+    @callback_type
+    def callback(child, _):
+        allowed(child, pid)
+        rect = wintypes.RECT()
+        user.GetWindowRect(child, ctypes.byref(rect))
+        title, name = ctypes.create_unicode_buffer(1024), ctypes.create_unicode_buffer(256)
+        user.GetWindowTextW(child, title, len(title))
+        user.GetClassNameW(child, name, len(name))
+        entry = {'hwnd': int(child), 'id': user.GetDlgCtrlID(child),
+                 'class': name.value, 'text': title.value,
+                 'visible': bool(user.IsWindowVisible(child)),
+                 'bounds': {'x': rect.left, 'y': rect.top,
+                            'width': rect.right - rect.left,
+                            'height': rect.bottom - rect.top}}
+        if name.value == 'ComboBox':
+            count = user.SendMessageW(child, 0x0146, 0, 0)
+            entry['items'] = []
+            for index in range(min(max(count, 0), 100)):
+                length = user.SendMessageW(child, 0x0149, index, 0)
+                if 0 <= length <= 4096:
+                    value = ctypes.create_unicode_buffer(length + 1)
+                    user.SendMessageW(child, 0x0148, index, ctypes.addressof(value))
+                    entry['items'].append(value.value)
+        found.append(entry)
+        return True
+
+    user.EnumChildWindows(HWND(hwnd), callback, 0)
+    return found
+
+
 request = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 pid = int(request['pid'])
 allowed_pids = {pid, *map(int, request.get('allowedPids', []))}
@@ -185,6 +224,8 @@ if action == 'windows':
     layouts = (ctypes.c_void_p * count)()
     user.GetKeyboardLayoutList(count, layouts)
     answer['imeLayouts'] = [int(layout or 0) for layout in layouts]
+elif action == 'controls':
+    answer = {'controls': controls(int(request['hwnd']), pid)}
 elif action == 'restore':
     cursor = request.get('cursor')
     if cursor:
@@ -224,7 +265,7 @@ elif action in ('hit', 'pixel'):
 else:
     hwnd = int(request['hwnd'])
     activate(hwnd, pid)
-    if action in ('click', 'wheel'):
+    if action in ('click', 'wheel', 'drag', 'move'):
         x, y = int(request['x']), int(request['y'])
         hit = user.WindowFromPoint(wintypes.POINT(x, y))
         allowed(hit, pid)
@@ -234,10 +275,27 @@ else:
         if action == 'click':
             send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)), pid)
             send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)), pid)
-        else:
+            # Let the target dispatch both events before moving the cursor away;
+            # native menus also consult the current pointer during activation.
+            time.sleep(0.06)
+        elif action == 'wheel':
             send(INPUT(type=0, mi=MOUSEINPUT(mouseData=int(request.get('delta', -480)) & 0xffffffff,
                                             dwFlags=0x0800)), pid)
-        user.SetCursorPos(cursor.x, cursor.y)
+        elif action == 'drag':
+            end = request['end']
+            send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)), pid)
+            try:
+                for step in range(1, 21):
+                    px = round(x + (int(end['x']) - x) * step / 20)
+                    py = round(y + (int(end['y']) - y) * step / 20)
+                    allowed(user.WindowFromPoint(wintypes.POINT(px, py)), pid)
+                    allowed(user.GetForegroundWindow(), pid)
+                    user.SetCursorPos(px, py)
+                    time.sleep(0.015)
+            finally:
+                send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)), pid)
+        if not request.get('keepCursor', False):
+            user.SetCursorPos(cursor.x, cursor.y)
     elif action == 'text':
         text = request['text'].encode('utf-16-le')
         for offset in range(0, len(text), 2):

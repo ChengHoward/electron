@@ -31,6 +31,7 @@
 #include "shell/common/gin_converters/gurl_converter.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_converters/optional_converter.h"
+#include "shell/common/gin_converters/value_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/gin_helper/wrappable_pointer_tags.h"
@@ -296,6 +297,23 @@ v8::Local<v8::Value> Menu::Popup(gin::Arguments* args) {
   v8::Local<v8::Object> options = options_value.As<v8::Object>();
 
   gin_helper::Dictionary dict(isolate, options);
+  popup_appearance_.clear();
+  v8::Local<v8::Value> appearance;
+  if (dict.Get("appearance", &appearance) && !appearance->IsUndefined()) {
+#if BUILDFLAG(IS_WIN)
+    base::Value parsed;
+    if (!gin::ConvertFromV8(isolate, appearance, &parsed) ||
+        !parsed.is_dict()) {
+      thrower.ThrowTypeError("appearance must be an object");
+      return v8::Undefined(isolate);
+    }
+    popup_appearance_ = std::move(parsed).TakeDict();
+    popup_appearance_.Set("_custom", true);
+#else
+    thrower.ThrowError("Custom menu appearance is supported on Windows only");
+    return v8::Undefined(isolate);
+#endif
+  }
   v8::Local<v8::Value> window_value;
   int x = -1;
   int y = -1;
@@ -350,8 +368,15 @@ v8::Local<v8::Value> Menu::Popup(gin::Arguments* args) {
   base::OnceClosure callback;
   if (!dict.Get("callback", &callback))
     callback = base::DoNothing();
-  PopupAt(window, frame, x, y, positioning_item, source_type,
-          std::move(callback));
+  {
+    v8::TryCatch try_catch(isolate);
+    PopupAt(window, frame, x, y, positioning_item, source_type,
+            std::move(callback));
+    if (try_catch.HasCaught()) {
+      try_catch.ReThrow();
+      return v8::Undefined(isolate);
+    }
+  }
 
   gin::Dictionary result = gin::Dictionary::CreateEmpty(isolate);
   result.Set("browserWindow", window_value);
@@ -374,6 +399,16 @@ void Menu::ClosePopup(gin::Arguments* args) {
     // belonging to this menu.
     ClosePopupAt(-1);
   }
+}
+
+void Menu::Refresh(gin::Arguments* args) {
+  gin_helper::ErrorThrower(args->isolate())
+      .ThrowError(
+          "Native menu control refresh is not supported on this platform");
+}
+
+base::ListValue Menu::GetPopupState() const {
+  return base::ListValue();
 }
 
 // static
@@ -517,6 +552,8 @@ void Menu::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod("getMenuItemById", &Menu::GetMenuItemById)
       .SetMethod("popup", &Menu::Popup)
       .SetMethod("closePopup", &Menu::ClosePopup)
+      .SetMethod("refresh", &Menu::Refresh)
+      .SetMethod("_getPopupState", &Menu::GetPopupState)
       .SetMethod("getItemCount", &Menu::GetItemCount)
       .SetMethod("getIndexOfCommandId", &Menu::GetIndexOfCommandId)
       .SetMethod("_activate", &Menu::ActivateForTesting)

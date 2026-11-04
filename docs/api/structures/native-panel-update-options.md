@@ -6,6 +6,10 @@
   DIP coordinates. All values must be finite and dimensions non-negative.
 * `theme` (string | [NativePanelTheme](native-panel-theme.md)) (optional) -
   `system`, `light`, `dark`, or a native color and font configuration.
+* `contentInset` Integer (optional) - Inner surface inset from `0` through `64`
+  DIP. Default is `12` on construction; updates retain the previous value when
+  omitted. Use a smaller inset for full-width suggestion rows.
+
 * `radius` number (optional) - Corner radius from `0` through `1000` DIP.
 * `shadow` boolean (optional) - Whether to display the native shadow.
 

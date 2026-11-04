@@ -12,6 +12,7 @@
 
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "base/strings/utf_string_conversions.h"
 #include "gin/arguments.h"
 #include "gin/dictionary.h"
 #include "shell/browser/api/electron_api_base_window.h"
@@ -112,11 +113,12 @@ bool ParseNode(v8::Isolate* isolate,
     return false;
   static const base::NoDestructor<std::set<std::string>> types(
       std::set<std::string>{"row", "column", "text", "icon", "button", "toggle",
-                            "input", "option", "list", "separator",
-                            "progress"});
+                            "input", "option", "list", "separator", "progress",
+                            "item", "iconButton"});
   if (!types->contains(node->type))
     return false;
-  for (const char* key : {"text", "value", "placeholder", "tooltip"}) {
+  for (const char* key : {"text", "value", "placeholder", "tooltip",
+                          "accessibleName", "variant"}) {
     if (std::string_view(key) == "value" && node->type == "progress")
       continue;
     v8::Local<v8::Value> field;
@@ -127,7 +129,8 @@ bool ParseNode(v8::Isolate* isolate,
       return false;
     node->properties.Set(key, text);
   }
-  for (const char* key : {"disabled", "visible", "muted", "checked"}) {
+  for (const char* key :
+       {"disabled", "visible", "muted", "checked", "singleLine", "selected"}) {
     v8::Local<v8::Value> field;
     if (!HasValue(&dictionary, key, &field))
       continue;
@@ -136,8 +139,8 @@ bool ParseNode(v8::Isolate* isolate,
       return false;
     node->properties.Set(key, boolean);
   }
-  for (const char* key :
-       {"width", "height", "flex", "gap", "padding", "fontSize", "maxLength"}) {
+  for (const char* key : {"width", "height", "maxWidth", "flex", "gap",
+                          "padding", "fontSize", "maxLength"}) {
     v8::Local<v8::Value> field;
     if (!HasValue(&dictionary, key, &field))
       continue;
@@ -154,10 +157,30 @@ bool ParseNode(v8::Isolate* isolate,
       return false;
     node->properties.Set("value", progress);
   }
-  if (node->type == "icon" && !dictionary.Get("image", &node->image))
+  v8::Local<v8::Value> extra;
+  if ((node->type == "icon" || node->type == "iconButton" ||
+       HasValue(&dictionary, "image", &extra)) &&
+      !dictionary.Get("image", &node->image))
     return false;
+  for (const char* key : {"style", "highlights", "linkRange"}) {
+    if (!HasValue(&dictionary, key, &extra))
+      continue;
+    base::Value parsed;
+    if (!gin::ConvertFromV8(isolate, extra, &parsed) ||
+        (std::string_view(key) != "highlights" ? !parsed.is_dict()
+                                               : !parsed.is_list()))
+      return false;
+    node->properties.Set(key, std::move(parsed));
+  }
   if (node->type == "toggle" && !node->properties.FindBool("checked"))
     return false;
+  if (const auto* range = node->properties.FindDict("linkRange")) {
+    const auto start = range->FindInt("start"), end = range->FindInt("end");
+    const auto* text = node->properties.FindString("text");
+    if (!start || !end || !text || *start < 0 || *end <= *start ||
+        static_cast<size_t>(*end) > base::UTF8ToUTF16(*text).size())
+      return false;
+  }
   if (node->type == "option") {
     std::vector<v8::Local<v8::Value>> items;
     if (!dictionary.Get("items", &items))
@@ -184,7 +207,8 @@ bool ParseNode(v8::Isolate* isolate,
     }
     node->properties.Set("items", std::move(output));
   }
-  if (node->type == "row" || node->type == "column" || node->type == "list") {
+  if (node->type == "row" || node->type == "column" || node->type == "list" ||
+      node->type == "item") {
     std::vector<v8::Local<v8::Value>> children;
     if (!dictionary.Get("children", &children))
       return false;
@@ -254,11 +278,13 @@ gin_helper::WrappableBase* NativePanel::New(gin::Arguments* args) {
     return nullptr;
   }
   dictionary.Get("radius", &options.radius);
+  dictionary.Get("contentInset", &options.content_inset);
   dictionary.Get("shadow", &options.shadow);
   dictionary.Get("focusMode", &options.focus_mode);
   dictionary.Get("dismissOnOutsideClick", &options.dismiss_on_outside_click);
   dictionary.Get("dismissOnEscape", &options.dismiss_on_escape);
   if (options.radius < 0 || options.radius > 1000 ||
+      options.content_inset < 0 || options.content_inset > 64 ||
       (options.focus_mode != "none" && options.focus_mode != "menu" &&
        options.focus_mode != "input")) {
     args->ThrowTypeError("Invalid NativePanel appearance or focusMode");
@@ -268,6 +294,7 @@ gin_helper::WrappableBase* NativePanel::New(gin::Arguments* args) {
   panel->InitWithArgs(args);
   panel->theme_ = options.theme.Clone();
   panel->radius_ = options.radius;
+  panel->content_inset_ = options.content_inset;
   panel->shadow_ = options.shadow;
   panel->host_ = std::make_unique<NativePanelHost>(
       parent->window()->widget(), std::move(options),
@@ -330,6 +357,7 @@ void NativePanel::Update(gin::Arguments* args) {
   std::optional<gfx::Rect> anchor;
   base::DictValue theme = theme_.Clone();
   int radius = radius_;
+  int content_inset = content_inset_;
   bool shadow = shadow_;
   v8::Local<v8::Value> value;
   if (HasValue(&dictionary, "content", &value)) {
@@ -366,12 +394,20 @@ void NativePanel::Update(gin::Arguments* args) {
     return;
   }
   // No native state is changed until all patch fields have been parsed.
+  if (HasValue(&dictionary, "contentInset", &value) &&
+      (!gin::ConvertFromV8(args->isolate(), value, &content_inset) ||
+       content_inset < 0 || content_inset > 64)) {
+    args->ThrowTypeError("Invalid NativePanel contentInset");
+    return;
+  }
   if (content)
     host_->UpdateContent(std::move(*content));
-  if (theme != theme_ || radius != radius_ || shadow != shadow_) {
-    host_->UpdateAppearance(theme.Clone(), radius, shadow);
+  if (theme != theme_ || radius != radius_ || shadow != shadow_ ||
+      content_inset != content_inset_) {
+    host_->UpdateAppearance(theme.Clone(), radius, shadow, content_inset);
     theme_ = std::move(theme);
     radius_ = radius;
+    content_inset_ = content_inset;
     shadow_ = shadow;
   }
   if (anchor)

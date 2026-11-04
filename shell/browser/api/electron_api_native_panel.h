@@ -45,6 +45,7 @@ class NativePanel final : public gin_helper::EventEmitter<NativePanel> {
   bool destroyed_ = false;
   base::DictValue theme_;
   int radius_ = 12;
+  int content_inset_ = 12;
   bool shadow_ = true;
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<NativePanelHost> host_;

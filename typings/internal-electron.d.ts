@@ -95,6 +95,9 @@ declare namespace Electron {
 
   interface WebContents {
     _getPageInfo(includePermissions?: boolean): any;
+    _showCertificateViewer(): boolean;
+    _closeCertificateViewer(): void;
+    _getCertificateViewerState(): Promise<any>;
     _getOwnerWindowId(): number;
     on(event: '-owner-window-changed', listener: (event: Event) => void): this;
     removeListener(event: '-owner-window-changed', listener: (event: Event) => void): this;

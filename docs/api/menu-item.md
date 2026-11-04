@@ -31,6 +31,8 @@ See [`Menu`](menu.md) for examples.
     * `header` - Only available on macOS 14 and up.
     * `palette` - Only available on macOS 14 and up.
   * `label` string (optional)
+  * `controls` [MenuControl[]](structures/menu-control.md) (optional) _Windows_ -
+    Inline native buttons and labels on a `normal` popup item with a nonempty `id`.
   * `accessibilityLabel` string (optional) _macOS_
   * `sublabel` string (optional) _macOS_ - Available in macOS >= 14.4
   * `toolTip` string (optional) _macOS_ - Hover text for this menu item.
@@ -150,6 +152,12 @@ A `string` indicating the item's hover text.
 A `boolean` indicating whether the item is enabled.
 
 This property can be dynamically changed.
+
+#### `menuItem.controls` _Windows_
+
+A [`MenuControl[]`](structures/menu-control.md) containing the native inline
+buttons and labels. Replace it and call the root popup's `menu.refresh()` to
+apply changes while open. Control IDs, types and row membership remain stable.
 
 #### `menuItem.visible`
 

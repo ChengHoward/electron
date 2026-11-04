@@ -54,6 +54,7 @@ struct NativePanelOptions {
   NativePanelNode content;
   base::DictValue theme;
   int radius = 12;
+  int content_inset = 12;
   bool shadow = true;
   std::string focus_mode = "menu";
   bool dismiss_on_outside_click = true;
@@ -81,7 +82,10 @@ class NativePanelHost final : private views::WidgetObserver,
 
   void Show(const gfx::Rect& anchor, const std::string& placement);
   void UpdateContent(NativePanelNode content);
-  void UpdateAppearance(base::DictValue theme, int radius, bool shadow);
+  void UpdateAppearance(base::DictValue theme,
+                        int radius,
+                        bool shadow,
+                        int content_inset);
   void UpdateAnchor(const gfx::Rect& anchor);
   void Hide(bool restore_focus = true);
   void Destroy();
@@ -149,6 +153,7 @@ class NativePanelHost final : private views::WidgetObserver,
   raw_ptr<views::View> content_container_ = nullptr;
   std::map<std::string, std::unique_ptr<Entry>> entries_;
   std::map<std::string, std::unique_ptr<views::View>> detached_;
+  std::string reveal_selection_;
   std::unique_ptr<views::ViewTracker> restore_focus_;
   std::unique_ptr<views::EventMonitor> event_monitor_;
   NativePanelOptions options_;

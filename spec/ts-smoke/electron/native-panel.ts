@@ -10,10 +10,35 @@ const content: Electron.NativePanelContent = {
   width: 320,
   children: [
     { type: 'text', id: 'title', text: 'Status' },
+    { type: 'text', id: 'linked', text: 'Learn more', linkRange: { start: 0, end: 10 } },
+    {
+      type: 'text',
+      id: 'match',
+      text: 'GitHub',
+      singleLine: true,
+      highlights: [{ start: 0, end: 6 }],
+      style: { fontWeight: 'medium' }
+    },
+    {
+      type: 'item',
+      id: 'result',
+      selected: true,
+      accessibleName: 'Result',
+      style: { radius: 8, hoverBackground: '#F2F1F2', paddingLeft: 8 },
+      children: []
+    },
+    { type: 'iconButton', id: 'microphone', image: nativeImage.createEmpty(), accessibleName: 'Voice input' },
+    {
+      type: 'button',
+      id: 'plain',
+      text: 'Action',
+      variant: 'plain',
+      style: { background: '#00FFFFFF', color: '#123456' }
+    },
     { type: 'icon', id: 'icon', image: nativeImage.createEmpty() },
     { type: 'button', id: 'button', text: 'Run' },
     { type: 'toggle', id: 'toggle', text: 'Enabled', checked: true },
-    { type: 'input', id: 'query', value: '', placeholder: 'Search' },
+    { type: 'input', id: 'query', value: '', placeholder: 'Search', style: { borderless: true } },
     { type: 'option', id: 'choice', value: 'a', items: [{ id: 'a', label: 'A' }] },
     { type: 'list', id: 'list', children: [] },
     { type: 'separator', id: 'separator' },

@@ -1,0 +1,257 @@
+{
+  "date": "2026-11-04T05:26:29.985914+00:00",
+  "status": "local-preview-tested-not-published",
+  "executable": "D:\\electron\\main\\src\\out\\Release\\electron.exe",
+  "executableSha256": "9f55982cedfd653701aee289d2ee4db6349ff50f85a928c1952ac6c38f0a331d",
+  "resourceHashes": {
+    "resources.pak": "f17aefec32e2dd9fd323c6e232b7618e6f0c1202f30378bb0979f8ec3a52368d",
+    "chrome_100_percent.pak": "1e3faad5a13060a8f134029dfd92604b54c79fd0c46df82ea483d66396561712",
+    "chrome_200_percent.pak": "abf4ea81e8fb9d278d3fed6b123341b2a1f7c87f79691da7ad547f47a4a7d291",
+    "locales\\zh-CN.pak": "d0730df6b91ce1eda800b80c1985bba4f491b4a8d1fb66859ed16f87f4d67932",
+    "locales\\en-US.pak": "de43db43fe0072543ab225f6d762cce3656a1639bf9e25f371fe0e80d9eabba7",
+    "locales\\ar.pak": "5fb4f8b4fd74830c553d57270fd95ea262c1f062fcbb5324b4fb5dc8e951db5c"
+  },
+  "sourceBaseline": "be820655a575d70115a93709dce527dc24150754",
+  "sourceState": "uncommitted local changes",
+  "menuRefinement": {
+    "buttonDip": [
+      24,
+      24
+    ],
+    "labelDip": [
+      44,
+      24
+    ],
+    "iconDip": 18,
+    "groupGapDip": 4,
+    "textAntialias": "grayscale",
+    "sampleItemPaddingDip": 9
+  },
+  "buildTarget": "electron:electron_app",
+  "buildLog": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\build.log",
+  "platform": "Windows x64",
+  "display": [
+    {
+      "accelerometerSupport": "unknown",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 2195,
+        "height": 1235
+      },
+      "colorDepth": 30,
+      "colorSpace": "{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}",
+      "depthPerComponent": 10,
+      "detected": true,
+      "displayFrequency": 120,
+      "id": 2204613688,
+      "internal": false,
+      "label": "MPG321UR-QD",
+      "maximumCursorSize": {
+        "width": 0,
+        "height": 0
+      },
+      "monochrome": false,
+      "nativeOrigin": {
+        "x": 0,
+        "y": 0
+      },
+      "rotation": 0,
+      "scaleFactor": 1.75,
+      "size": {
+        "width": 2195,
+        "height": 1235
+      },
+      "workArea": {
+        "x": 0,
+        "y": 0,
+        "width": 2195,
+        "height": 1187
+      },
+      "workAreaSize": {
+        "width": 2195,
+        "height": 1187
+      },
+      "touchSupport": "unknown"
+    }
+  ],
+  "locales": [
+    "zh-CN",
+    "en-US",
+    "ar"
+  ],
+  "suites": [
+    {
+      "name": "zh-CN",
+      "total": 21,
+      "passed": 21,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\zh-CN\\results.json"
+    },
+    {
+      "name": "baseline",
+      "total": 42,
+      "passed": 42,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\baseline\\native-panels-results.json"
+    },
+    {
+      "name": "en-US",
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\en-US\\results.json"
+    },
+    {
+      "name": "ar",
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\ar\\results.json"
+    },
+    {
+      "name": "agent",
+      "total": 11,
+      "passed": 11,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\regressions\\native-panels-regression-agent.json"
+    },
+    {
+      "name": "input",
+      "total": 26,
+      "passed": 26,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\regressions\\native-panels-regression-input.json"
+    },
+    {
+      "name": "click",
+      "total": 9,
+      "passed": 9,
+      "failed": 0,
+      "report": "D:\\electron\\edist-publish\\native-ui-menu-refinement-20261104\\regressions\\native-panels-regression-click.json"
+    }
+  ],
+  "total": 115,
+  "failed": 0,
+  "staticChecks": [
+    "GN header dependencies (6 targets)",
+    "API/type generation and TS smoke",
+    "C++ clang-format (20 files)",
+    "cpplint native UI files",
+    "JS/TS oxlint and oxfmt",
+    "Python syntax",
+    "Markdown formatting and relative links",
+    "Chromium patches reverse-apply and git diff whitespace"
+  ],
+  "certificate": {
+    "url": "https://example.com/",
+    "securityState": "secure",
+    "subject": "example.com",
+    "chainLength": 4,
+    "certificateBackend": "Chromium WebUI",
+    "additionalNativeWebContents": 1,
+    "navigationClosesViewer": true,
+    "directResourceNavigationHasNoCertificate": true
+  },
+  "certificateFrontend": "Chromium original resources, unchanged",
+  "certificateBodyTheme": "Original Chromium light body; native frame follows theme",
+  "limitations": [
+    "Single display at 175% DPI",
+    "No mixed-DPI/multi-display or screen-reader hardware validation",
+    "Windows implementation; no macOS/Linux visual verification"
+  ],
+  "screenshots": {
+    "downloads-light": {
+      "file": "downloads-light.png",
+      "sha256": "d38714217d9e1b626a73505780e63103a596e8cedac606cfd79efe3d596f0620"
+    },
+    "address-suggestions": {
+      "file": "address-suggestions.png",
+      "sha256": "23c0a62ab4038b9a290d3ee579859860f087911132913ebd73601ecd54debc6d"
+    },
+    "address-suggestions-details-context": {
+      "file": "address-suggestions-details-context.png",
+      "sha256": "08a68cc0e349dd1a9e052f0d51a691039bf207cf17f9e432b614bd061d997190"
+    },
+    "floating-comment": {
+      "file": "floating-comment.png",
+      "sha256": "b430bf364a6715578c71347c9a6b6b39a3f12da05f6e9ebf0b4ccec9ac3d3243"
+    },
+    "menu-light": {
+      "file": "menu-light.png",
+      "sha256": "ab010e8dd2e9e62f22ab513d8ab16ffda481cdb8b90e351aab730ecff03764d2"
+    },
+    "menu-submenu": {
+      "file": "menu-submenu.png",
+      "sha256": "b41317437578e1bfd3a9dae42b23f2559467b8f252a6a5fe3bba7ad31f7faea6"
+    },
+    "menu-dark": {
+      "file": "menu-dark.png",
+      "sha256": "95d50b62017625c29c9ea04f1812edf1d18b97f085e79a4468161486f3a5e147"
+    },
+    "page-info-tls-main": {
+      "file": "page-info-tls-main.png",
+      "sha256": "c4b2b0add7ff0c3167bb89a686ad3a5b5520e04dd2cf16dc784fb5fbcf712327"
+    },
+    "page-info-tls-security": {
+      "file": "page-info-tls-security.png",
+      "sha256": "eaa2e7c970c2a0639b2a6a77438354abf66077d5023c75e452bacae5790e75de"
+    },
+    "certificate-general": {
+      "file": "certificate-general.png",
+      "sha256": "da2a96f4705464d8c0b4f9005ab0edd35259c7b06c057fa9cefa1414687fc438"
+    },
+    "certificate-details": {
+      "file": "certificate-details.png",
+      "sha256": "33dcc12aced2b523ecd5d718444404cb5689582e8878980d464f77f5b1d133c8"
+    },
+    "page-info-dark": {
+      "file": "page-info-dark.png",
+      "sha256": "4ddbfc7332f941179d7d6075f7f9f26d383f8d91efcce1a78a4f99a02e06323c"
+    },
+    "certificate-dark": {
+      "file": "certificate-dark.png",
+      "sha256": "ea0147297845aa0c91a4749ef897089fa512fabb65fb7f7609070283e86e55fc"
+    },
+    "scrollbar-light": {
+      "file": "scrollbar-light.png",
+      "sha256": "f9cd1830160eda3fd7669cfbf8abf927a65614a6ccba4b930f98b264f34fb2df"
+    },
+    "scrollbar-hover": {
+      "file": "scrollbar-hover.png",
+      "sha256": "ccbe4b71930c081a06cec87afd2c3d347812768502f2257b9105c3ed231efac9"
+    },
+    "scrollbar-dark": {
+      "file": "scrollbar-dark.png",
+      "sha256": "b16c37006b433734ea9bf3660dfb253a83ccc223bd2ef063612718da497c987e"
+    },
+    "menu-zoom-hover": {
+      "file": "menu-zoom-hover.png",
+      "sha256": "3eee85aa745b7f15c675bb60085d6b68bd967eaae95f063686dc49d4075e19f3"
+    },
+    "menu-icons-light": {
+      "file": "menu-icons-light.png",
+      "sha256": "0e392b58eb2af736edcc4686612b2313faa7099ca47ab8cad869be3a4cc53d19"
+    },
+    "menu-icons-dark": {
+      "file": "menu-icons-dark.png",
+      "sha256": "55580a01e70efeed2dba7ebe55aa7595563aef9f69cf7ec1b75ecd804abcf265"
+    },
+    "menu-check-radio-light": {
+      "file": "menu-check-radio-light.png",
+      "sha256": "2fdf05a28880bbe4c2fe592db32f5af48fb00635de77ce5da3cff6b20c67a893"
+    },
+    "menu-check-radio-hover": {
+      "file": "menu-check-radio-hover.png",
+      "sha256": "663bc26882b9558e8bc5e2de94dbc3cd26cc229a8481aaa484d532bc8aeeb0f5"
+    },
+    "menu-check-radio-dark": {
+      "file": "menu-check-radio-dark.png",
+      "sha256": "3e825513614f3302013490df0e5da2a1121096a3ea24af75ad6568170b16b9af"
+    },
+    "menu-mixed-selection-icons": {
+      "file": "menu-mixed-selection-icons.png",
+      "sha256": "46ea8180b3170ad645080da45817c7232513c7367ac1c70cdd1c67e28eae7c89"
+    }
+  }
+}

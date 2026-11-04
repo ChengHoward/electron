@@ -21,12 +21,17 @@
 
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "cc/paint/paint_flags.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
+#include "ui/base/ime/input_method.h"
+#include "ui/base/ime/text_input_client.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/base/models/combobox_model_observer.h"
 #include "ui/base/models/image_model.h"
@@ -41,6 +46,7 @@
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/gfx/skia_paint_util.h"
@@ -48,21 +54,31 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/link.h"
 #include "ui/views/controls/progress_bar.h"
 #include "ui/views/controls/scroll_view.h"
+#include "ui/views/controls/scrollbar/base_scroll_bar_thumb.h"
 #include "ui/views/controls/scrollbar/scroll_bar.h"
+#include "ui/views/controls/scrollbar/scroll_bar_button.h"
 #include "ui/views/controls/separator.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/flex_layout.h"
+#include "ui/views/style/typography.h"
+#include "ui/views/style/typography_provider.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/view_tracker.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -73,7 +89,6 @@ namespace electron {
 namespace {
 
 constexpr int kShadowInset = 14;
-constexpr int kContentInset = 12;
 constexpr wchar_t kPanelProperty[] = L"Electron.NativePanel.Host";
 
 base::DictValue RectValue(const gfx::Rect& bounds) {
@@ -311,8 +326,58 @@ class OptionModel final : public ui::ComboboxModel {
 class PanelButton final : public views::MdTextButton {
  public:
   explicit PanelButton(PressedCallback callback)
-      : MdTextButton(std::move(callback)) {}
+      : MdTextButton(std::move(callback)), default_corners_(GetCornerRadii()) {
+    label()->SetAutoColorReadabilityEnabled(false);
+  }
   void SetPanelFont(const gfx::FontList& font) { label()->SetFontList(font); }
+  void SetPlain(bool plain, const base::DictValue& style) {
+    if (plain_ && !plain) {
+      SetBgColorOverrideDeprecated(std::nullopt);
+      SetStrokeColorOverrideDeprecated(std::nullopt);
+      SetCustomPadding(std::nullopt);
+      SetCornerRadii(default_corners_);
+    }
+    plain_ = plain;
+    style_ = style.Clone();
+    UpdateBackground();
+  }
+
+ private:
+  void StateChanged(ButtonState old_state) override {
+    MdTextButton::StateChanged(old_state);
+    UpdateBackground();
+  }
+  void UpdateBackground() {
+    SkColor background = Color(style_, "background", SK_ColorTRANSPARENT);
+    if (GetState() == STATE_HOVERED)
+      background =
+          Color(style_, "hoverBackground",
+                plain_ ? SkColorSetARGB(20, 128, 128, 128) : background);
+    if (GetState() == STATE_PRESSED)
+      background =
+          Color(style_, "pressedBackground",
+                plain_ ? SkColorSetARGB(35, 128, 128, 128) : background);
+    if (GetState() == STATE_DISABLED)
+      background = Color(style_, "disabledBackground", background);
+    SetBgColorOverrideDeprecated(plain_ || style_.contains("background") ||
+                                         style_.contains("hoverBackground") ||
+                                         style_.contains("pressedBackground")
+                                     ? std::optional<SkColor>(background)
+                                     : std::nullopt);
+    SetStrokeColorOverrideDeprecated(
+        style_.contains("borderColor")
+            ? std::optional<SkColor>(
+                  Color(style_, "borderColor", SK_ColorTRANSPARENT))
+        : plain_ ? std::optional<SkColor>(SK_ColorTRANSPARENT)
+                 : std::nullopt);
+    if (style_.contains("radius") || plain_)
+      SetCornerRadius(Integer(style_, "radius", 8));
+    else
+      SetCornerRadii(default_corners_);
+  }
+  bool plain_ = false;
+  base::DictValue style_;
+  gfx::RoundedCornersF default_corners_;
 };
 
 // A width constraint must not freeze a multiline label or a container's
@@ -321,40 +386,258 @@ class PanelButton final : public views::MdTextButton {
 template <typename BaseView>
 class DimensionedView final : public BaseView {
  public:
-  void SetDimensions(int width, int height) {
+  void SetDimensions(int width, int height, int max_width = 0) {
     width_ = width;
     height_ = height;
+    max_width_ = max_width;
     this->PreferredSizeChanged();
   }
 
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override {
     views::SizeBounds constrained(available_size);
-    if (width_ > 0) {
+    if (max_width_ > 0)
       constrained.set_width(
           available_size.width().is_bounded()
-              ? std::min(width_, available_size.width().value())
-              : width_);
+              ? std::min(max_width_, available_size.width().value())
+              : max_width_);
+    if (width_ > 0) {
+      const int preferred_width =
+          max_width_ > 0 ? std::min(width_, max_width_) : width_;
+      constrained.set_width(
+          available_size.width().is_bounded()
+              ? std::min(preferred_width, available_size.width().value())
+              : preferred_width);
     }
     gfx::Size size = BaseView::CalculatePreferredSize(constrained);
     if (width_ > 0)
       size.set_width(constrained.width().value());
     if (height_ > 0)
       size.set_height(height_);
+    if (max_width_ > 0)
+      size.set_width(std::min(size.width(), max_width_));
     return size;
   }
 
  private:
   int width_ = 0;
   int height_ = 0;
+  int max_width_ = 0;
 };
 
 using PanelLabel = DimensionedView<views::Label>;
+using PanelLinkedLabel = DimensionedView<views::StyledLabel>;
 using PanelContainer = DimensionedView<views::View>;
+
+// A real native Button with arbitrary native child views. Child buttons remain
+// independent event targets; there is no DOM-style bubbling to this row.
+class PanelAction final : public views::Button {
+ public:
+  explicit PanelAction(PressedCallback callback) : Button(std::move(callback)) {
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
+  }
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    if (row_ && GetWidget() && GetWidget()->CanActivate())
+      RequestFocus();
+    return Button::OnMousePressed(event);
+  }
+  void SetRow(bool row) { row_ = row; }
+  void SetAppearance(const base::DictValue& style,
+                     bool selected,
+                     SkColor hover) {
+    style_ = style.Clone();
+    selected_ = selected;
+    hover_ = hover;
+    SchedulePaint();
+  }
+
+ private:
+  void StateChanged(ButtonState old_state) override {
+    Button::StateChanged(old_state);
+    SchedulePaint();
+  }
+  void OnFocus() override {
+    Button::OnFocus();
+    SchedulePaint();
+  }
+  void OnBlur() override {
+    Button::OnBlur();
+    SchedulePaint();
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    SkColor background = Color(style_, "background", SK_ColorTRANSPARENT);
+    if (selected_ || HasFocus())
+      background = Color(style_, "selectedBackground", hover_);
+    if (GetState() == STATE_HOVERED)
+      background = Color(style_, "hoverBackground", hover_);
+    if (GetState() == STATE_PRESSED)
+      background = Color(style_, "pressedBackground", hover_);
+    if (!GetEnabled())
+      background = Color(style_, "disabledBackground", SK_ColorTRANSPARENT);
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setColor(background);
+    const int radius = Integer(style_, "radius", 8);
+    canvas->DrawRoundRect(GetLocalBounds(), radius, flags);
+    const int stroke = Integer(style_, "borderWidth", 0);
+    if (stroke) {
+      flags.setStyle(cc::PaintFlags::kStroke_Style);
+      flags.setStrokeWidth(stroke);
+      flags.setColor(Color(style_, "borderColor", SK_ColorTRANSPARENT));
+      gfx::RectF bounds(GetLocalBounds());
+      bounds.Inset(stroke / 2.f);
+      canvas->DrawRoundRect(bounds, radius, flags);
+    }
+  }
+  base::DictValue style_;
+  bool selected_ = false;
+  bool row_ = false;
+  SkColor hover_ = SK_ColorTRANSPARENT;
+};
+
+gfx::Insets ControlInsets(const base::DictValue& style, int fallback = 0) {
+  return gfx::Insets::TLBR(Integer(style, "paddingTop", fallback),
+                           Integer(style, "paddingLeft", fallback),
+                           Integer(style, "paddingBottom", fallback),
+                           Integer(style, "paddingRight", fallback));
+}
 
 int ScrollPosition(views::ScrollView* scroll) {
   return scroll->CurrentOffset().y();
 }
+
+constexpr int kPanelScrollbarWidth = 15;
+
+SkColor ScrollbarColor(views::View* view,
+                       bool track,
+                       views::Button::ButtonState state) {
+  const auto* colors = view->GetColorProvider();
+  const SkColor background = colors->GetColor(ui::kColorMenuBackground);
+  if (view->GetNativeTheme()->forced_colors() !=
+      ui::ColorProviderKey::ForcedColors::kNone)
+    return track ? background : colors->GetColor(ui::kColorLabelForeground);
+  const bool dark = color_utils::GetRelativeLuminance(background) < 0.5;
+  if (track)
+    return dark ? SkColorSetRGB(42, 42, 42) : SkColorSetRGB(250, 250, 250);
+  if (state == views::Button::STATE_PRESSED)
+    return dark ? SkColorSetRGB(188, 188, 188) : SkColorSetRGB(96, 96, 96);
+  if (state == views::Button::STATE_HOVERED)
+    return dark ? SkColorSetRGB(168, 168, 168) : SkColorSetRGB(112, 112, 112);
+  return SkColorSetRGB(141, 141, 141);
+}
+
+class PanelScrollThumb final : public views::BaseScrollBarThumb {
+  METADATA_HEADER(PanelScrollThumb, views::BaseScrollBarThumb)
+ public:
+  explicit PanelScrollThumb(views::ScrollBar* bar) : BaseScrollBarThumb(bar) {}
+  gfx::Size CalculatePreferredSize(const views::SizeBounds&) const override {
+    return gfx::Size(kPanelScrollbarWidth, 20);
+  }
+
+ protected:
+  void OnPaint(gfx::Canvas* canvas) override {
+    cc::PaintFlags paint;
+    paint.setAntiAlias(true);
+    paint.setColor(ScrollbarColor(this, false, GetState()));
+    gfx::RectF bounds(GetLocalBounds());
+    bounds.Inset(gfx::InsetsF::VH(0, 3));
+    canvas->DrawRoundRect(bounds, bounds.width() / 2, paint);
+  }
+};
+
+BEGIN_METADATA(PanelScrollThumb)
+END_METADATA
+
+class PanelScrollArrow final : public views::ScrollBarButton {
+  METADATA_HEADER(PanelScrollArrow, views::ScrollBarButton)
+
+ public:
+  PanelScrollArrow(PressedCallback callback, bool down)
+      : ScrollBarButton(std::move(callback), down ? Type::kDown : Type::kUp),
+        down_(down) {}
+  gfx::Size CalculatePreferredSize(const views::SizeBounds&) const override {
+    return gfx::Size(kPanelScrollbarWidth, kPanelScrollbarWidth);
+  }
+
+ protected:
+  void PaintButtonContents(gfx::Canvas* canvas) override {
+    const float x = width() / 2.0f, y = height() / 2.0f;
+    const float direction = down_ ? 1 : -1;
+    SkPathBuilder arrow;
+    arrow.moveTo(x - 3.5f, y - direction * 2);
+    arrow.lineTo(x + 3.5f, y - direction * 2);
+    arrow.lineTo(x, y + direction * 2.5f);
+    arrow.close();
+    cc::PaintFlags paint;
+    paint.setAntiAlias(true);
+    paint.setColor(ScrollbarColor(this, false, GetState()));
+    canvas->DrawPath(arrow.detach(), paint);
+  }
+
+ private:
+  const bool down_;
+};
+
+BEGIN_METADATA(PanelScrollArrow)
+END_METADATA
+
+class PanelScrollBar final : public views::ScrollBar {
+  METADATA_HEADER(PanelScrollBar, views::ScrollBar)
+
+ public:
+  PanelScrollBar() : ScrollBar(Orientation::kVertical) {
+    auto* layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
+    layout->SetOrientation(views::LayoutOrientation::kVertical);
+    auto callback = [](PanelScrollBar* bar, ScrollAmount amount) {
+      bar->ScrollByAmount(amount);
+    };
+    previous_ = AddChildView(std::make_unique<PanelScrollArrow>(
+        base::BindRepeating(callback, base::Unretained(this),
+                            ScrollAmount::kPrevLine),
+        false));
+    previous_->set_context_menu_controller(this);
+    SetThumb(new PanelScrollThumb(this));
+    GetThumb()->SetProperty(
+        views::kFlexBehaviorKey,
+        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                 views::MaximumFlexSizeRule::kUnbounded));
+    next_ = AddChildView(std::make_unique<PanelScrollArrow>(
+        base::BindRepeating(callback, base::Unretained(this),
+                            ScrollAmount::kNextLine),
+        true));
+    next_->set_context_menu_controller(this);
+  }
+  int GetThickness() const override { return kPanelScrollbarWidth; }
+  gfx::Rect GetTrackBounds() const override {
+    return gfx::Rect(0, kPanelScrollbarWidth, width(),
+                     std::max(0, height() - 2 * kPanelScrollbarWidth));
+  }
+  base::DictValue GetState() const {
+    return base::DictValue()
+        .Set("bounds", RectValue(GetBoundsInScreen()))
+        .Set("thumb", RectValue(GetThumb()->GetBoundsInScreen()))
+        .Set("previous", RectValue(previous_->GetBoundsInScreen()))
+        .Set("next", RectValue(next_->GetBoundsInScreen()))
+        .Set("visible", GetVisible())
+        .Set("position", GetPosition())
+        .Set("maximum", GetMaxPosition());
+  }
+
+ protected:
+  void OnPaint(gfx::Canvas* canvas) override {
+    canvas->FillRect(GetLocalBounds(),
+                     ScrollbarColor(this, true, views::Button::STATE_NORMAL));
+  }
+
+ private:
+  raw_ptr<PanelScrollArrow> previous_;
+  raw_ptr<PanelScrollArrow> next_;
+};
+
+BEGIN_METADATA(PanelScrollBar)
+END_METADATA
 
 }  // namespace
 
@@ -364,12 +647,15 @@ class NativePanelSurface final : public views::View {
       : shadow_only_(shadow_only) {
     SetLayoutManager(std::make_unique<views::FillLayout>());
   }
-  void SetAppearance(const base::DictValue& theme, int radius, bool shadow) {
+  void SetAppearance(const base::DictValue& theme,
+                     int radius,
+                     bool shadow,
+                     int content_inset) {
     theme_ = theme.Clone();
     radius_ = radius;
     shadow_ = shadow;
     SetBorder(views::CreateEmptyBorder(
-        gfx::Insets(kContentInset + (shadow ? kShadowInset : 0))));
+        gfx::Insets(content_inset + (shadow ? kShadowInset : 0))));
     SchedulePaint();
   }
   gfx::Rect BodyBounds() const {
@@ -425,6 +711,13 @@ class NativePanelSurface final : public views::View {
 };
 
 struct NativePanelHost::Entry {
+  views::View* FocusTarget() const {
+    if (linked_label)
+      for (views::View* child : linked_label->children())
+        if (views::IsViewClass<views::Link>(child))
+          return child;
+    return control;
+  }
   std::string id;
   std::string type;
   std::string parent_id;
@@ -433,7 +726,10 @@ struct NativePanelHost::Entry {
   raw_ptr<views::View> children = nullptr;
   raw_ptr<views::View> control = nullptr;
   raw_ptr<views::Label> label = nullptr;
+  raw_ptr<views::StyledLabel> linked_label = nullptr;
+  base::DictValue linked_appearance;
   raw_ptr<views::ScrollView> scroll = nullptr;
+  raw_ptr<views::ImageView> image = nullptr;
   std::unique_ptr<OptionModel> model;
   std::optional<std::u16string> pending_input;
 };
@@ -468,6 +764,7 @@ NativePanelHost::NativePanelHost(views::Widget* parent,
   surface_->AddPreTargetHandler(this);
   auto scroll = std::make_unique<views::ScrollView>();
   outer_scroll_ = scroll.get();
+  scroll->SetVerticalScrollBar(std::make_unique<PanelScrollBar>());
   scroll->SetPaintToLayer();
   scroll->layer()->SetFillsBoundsOpaquely(false);
   scroll->layer()->SetMasksToBounds(true);
@@ -672,23 +969,52 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
     Entry* entry) {
   auto callback = base::BindRepeating(
       &NativePanelHost::SendAction, weak_factory_.GetWeakPtr(), node.id,
-      node.type == "button" ? "click" : "change");
+      (node.type == "button" || node.type == "iconButton" ||
+       node.type == "item")
+          ? "click"
+          : "change");
   std::unique_ptr<views::View> result;
   if (node.type == "text") {
-    auto label = std::make_unique<PanelLabel>();
-    label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    label->SetMultiLine(true);
-    entry->label = label.get();
-    result = std::move(label);
+    if (node.properties.contains("linkRange")) {
+      auto label = std::make_unique<PanelLinkedLabel>();
+      label->SetAutoColorReadabilityEnabled(false);
+      label->SetSubpixelRenderingEnabled(false);
+      entry->linked_label = label.get();
+      result = std::move(label);
+    } else {
+      auto label = std::make_unique<PanelLabel>();
+      label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+      label->SetMultiLine(true);
+      label->SetSubpixelRenderingEnabled(false);
+      label->SetAutoColorReadabilityEnabled(false);
+      entry->label = label.get();
+      result = std::move(label);
+    }
   } else if (node.type == "icon") {
     result = std::make_unique<views::ImageView>();
   } else if (node.type == "button") {
     result = std::make_unique<PanelButton>(std::move(callback));
+  } else if (node.type == "item" || node.type == "iconButton") {
+    auto action = std::make_unique<PanelAction>(std::move(callback));
+    action->SetRow(node.type == "item");
+    if (node.type == "item") {
+      entry->children = action.get();
+    } else {
+      auto* layout = static_cast<views::BoxLayout*>(action->GetLayoutManager());
+      layout->set_main_axis_alignment(
+          views::BoxLayout::MainAxisAlignment::kCenter);
+      layout->set_cross_axis_alignment(
+          views::BoxLayout::CrossAxisAlignment::kCenter);
+      entry->image = action->AddChildView(std::make_unique<views::ImageView>());
+      entry->image->SetCanProcessEventsWithinSubtree(false);
+    }
+    result = std::move(action);
   } else if (node.type == "toggle") {
     auto row = std::make_unique<views::View>();
     auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
     auto label = std::make_unique<views::Label>();
+    label->SetAutoColorReadabilityEnabled(false);
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     entry->label = row->AddChildView(std::move(label));
     layout->SetFlexForView(entry->label, 1);
@@ -699,6 +1025,7 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
     auto input = std::make_unique<views::Textfield>();
     input->SetController(this);
     input->SetDefaultWidthInChars(16);
+    input->SetPlaceholderTextColorId(ui::kColorTextfieldForegroundPlaceholder);
     result = std::move(input);
   } else if (node.type == "option") {
     entry->model = std::make_unique<OptionModel>();
@@ -707,6 +1034,7 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
     result = std::move(option);
   } else if (node.type == "list") {
     auto scroll = std::make_unique<views::ScrollView>();
+    scroll->SetVerticalScrollBar(std::make_unique<PanelScrollBar>());
     scroll->SetDrawOverflowIndicator(false);
     scroll->SetBackgroundColor(std::nullopt);
     scroll->SetHorizontalScrollBarMode(
@@ -740,6 +1068,10 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
 void NativePanelHost::ApplyProperties(const NativePanelNode& node,
                                       Entry* entry) {
   const auto& properties = node.properties;
+  const base::DictValue empty_style;
+  const auto* style = properties.FindDict("style");
+  if (!style)
+    style = &empty_style;
   views::View* view = entry->view;
   view->SetEnabled(!properties.FindBool("disabled").value_or(false));
   view->SetVisible(properties.FindBool("visible").value_or(true));
@@ -747,23 +1079,56 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
   std::u16string text = base::UTF8ToUTF16(String(properties, "text"));
   if (entry->label)
     entry->label->SetText(text);
+  if (entry->linked_label)
+    entry->linked_label->SetText(text);
   if (entry->children) {
     auto* layout =
         static_cast<views::BoxLayout*>(entry->children->GetLayoutManager());
     layout->set_between_child_spacing(Integer(properties, "gap", 6));
     layout->set_inside_border_insets(
-        gfx::Insets(Integer(properties, "padding", 0)));
+        ControlInsets(*style, Integer(properties, "padding", 0)));
     layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
+        String(*style, "align") == "start"
+            ? views::BoxLayout::CrossAxisAlignment::kStart
+        : String(*style, "align") == "center"
+            ? views::BoxLayout::CrossAxisAlignment::kCenter
+        : String(*style, "align") == "end"
+            ? views::BoxLayout::CrossAxisAlignment::kEnd
+            : views::BoxLayout::CrossAxisAlignment::kStretch);
     entry->children->InvalidateLayout();
   }
   if (node.type == "button") {
-    static_cast<views::MdTextButton*>(view)->SetText(text);
-  } else if (node.type == "icon") {
-    auto* icon = static_cast<views::ImageView*>(view);
+    auto* button = static_cast<PanelButton*>(view);
+    button->SetText(text);
+    button->SetPlain(String(properties, "variant") == "plain", *style);
+    button->SetImageModel(views::Button::STATE_NORMAL,
+                          ui::ImageModel::FromImageSkia(node.image));
+    const bool padded =
+        String(properties, "variant") == "plain" ||
+        style->contains("paddingTop") || style->contains("paddingRight") ||
+        style->contains("paddingBottom") || style->contains("paddingLeft");
+    button->SetCustomPadding(
+        padded ? std::make_optional(ControlInsets(*style, 6)) : std::nullopt);
+    if (style->contains("radius"))
+      button->SetCornerRadius(Integer(*style, "radius", 8));
+  } else if (node.type == "text") {
+    if (entry->label) {
+      entry->label->SetMultiLine(
+          !properties.FindBool("singleLine").value_or(false));
+      entry->label->SetElideBehavior(gfx::ELIDE_TAIL);
+      entry->label->SetAllowCharacterBreak(true);
+    }
+  } else if (node.type == "icon" || node.type == "iconButton") {
+    auto* icon = node.type == "iconButton"
+                     ? entry->image.get()
+                     : static_cast<views::ImageView*>(view);
     icon->SetImage(ui::ImageModel::FromImageSkia(node.image));
-    icon->SetImageSize(gfx::Size(Integer(properties, "width", 20),
-                                 Integer(properties, "height", 20)));
+    icon->SetImageSize(node.type == "iconButton"
+                           ? gfx::Size(20, 20)
+                           : gfx::Size(Integer(properties, "width", 20),
+                                       Integer(properties, "height", 20)));
+    if (node.type == "iconButton")
+      view->SetPreferredSize(gfx::Size(32, 32));
   } else if (node.type == "toggle") {
     auto* control = static_cast<views::ToggleButton*>(entry->control.get());
     const base::Value* checked = properties.Find("checked");
@@ -787,6 +1152,19 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     }
     input->SetPlaceholderText(
         base::UTF8ToUTF16(String(properties, "placeholder")));
+    if (style->FindBool("borderless").value_or(false)) {
+      input->SetBorder(views::CreateEmptyBorder(ControlInsets(*style, 2)));
+      // Keep a transparent native painter so Textfield disables LCD rendering
+      // for both text and placeholder on this translucent panel window.
+      input->SetBackgroundEnabled(true);
+      input->SetBackgroundColor(SK_ColorTRANSPARENT);
+    } else if (const auto* old = entry->properties.FindDict("style");
+               old && old->FindBool("borderless").value_or(false)) {
+      input->SetBorder(views::CreateRoundedRectBorder(
+          1, 4, ui::kColorFocusableBorderUnfocused));
+      input->SetBackgroundColor(std::nullopt);
+      input->SetBackgroundEnabled(true);
+    }
     input->GetViewAccessibility().SetName(base::UTF8ToUTF16(String(
         properties, "tooltip", String(properties, "placeholder", node.id))));
   } else if (node.type == "option") {
@@ -814,6 +1192,15 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     const int height = Integer(properties, "height", 240);
     entry->scroll->ClipHeightTo(height, height);
   }
+  if (node.type == "item" || node.type == "iconButton") {
+    view->GetViewAccessibility().SetName(base::UTF8ToUTF16(String(
+        properties, "accessibleName", String(properties, "tooltip", node.id))));
+    view->GetViewAccessibility().SetIsSelected(
+        properties.FindBool("selected").value_or(false));
+    if (properties.FindBool("selected").value_or(false) &&
+        !entry->properties.FindBool("selected").value_or(false))
+      reveal_selection_ = node.id;
+  }
   entry->properties = properties.Clone();
 }
 
@@ -821,7 +1208,10 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
                                                    views::View* parent,
                                                    size_t index) {
   auto found = entries_.find(node.id);
-  if (found != entries_.end() && found->second->type != node.type) {
+  if (found != entries_.end() &&
+      (found->second->type != node.type ||
+       (node.type == "text" && static_cast<bool>(found->second->linked_label) !=
+                                   node.properties.contains("linkRange")))) {
     RemoveSubtree(found->second->view);
     found = entries_.end();
   }
@@ -862,17 +1252,25 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
   }
   int width = Integer(node.properties, "width", 0);
   int height = Integer(node.properties, "height", 0);
+  int max_width = Integer(node.properties, "maxWidth", 0);
   if (node.type == "row" || node.type == "column") {
     static_cast<PanelContainer*>(entry.view.get())
-        ->SetDimensions(width, height);
+        ->SetDimensions(width, height, max_width);
   } else if (node.type == "text") {
-    static_cast<PanelLabel*>(entry.view.get())->SetDimensions(width, height);
-  } else if (width > 0 || height > 0) {
+    if (entry.linked_label)
+      static_cast<PanelLinkedLabel*>(entry.view.get())
+          ->SetDimensions(width, height, max_width);
+    else
+      static_cast<PanelLabel*>(entry.view.get())
+          ->SetDimensions(width, height, max_width);
+  } else if (width > 0 || height > 0 || max_width > 0) {
     gfx::Size size = entry.view->GetPreferredSize({});
     if (width > 0)
       size.set_width(width);
     if (height > 0)
       size.set_height(height);
+    if (max_width > 0)
+      size.set_width(std::min(size.width(), max_width));
     entry.view->SetPreferredSize(size);
   }
   return entry;
@@ -913,7 +1311,9 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
   std::string focused;
   if (auto* manager = widget_->GetFocusManager()) {
     for (const auto& [id, entry] : entries_) {
-      if (entry->control == manager->GetFocusedView())
+      if (entry->control == manager->GetFocusedView() ||
+          (entry->linked_label && manager->GetFocusedView() &&
+           entry->linked_label->Contains(manager->GetFocusedView())))
         focused = id;
     }
   }
@@ -966,8 +1366,14 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
     if (entry != entries_.end() && visible_ &&
         widget_->GetFocusManager()->GetFocusedView() !=
             entry->second->control) {
-      entry->second->control->RequestFocus();
+      entry->second->FocusTarget()->RequestFocus();
     }
+  }
+  if (!reveal_selection_.empty()) {
+    auto selected = entries_.find(reveal_selection_);
+    if (selected != entries_.end())
+      selected->second->view->ScrollViewToVisible();
+    reveal_selection_.clear();
   }
 }
 
@@ -980,9 +1386,11 @@ void NativePanelHost::ApplyTheme() {
   if (shadow_widget_) {
     static_cast<PanelWidget*>(shadow_widget_.get())
         ->SetPanelTheme(options_.theme);
-    shadow_surface_->SetAppearance(options_.theme, options_.radius, true);
+    shadow_surface_->SetAppearance(options_.theme, options_.radius, true,
+                                   options_.content_inset);
   }
-  surface_->SetAppearance(options_.theme, options_.radius, options_.shadow);
+  surface_->SetAppearance(options_.theme, options_.radius, options_.shadow,
+                          options_.content_inset);
   const auto* provider = surface_->GetColorProvider();
   SkColor text = Color(options_.theme, "text",
                        provider->GetColor(ui::kColorLabelForeground));
@@ -993,18 +1401,73 @@ void NativePanelHost::ApplyTheme() {
   int font_size = Integer(options_.theme, "fontSize", 13);
   std::string family = String(options_.theme, "fontFamily", "Segoe UI");
   for (auto& [id, entry] : entries_) {
+    const base::DictValue empty_style;
+    const auto* style = entry->properties.FindDict("style");
+    if (!style)
+      style = &empty_style;
+    const auto weight = String(*style, "fontWeight");
     gfx::FontList font(std::vector<std::string>{family}, gfx::Font::NORMAL,
                        Integer(entry->properties, "fontSize", font_size),
-                       gfx::Font::Weight::NORMAL);
+                       weight == "bold"     ? gfx::Font::Weight::BOLD
+                       : weight == "medium" ? gfx::Font::Weight::MEDIUM
+                                            : gfx::Font::Weight::NORMAL);
     if (entry->label) {
+      entry->label->SetTextStyle(views::style::STYLE_PRIMARY);
       entry->label->SetFontList(font);
-      entry->label->SetEnabledColor(
-          entry->properties.FindBool("muted").value_or(false) ? muted : text);
+      entry->label->SetEnabledColor(Color(
+          *style, "color",
+          entry->properties.FindBool("muted").value_or(false) ? muted : text));
+      const auto align = String(*style, "align", "start");
+      const bool end = align == "end";
+      entry->label->SetHorizontalAlignment(align == "center" ? gfx::ALIGN_CENTER
+                                           : end != base::i18n::IsRTL()
+                                               ? gfx::ALIGN_RIGHT
+                                               : gfx::ALIGN_LEFT);
+      if (const auto* ranges = entry->properties.FindList("highlights")) {
+        for (const auto& range : *ranges) {
+          if (range.is_dict())
+            entry->label->SetTextStyleRange(
+                views::style::STYLE_EMPHASIZED,
+                gfx::Range(Integer(range.GetDict(), "start", 0),
+                           Integer(range.GetDict(), "end", 0)));
+        }
+      }
+    }
+    if (entry->linked_label) {
+      auto appearance = entry->properties.Clone();
+      appearance.Set("theme", options_.theme.Clone());
+      if (appearance != entry->linked_appearance) {
+        entry->linked_appearance = std::move(appearance);
+        auto* label = entry->linked_label.get();
+        label->ClearStyleRanges();
+        const auto* range = entry->properties.FindDict("linkRange");
+        const int start = Integer(*range, "start", 0);
+        const int end = Integer(*range, "end", 0);
+        const int length = label->GetText().size();
+        views::StyledLabel::RangeStyleInfo normal;
+        normal.custom_font = font;
+        normal.override_color = Color(
+            *style, "color",
+            entry->properties.FindBool("muted").value_or(false) ? muted : text);
+        if (start > 0)
+          label->AddStyleRange(gfx::Range(0, start), normal);
+        auto link = views::StyledLabel::RangeStyleInfo::CreateForLink(
+            base::BindRepeating(&NativePanelHost::SendAction,
+                                weak_factory_.GetWeakPtr(), id, "click"));
+        link.custom_font = font;
+        label->AddStyleRange(gfx::Range(start, end), link);
+        if (end < length)
+          label->AddStyleRange(gfx::Range(end, length), normal);
+      }
     }
     if (entry->type == "button") {
       auto* button = static_cast<views::MdTextButton*>(entry->view.get());
-      button->SetEnabledTextColors(text);
+      button->SetEnabledTextColors(Color(*style, "color", text));
       static_cast<PanelButton*>(button)->SetPanelFont(font);
+      const auto alignment = String(*style, "align", "center");
+      button->SetHorizontalAlignment(alignment == "start" ? gfx::ALIGN_LEFT
+                                     : alignment == "end" ? gfx::ALIGN_RIGHT
+                                                          : gfx::ALIGN_CENTER);
     } else if (entry->type == "input") {
       static_cast<views::Textfield*>(entry->view.get())->SetFontList(font);
     } else if (entry->type == "toggle") {
@@ -1014,17 +1477,45 @@ void NativePanelHost::ApplyTheme() {
       static_cast<views::ProgressBar*>(entry->view.get())
           ->SetForegroundColor(accent);
     }
+    if (entry->type == "item" || entry->type == "iconButton") {
+      static_cast<PanelAction*>(entry->view.get())
+          ->SetAppearance(
+              *style, entry->properties.FindBool("selected").value_or(false),
+              SkColorSetARGB(18, 128, 128, 128));
+    } else if (entry->type != "button" && entry->type != "input") {
+      entry->view->SetBackground(views::CreateRoundedRectBackground(
+          Color(*style, "background", SK_ColorTRANSPARENT),
+          Integer(*style, "radius", 0)));
+      const int stroke = Integer(*style, "borderWidth", 0);
+      entry->view->SetBorder(stroke ? views::CreateRoundedRectBorder(
+                                          stroke, Integer(*style, "radius", 0),
+                                          Color(*style, "borderColor", text))
+                                    : nullptr);
+    }
   }
 }
 
 void NativePanelHost::UpdateAppearance(base::DictValue theme,
                                        int radius,
-                                       bool shadow) {
+                                       bool shadow,
+                                       int content_inset) {
+  std::string focused_link;
+  auto* focused = widget_->GetFocusManager()->GetFocusedView();
+  for (const auto& [id, entry] : entries_)
+    if (focused && entry->linked_label &&
+        entry->linked_label->Contains(focused))
+      focused_link = id;
+  options_.content_inset = content_inset;
   options_.theme = std::move(theme);
   options_.radius = radius;
   options_.shadow = shadow;
   ApplyTheme();
   LayoutAtAnchor();
+  if (!focused_link.empty()) {
+    auto found = entries_.find(focused_link);
+    if (found != entries_.end() && visible_)
+      found->second->FocusTarget()->RequestFocus();
+  }
 }
 
 void NativePanelHost::Show(const gfx::Rect& anchor,
@@ -1055,7 +1546,8 @@ void NativePanelHost::Show(const gfx::Rect& anchor,
   } else {
     widget_->Show();
     widget_->Activate();
-    if (!widget_->GetFocusManager()->GetFocusedView())
+    if (options_.focus_mode == "input" &&
+        !widget_->GetFocusManager()->GetFocusedView())
       widget_->GetFocusManager()->AdvanceFocus(false);
   }
   if (shadow_widget_) {
@@ -1086,9 +1578,9 @@ void NativePanelHost::LayoutAtAnchor() {
   body_width =
       std::clamp(body_width, 1, std::max(1, work.width() - 2 * shadow));
   int max_body_height = std::max(1, work.height() - 2 * shadow);
-  const int inner_width = std::max(1, body_width - 2 * kContentInset);
-  int preferred_height =
-      content_container_->GetHeightForWidth(inner_width) + 2 * kContentInset;
+  const int inner_width = std::max(1, body_width - 2 * options_.content_inset);
+  int preferred_height = content_container_->GetHeightForWidth(inner_width) +
+                         2 * options_.content_inset;
   int body_height = std::clamp(preferred_height, 1, max_body_height);
   bool top = placement_ == "top-start" || placement_ == "top-end";
   const int below = std::max(0, work.bottom() - anchor_.bottom() - 4 - shadow);
@@ -1110,7 +1602,8 @@ void NativePanelHost::LayoutAtAnchor() {
   y = std::clamp(
       y, work.y() + shadow,
       std::max(work.y() + shadow, work.bottom() - body_height - shadow));
-  outer_scroll_->ClipHeightTo(0, std::max(1, body_height - 2 * kContentInset));
+  outer_scroll_->ClipHeightTo(
+      0, std::max(1, body_height - 2 * options_.content_inset));
   widget_->SetBounds(gfx::Rect(x - shadow, y - shadow, body_width + 2 * shadow,
                                body_height + 2 * shadow));
   widget_->GetRootView()->InvalidateLayout();
@@ -1120,8 +1613,8 @@ void NativePanelHost::LayoutAtAnchor() {
   // paint into pixels which WM_NCHITTEST correctly excludes.
   float body_radius = std::min({static_cast<float>(options_.radius),
                                 body_width / 2.f, body_height / 2.f});
-  outer_scroll_->layer()->SetRoundedCornerRadius(
-      gfx::RoundedCornersF(std::max(0.f, body_radius - kContentInset)));
+  outer_scroll_->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(
+      std::max(0.f, body_radius - options_.content_inset)));
   UpdateInputRegion();
   if (shadow_widget_) {
     shadow_widget_->SetBounds(widget_->GetWindowBoundsInScreen());
@@ -1207,6 +1700,12 @@ void NativePanelHost::Destroy() {
 }
 
 bool NativePanelHost::IsComposing() const {
+  if (options_.focus_mode == "none" && parent_) {
+    auto* method = parent_->GetInputMethod();
+    if (method && method->GetTextInputClient() &&
+        method->GetTextInputClient()->HasCompositionText())
+      return true;
+  }
   for (const auto& [id, entry] : entries_) {
     if (entry->type == "input" &&
         static_cast<views::Textfield*>(entry->view.get())->IsIMEComposing())
@@ -1396,6 +1895,43 @@ bool NativePanelHost::HandleKeyEvent(views::Textfield* sender,
 }
 
 void NativePanelHost::OnKeyEvent(ui::KeyEvent* event) {
+  if (visible_ && !IsComposing() &&
+      event->type() == ui::EventType::kKeyPressed &&
+      (event->key_code() == ui::VKEY_UP ||
+       event->key_code() == ui::VKEY_DOWN)) {
+    auto* focused = widget_->GetFocusManager()->GetFocusedView();
+    for (const auto& [id, entry] : entries_)
+      if (entry->view == focused &&
+          (entry->type == "input" || entry->type == "option"))
+        return;
+    std::vector<Entry*> rows;
+    auto collect = [&](auto&& self, const NativePanelNode& node) -> void {
+      auto found = entries_.find(node.id);
+      if (found != entries_.end() && node.type == "item" &&
+          found->second->view->GetVisible() &&
+          found->second->view->GetEnabled())
+        rows.push_back(found->second.get());
+      for (const auto& child : node.children)
+        self(self, child);
+    };
+    collect(collect, options_.content);
+    auto current = std::find_if(rows.begin(), rows.end(), [&](Entry* row) {
+      return row->view == focused || (focused && row->view->Contains(focused));
+    });
+    if (current != rows.end() || (!focused && !rows.empty())) {
+      int index = current == rows.end()
+                      ? (event->key_code() == ui::VKEY_DOWN
+                             ? -1
+                             : static_cast<int>(rows.size()))
+                      : static_cast<int>(current - rows.begin());
+      index = std::clamp(index + (event->key_code() == ui::VKEY_DOWN ? 1 : -1),
+                         0, static_cast<int>(rows.size()) - 1);
+      rows[index]->view->RequestFocus();
+      rows[index]->view->ScrollViewToVisible();
+      event->SetHandled();
+      return;
+    }
+  }
   if (visible_ && options_.dismiss_on_escape &&
       event->type() == ui::EventType::kKeyPressed &&
       event->key_code() == ui::VKEY_ESCAPE && !IsComposing()) {
@@ -1416,6 +1952,9 @@ base::DictValue NativePanelHost::GetState() const {
   result.Set("destroyed", destroying_);
   result.Set("visible", visible_);
   if (outer_scroll_) {
+    result.Set("scrollbar", static_cast<PanelScrollBar*>(
+                                outer_scroll_->vertical_scroll_bar())
+                                ->GetState());
     result.Set("contentHeight", outer_scroll_->contents()->height());
     result.Set("viewportHeight", outer_scroll_->height());
   }
@@ -1448,7 +1987,28 @@ base::DictValue NativePanelHost::GetState() const {
     control.Set("id", id);
     control.Set("type", entry->type);
     control.Set("bounds", RectValue(entry->control->GetBoundsInScreen()));
-    if (widget_->GetFocusManager()->GetFocusedView() == entry->control)
+    if (entry->label)
+      control.Set("text", base::UTF16ToUTF8(entry->label->GetText()));
+    if (entry->linked_label) {
+      control.Set("text", base::UTF16ToUTF8(entry->linked_label->GetText()));
+      base::ListValue links;
+      for (views::View* child : entry->linked_label->children())
+        if (views::IsViewClass<views::Link>(child))
+          links.Append(RectValue(child->GetBoundsInScreen()));
+      control.Set("linkBounds", std::move(links));
+    }
+    if (entry->label) {
+      control.Set("fontWeight",
+                  static_cast<int>(entry->label->font_list().GetFontWeight()));
+      control.Set("fontSize", entry->label->font_list().GetFontSize());
+    }
+    if (entry->type == "item")
+      control.Set("selected",
+                  entry->properties.FindBool("selected").value_or(false));
+    if (widget_->GetFocusManager()->GetFocusedView() == entry->control ||
+        (entry->linked_label && widget_->GetFocusManager()->GetFocusedView() &&
+         entry->linked_label->Contains(
+             widget_->GetFocusManager()->GetFocusedView())))
       result.Set("focusedId", id);
     if (entry->type == "input") {
       auto* input = static_cast<views::Textfield*>(entry->view.get());
@@ -1468,8 +2028,12 @@ base::DictValue NativePanelHost::GetState() const {
           "value",
           static_cast<views::ProgressBar*>(entry->view.get())->GetValue());
     }
-    if (entry->scroll)
+    if (entry->scroll) {
       control.Set("scrollOffset", ScrollPosition(entry->scroll));
+      control.Set("scrollbar", static_cast<PanelScrollBar*>(
+                                   entry->scroll->vertical_scroll_bar())
+                                   ->GetState());
+    }
     controls.Append(std::move(control));
   }
   result.Set("controls", std::move(controls));

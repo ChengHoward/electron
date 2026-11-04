@@ -58,6 +58,10 @@
 #include "ui/base/models/image_model.h"
 #endif
 
+#if BUILDFLAG(IS_WIN)
+#include "shell/browser/ui/views/certificate_viewer.h"
+#endif
+
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
 #include "extensions/common/mojom/view_type.mojom-forward.h"
 
@@ -230,6 +234,9 @@ class WebContents final : public ExclusiveAccessContext,
   void DownloadURL(const GURL& url, gin::Arguments* args);
   GURL GetURL() const;
   int GetOwnerWindowID() const;
+  bool ShowCertificateViewer(gin_helper::ErrorThrower thrower);
+  void CloseCertificateViewer();
+  v8::Local<v8::Promise> GetCertificateViewerState(v8::Isolate* isolate);
   v8::Local<v8::Value> GetPageInfo(v8::Isolate* isolate,
                                    gin_helper::ErrorThrower thrower,
                                    std::optional<bool> include_permissions);
@@ -1095,6 +1102,9 @@ class WebContents final : public ExclusiveAccessContext,
   base::flat_map<blink::PointerId, blink::WebTouchPoint> dispatch_touch_points_;
   base::ScopedClosureRunner agent_input_capture_;
 
+#if BUILDFLAG(IS_WIN)
+  CertificateViewerHandle certificate_viewer_;
+#endif
   base::WeakPtrFactory<WebContents> weak_factory_{this};
 };
 

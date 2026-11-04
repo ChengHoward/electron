@@ -105,6 +105,8 @@ The `menu` object has the following instance methods:
     only provide values you receive from other APIs or leave it `undefined`.
     Can be `none`, `mouse`, `keyboard`, `touch`, `touchMenu`, `longPress`, `longTap`, `touchHandle`, `stylus`, `adjustSelection`, or `adjustSelectionReset`.
   - `callback` Function (optional) - Called when menu is closed.
+  - `appearance` [MenuAppearance](structures/menu-appearance.md) (optional) _Windows_ -
+    Per-popup native appearance, inherited by submenus.
 
 Pops up this menu as a context menu in the [`BaseWindow`](base-window.md).
 
@@ -116,6 +118,14 @@ Pops up this menu as a context menu in the [`BaseWindow`](base-window.md).
 - `window` [BaseWindow](base-window.md) (optional) - Default is the focused window.
 
 Closes the context menu in the `window`.
+
+#### `menu.refresh()` _Windows_
+
+Validates all inline `MenuItem.controls` descriptions before updating the open
+popup's native labels, images and enabled states. Control IDs, types and row
+membership cannot change while open. Invalid updates leave the native controls
+unchanged. Programmatic refresh does not emit an action. With no open popup this
+method does nothing. Submenu controls are refreshed through the root Menu.
 
 #### `menu.append(menuItem)`
 
@@ -139,6 +149,18 @@ Inserts the `menuItem` to the `pos` position of the menu.
 ### Instance Events
 
 Objects created with `new Menu` or returned by `Menu.buildFromTemplate` emit the following events:
+
+#### Event: 'control-action' _Windows_
+
+Returns:
+
+- `detail` Object
+  - `itemId` string - Containing menu item's ID.
+  - `controlId` string - Activated inline button's ID.
+
+Emitted by the root popup Menu without an Electron event argument when an inline
+native button is clicked or activated using the keyboard. Labels and disabled
+buttons do not emit actions.
 
 > [!NOTE]
 > Some events are only available on specific operating systems and are

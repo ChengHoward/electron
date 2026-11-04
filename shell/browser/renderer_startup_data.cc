@@ -25,6 +25,9 @@
 #include "shell/browser/web_contents_preferences.h"
 #include "shell/common/asar/asar_util.h"
 #include "shell/common/node_includes.h"
+#if BUILDFLAG(IS_WIN)
+#include "shell/browser/ui/views/certificate_viewer.h"
+#endif
 
 namespace electron::renderer_startup_data {
 
@@ -149,6 +152,12 @@ mojom::RendererStartupDataPtr BuildForFrame(content::RenderFrameHost* rfh) {
   const preload_code_cache::Scope scope =
       preload_code_cache::ScopeForFrame(rfh);
   auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+#if BUILDFLAG(IS_WIN)
+  // The dedicated privileged certificate WebUI must not inherit the host
+  // session's preload scripts, environment snapshot or Node bootstrap data.
+  if (IsCertificateViewer(web_contents))
+    return mojom::RendererStartupData::New();
+#endif
   const bool sandboxed = IsFrameInSandboxedRenderer(rfh);
   std::vector<preload_code_cache::ServedPreload> served;
   auto data = BuildInternal(rfh->GetBrowserContext(),

@@ -580,10 +580,13 @@ source_set("electron_lib") {
     "//third_party/blink/public/platform/media",
     "//third_party/boringssl",
     "//third_party/electron_node:libnode",
+    "//ui/web_dialogs",
 
     # Provides the strong SnapshotBuilder::GetEmbeddedSnapshotData() (the
     # embedded Node startup snapshot) that overrides libnode's weak no-snapshot
     # stub. Lets the browser process boot Node from a snapshot.
+    "//chrome/common/net",
+    "//components/vector_icons",
     "//third_party/electron_node:node_snapshot",
     "//third_party/highway:libhwy",
     "//third_party/inspector_protocol:crdtp",
@@ -651,6 +654,7 @@ source_set("electron_lib") {
   sources = filenames.lib_sources
   if (is_win) {
     sources += filenames.lib_sources_win
+    deps += [ "//chrome/browser/ui/webui/certificate_viewer:resources_util" ]
   }
   if (is_mac) {
     sources += filenames.lib_sources_mac

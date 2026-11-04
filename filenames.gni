@@ -74,8 +74,14 @@ filenames = {
   lib_sources_posix = [ "shell/browser/electron_browser_main_parts_posix.cc" ]
 
   lib_sources_win = [
+    "shell/browser/ui/views/certificate_viewer.cc",
+    "shell/browser/ui/views/certificate_viewer.h",
+    "shell/browser/ui/views/certificate_viewer_exporter.cc",
+    "shell/browser/ui/views/certificate_viewer_exporter.h",
     "shell/browser/ui/views/native_panel.cc",
     "shell/browser/ui/views/native_panel.h",
+    "shell/browser/ui/views/native_page_info.cc",
+    "shell/browser/ui/views/native_page_info.h",
     "shell/browser/ui/virtual_cursor.cc",
     "shell/browser/ui/virtual_cursor.h",
     "shell/browser/api/electron_api_clipboard_win.cc",
@@ -250,6 +256,8 @@ filenames = {
   ]
 
   lib_sources_views = [
+    "shell/browser/ui/views/native_menu.cc",
+    "shell/browser/ui/views/native_menu.h",
     "shell/browser/api/electron_api_menu_views.cc",
     "shell/browser/api/electron_api_menu_views.h",
     "shell/browser/native_window_views.cc",
@@ -276,9 +284,6 @@ filenames = {
   ]
 
   lib_sources = [
-    "shell/browser/api/electron_api_web_contents_input.cc",
-    "shell/browser/api/input_sequence.cc",
-    "shell/browser/api/input_sequence.h",
     "shell/app/command_line_args.cc",
     "shell/app/command_line_args.h",
     "shell/app/electron_content_client.cc",
@@ -376,6 +381,7 @@ filenames = {
     "shell/browser/api/electron_api_web_contents.cc",
     "shell/browser/api/electron_api_web_contents.h",
     "shell/browser/api/electron_api_web_contents_impl.cc",
+    "shell/browser/api/electron_api_web_contents_input.cc",
     "shell/browser/api/electron_api_web_contents_view.cc",
     "shell/browser/api/electron_api_web_contents_view.h",
     "shell/browser/api/electron_api_web_frame_main.cc",
@@ -391,6 +397,8 @@ filenames = {
     "shell/browser/api/gpu_info_enumerator.h",
     "shell/browser/api/gpuinfo_manager.cc",
     "shell/browser/api/gpuinfo_manager.h",
+    "shell/browser/api/input_sequence.cc",
+    "shell/browser/api/input_sequence.h",
     "shell/browser/api/load_url_promises.cc",
     "shell/browser/api/load_url_promises.h",
     "shell/browser/api/message_port.cc",
@@ -513,6 +521,8 @@ filenames = {
     "shell/browser/net/client_certificate_responder_delegate.h",
     "shell/browser/net/electron_url_loader_factory.cc",
     "shell/browser/net/electron_url_loader_factory.h",
+    "shell/browser/net/navigation_response_override_registry.cc",
+    "shell/browser/net/navigation_response_override_registry.h",
     "shell/browser/net/network_context_service.cc",
     "shell/browser/net/network_context_service.h",
     "shell/browser/net/network_context_service_factory.cc",
@@ -523,8 +533,6 @@ filenames = {
     "shell/browser/net/protocol_source.h",
     "shell/browser/net/proxying_url_loader_factory.cc",
     "shell/browser/net/proxying_url_loader_factory.h",
-    "shell/browser/net/navigation_response_override_registry.cc",
-    "shell/browser/net/navigation_response_override_registry.h",
     "shell/browser/net/proxying_websocket.cc",
     "shell/browser/net/proxying_websocket.h",
     "shell/browser/net/resolve_host_function.cc",
@@ -624,8 +632,6 @@ filenames = {
     "shell/browser/ui/tray_icon_observer.h",
     "shell/browser/ui/webui/accessibility_ui.cc",
     "shell/browser/ui/webui/accessibility_ui.h",
-    "shell/browser/user_agent_options.cc",
-    "shell/browser/user_agent_options.h",
     "shell/browser/usb/electron_usb_delegate.cc",
     "shell/browser/usb/electron_usb_delegate.h",
     "shell/browser/usb/usb_chooser_context.cc",
@@ -634,6 +640,8 @@ filenames = {
     "shell/browser/usb/usb_chooser_context_factory.h",
     "shell/browser/usb/usb_chooser_controller.cc",
     "shell/browser/usb/usb_chooser_controller.h",
+    "shell/browser/user_agent_options.cc",
+    "shell/browser/user_agent_options.h",
     "shell/browser/web_contents_permission_helper.cc",
     "shell/browser/web_contents_permission_helper.h",
     "shell/browser/web_contents_preferences.cc",

@@ -11,6 +11,9 @@
 #include "content/public/common/url_constants.h"
 #include "shell/browser/ui/devtools_ui.h"
 #include "shell/browser/ui/webui/accessibility_ui.h"
+#if BUILDFLAG(IS_WIN)
+#include "shell/browser/ui/views/certificate_viewer.h"
+#endif
 
 namespace electron {
 
@@ -36,6 +39,10 @@ content::WebUI::TypeID ElectronWebUIControllerFactory::GetWebUIType(
       url.SchemeIs(content::kChromeUIScheme)) {
     return this;
   }
+#if BUILDFLAG(IS_WIN)
+  if (host == "view-cert" && url.SchemeIs(content::kChromeUIScheme))
+    return this;
+#endif
 
   return content::WebUI::kNoWebUI;
 }
@@ -63,6 +70,10 @@ ElectronWebUIControllerFactory::CreateWebUIControllerForURL(
 
   if (host == chrome::kChromeUIAccessibilityHost)
     return std::make_unique<ElectronAccessibilityUI>(web_ui);
+#if BUILDFLAG(IS_WIN)
+  if (host == "view-cert")
+    return CreateCertificateViewerUI(web_ui);
+#endif
 
   return {};
 }

@@ -3,8 +3,8 @@
 | 项 | 内容 |
 |----|------|
 | 文档版本 | 1.2 |
-| 更新日期 | 2026-09-11 |
-| 基线分支 | `43-x-y`（Chromium `150.0.7871.129`） |
+| 更新日期 | 2026-11-04 |
+| 基线分支 | `45-x-y`（Chromium `156.0.8078.36`） |
 | 源码仓库 | [ChengHoward/electron](https://github.com/ChengHoward/electron) |
 | 参考提交 | 见 [定制变更简述.md](./定制变更简述.md) 最近条目 |
 
@@ -546,10 +546,10 @@ Linux 容器化编译可参考仓库内 `xbuild/`。
 
 | 项 | 值 |
 |----|-----|
-| 公网域名 | `https://electron.cloudbypass.com` |
-| npm registry | `https://electron.cloudbypass.com/npm/` |
+| 公网域名 | `https://mirror.cloudbypass.com/electron` |
+| npm registry | `https://mirror.cloudbypass.com/electron/npm/` |
 | 包名 | `electron` |
-| 历史安装示例版本 | `41.0.0-cloudbypass.2`（保留原示例；当前 Windows x64 为 `45.0.0-cloudbypass.5`，编译与验收通过，本地镜像已提供；Linux x64 仍为已有 `45.0.0-cloudbypass.2`） |
+| Windows x64 安装示例版本 | [`45.0.0-cloudbypass.6`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)（2026-11-04 发行版本，安装验证及附件见发布记录）；Linux x64 仍为已有 `45.0.0-cloudbypass.2`。 |
 | 本机服务目录 | 仓库旁 `mirror/`（默认端口 `8787`） |
 
 安装时有两段下载，都须指向本镜像：
@@ -561,11 +561,11 @@ Linux 容器化编译可参考仓库内 `xbuild/`。
 
 | 用途 | URL |
 |------|-----|
-| 健康检查 | `https://electron.cloudbypass.com/healthz` |
-| npm 元数据 | `https://electron.cloudbypass.com/npm/electron` |
-| npm tarball | `https://electron.cloudbypass.com/npm/electron/-/electron-{version}.tgz` |
-| 二进制 | `https://electron.cloudbypass.com/v{version}/electron-v{version}-{platform}-{arch}.zip` |
-| 校验和 | `https://electron.cloudbypass.com/v{version}/SHASUMS256.txt` |
+| 健康检查 | `https://mirror.cloudbypass.com/electron/healthz` |
+| npm 元数据 | `https://mirror.cloudbypass.com/electron/npm/electron` |
+| npm tarball | `https://mirror.cloudbypass.com/electron/npm/electron/-/electron-{version}.tgz` |
+| 二进制 | `https://mirror.cloudbypass.com/electron/v{version}/electron-v{version}-{platform}-{arch}.zip` |
+| 校验和 | `https://mirror.cloudbypass.com/electron/v{version}/SHASUMS256.txt` |
 
 `@electron/get` 实际 URL：
 
@@ -573,7 +573,7 @@ Linux 容器化编译可参考仓库内 `xbuild/`。
 {electron_mirror}{electron_custom_dir}/{filename}
 ```
 
-例如：`https://electron.cloudbypass.com/v41.0.0-cloudbypass.2/electron-v41.0.0-cloudbypass.2-win32-x64.zip`
+Windows `.6` 的 URL 示例：`https://mirror.cloudbypass.com/electron/v45.0.0-cloudbypass.6/electron-v45.0.0-cloudbypass.6-win32-x64.zip`。本地镜像已提供，安装验证及附件见 [发布记录](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)。
 
 #### 业务项目配置（推荐）
 
@@ -584,7 +584,7 @@ Linux 容器化编译可参考仓库内 `xbuild/`。
 registry=https://registry.npmjs.org/
 
 # Electron 二进制镜像（@electron/get / install.js）
-electron_mirror=https://electron.cloudbypass.com/
+electron_mirror=https://mirror.cloudbypass.com/electron/
 electron_custom_dir=v{{ version }}
 
 # 定制构建校验和与官方不同，必须用远端 SHASUMS256.txt
@@ -594,19 +594,19 @@ electron_use_remote_checksums=1
 也可等价设置环境变量（Yarn v1 / npm 均可读）：
 
 ```powershell
-$env:ELECTRON_MIRROR="https://electron.cloudbypass.com/"
+$env:ELECTRON_MIRROR="https://mirror.cloudbypass.com/electron/"
 $env:ELECTRON_CUSTOM_DIR="v{{ version }}"
 $env:ELECTRON_USE_REMOTE_CHECKSUMS="1"
 ```
 
 **2. `package.json` 依赖版本**
 
-版本号须与镜像已发布版本一致：
+下方为 Windows `.6` 安装示例，版本号须与镜像实际提供的产物一致；Linux x64 仍使用 `45.0.0-cloudbypass.2`：
 
 ```json
 {
   "devDependencies": {
-    "electron": "41.0.0-cloudbypass.2"
+    "electron": "45.0.0-cloudbypass.6"
   }
 }
 ```
@@ -614,7 +614,7 @@ $env:ELECTRON_USE_REMOTE_CHECKSUMS="1"
 **3. 安装（仅 electron 走私有 registry）**
 
 ```bash
-yarn add electron@41.0.0-cloudbypass.2 --registry https://electron.cloudbypass.com/npm/
+yarn add electron@45.0.0-cloudbypass.6 --registry https://mirror.cloudbypass.com/electron/npm/
 ```
 
 不要把全局 `registry` 永久改成镜像，以免其它依赖解析失败。
@@ -626,7 +626,7 @@ yarn add electron@41.0.0-cloudbypass.2 --registry https://electron.cloudbypass.c
 ```json
 {
   "devDependencies": {
-    "electron": "https://electron.cloudbypass.com/npm/electron/-/electron-41.0.0-cloudbypass.1.tgz"
+    "electron": "https://mirror.cloudbypass.com/electron/npm/electron/-/electron-45.0.0-cloudbypass.6.tgz"
   }
 }
 ```
@@ -642,7 +642,7 @@ yarn
 安装时可临时指定 registry：
 
 ```bash
-YARN_NPM_REGISTRY_SERVER=https://electron.cloudbypass.com/npm/ yarn add electron@41.0.0-cloudbypass.1
+YARN_NPM_REGISTRY_SERVER=https://mirror.cloudbypass.com/electron/npm/ yarn add electron@45.0.0-cloudbypass.6
 ```
 
 `electron_mirror` / `electron_use_remote_checksums` 仍需通过 `.npmrc` 或环境变量提供（Electron 的 install 脚本读的是 npm config / env）。
@@ -652,7 +652,7 @@ YARN_NPM_REGISTRY_SERVER=https://electron.cloudbypass.com/npm/ yarn add electron
 ```powershell
 cd <repo>/mirror
 .\run.ps1 -Publish       # 从 out/Release/dist.zip 发布 npm + 二进制
-.\run.ps1 -SetupTunnel   # 首次绑定 electron.cloudbypass.com
+.\run.ps1 -SetupTunnel   # 首次配置 mirror.cloudbypass.com
 .\run.ps1                # HTTP + Tunnel（未配置 Tunnel 时降级为本机）
 .\run.ps1 -LocalOnly     # 仅 http://127.0.0.1:8787
 ```
@@ -721,3 +721,15 @@ cd <repo>/mirror
 网站信息读取已提交导航项的真实 SSL/TLS 和证书。已接入的 `permissionCheckHandler` 只反映当前预授权检查，`false` 不能视为永久拒绝；修改许可通过 `page-info-open-site-settings(event, { url, origin })` 交宿主既有站点设置逻辑处理，不引入 Chrome Profile。
 
 实现入口为 `lib/browser/api/native-panel.ts`、`shell/browser/api/electron_api_native_panel.{h,cc}`、`shell/browser/ui/views/native_panel.{h,cc}`、`lib/browser/api/web-contents.ts` 和 `shell/browser/api/electron_api_web_contents.{h,cc}`。面板开关不改变虚拟光标、`dispatchInputSequence` 或真实输入保护；输入命中探测/设置及持续绘制租约三个可选接口未增加。编译和原生窗口验收仍在进行，不能用静态检查替代物理输入、中文 IME、混合 DPI 与资源释放验证。
+
+## 2026-11-04：原生界面与菜单定制（Windows .6）
+
+2026-11-04 Windows x64 发行版本为 [`45.0.0-cloudbypass.6`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)，本地镜像已提供，安装验证及附件见该版本发布记录。Linux x64 仍为已有 `.2`；本次没有 Linux 或 macOS `.6` 包，不能由 Windows 结果推断其他平台支持。
+
+NativePanel 在原有入口上增加 `item`、`iconButton`、`button.variant`、交互状态样式、四边内边距、无边框输入、文字宽度与省略、UTF-16 高亮范围、行内链接及宿主控制的选中态。整行与内部按钮独立回传动作，稳定 id 的更新保留焦点、草稿、IME 组合和滚动位置。列表和外层溢出区使用灰色圆头滑块及上下箭头。
+
+原生菜单继续使用 `Menu` 和 Chromium MenuRunner，提供 `menu.popup({ appearance })`、`MenuItem.controls`、`menu.refresh()` 及根菜单的 `control-action`。支持主题、最小宽度、行高、圆角、留白、图标和分段按钮；行内按钮可持续点击而不关闭菜单。打开期间可刷新文字、图标与可用状态，控件 id、类型、数量和分组结构保持不变。菜单不使用 NativePanel，未启用定制的菜单保留原有行为。
+
+`showPageInfoDialog` 主面板和安全子页使用原生 Views 与 Chromium 语言资源。证书窗口复用 Chromium 原版 `chrome://view-cert` HTML、CSS、TypeScript、证书树和五种导出格式，单独使用一个隔离的 WebContents，不运行 Node 或宿主 preload。其他原生面板和菜单不增加网页渲染器。网站设置继续通过事件交宿主处理，本轮没有 Cookie 管理或完整站点权限设置页。
+
+下载记录、地址建议、悬浮输入和菜单内容由宿主提供；本轮只提供原生展示与显式动作接口。方法、参数、主题、截图及本地验收范围见 [原生界面定制实现与测试](./原生界面定制实现与测试.md)，原始需求见 [定制规划](./原生界面定制规划.md)。

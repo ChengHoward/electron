@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/functional/function_ref.h"
+#include "base/values.h"
 #include "gin/wrappable.h"
 #include "shell/browser/event_emitter_mixin.h"
 #include "shell/browser/ui/electron_menu_model.h"
@@ -127,6 +128,8 @@ class Menu : public gin::Wrappable<Menu>,
                                     v8::Local<v8::Value> id);
   v8::Local<v8::Value> Popup(gin::Arguments* args);
   void ClosePopup(gin::Arguments* args);
+  virtual void Refresh(gin::Arguments* args);
+  virtual base::ListValue GetPopupState() const;
   int GetIndexOfCommandId(int command_id) const;
   void ActivateForTesting(int command_id);
   void MenuWillShowForTesting();
@@ -141,6 +144,7 @@ class Menu : public gin::Wrappable<Menu>,
   static void InstallDefaultApplicationMenu(v8::Isolate* isolate);
 
  protected:
+  base::DictValue popup_appearance_;
   // Remove this instance as an observer from the model. Called by derived
   // class destructors to ensure observer is removed before platform-specific
   // cleanup that may trigger model callbacks.
