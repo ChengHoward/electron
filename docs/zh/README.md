@@ -19,3 +19,5 @@
 - [原生浮层与网站信息](./原生浮层.md)：Windows x64 `.5` 的历史接口与验收记录，包含 `showPageInfoDialog`、NativePanel 七入口、控件 schema、事件与验收边界。
 - [原生界面与菜单定制规划](./原生界面定制规划.md)：PageInfo 本地化、NativePanel 样式、地址建议、下载和悬浮输入，以及独立原生 Menu 样式与行内控件的范围、参考图和验收要求。
 - [原生界面定制实现与测试](./原生界面定制实现与测试.md)：Windows `.6` 对应的 NativePanel 样式、原生 Menu 行内控件、Chromium 原版证书查看器及实机截图。安装验证及附件见 [`.6` 发布记录](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.6)。
+- [原生多行便笺](./原生多行便笺.md)：早期 Textarea 预览的接口、示例及历史验收；后续随 Windows `.7` 提供，最新整体记录见下一项。
+- [原生亚克力与滚动条](./原生亚克力与滚动条.md)：Windows [`45.0.0-cloudbypass.7`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.7) 的 Textarea、系统亚克力、细滚动条与 `overlay`／`gutter` 位置配置；验收通过，准备发布。已发布 `.6` 不包含这些新增能力。

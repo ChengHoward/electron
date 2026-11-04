@@ -49,6 +49,20 @@ bool HasValue(gin::Dictionary* dictionary,
   return dictionary->Get(key, value) && !(*value)->IsUndefined();
 }
 
+bool ParseBackgroundMaterial(v8::Isolate* isolate,
+                             v8::Local<v8::Value> value,
+                             std::string* material) {
+  return value->IsString() && gin::ConvertFromV8(isolate, value, material) &&
+         (*material == "none" || *material == "acrylic");
+}
+
+bool ParseScrollbarPlacement(v8::Isolate* isolate,
+                             v8::Local<v8::Value> value,
+                             std::string* placement) {
+  return value->IsString() && gin::ConvertFromV8(isolate, value, placement) &&
+         (*placement == "overlay" || *placement == "gutter");
+}
+
 bool ParseTheme(v8::Isolate* isolate,
                 v8::Local<v8::Value> value,
                 base::DictValue* theme) {
@@ -113,10 +127,62 @@ bool ParseNode(v8::Isolate* isolate,
     return false;
   static const base::NoDestructor<std::set<std::string>> types(
       std::set<std::string>{"row", "column", "text", "icon", "button", "toggle",
-                            "input", "option", "list", "separator", "progress",
-                            "item", "iconButton"});
+                            "input", "textarea", "option", "list", "separator",
+                            "progress", "item", "iconButton"});
   if (!types->contains(node->type))
     return false;
+  v8::Local<v8::Value> submit_on_enter;
+  if (node->type != "textarea" &&
+      HasValue(&dictionary, "submitOnEnter", &submit_on_enter))
+    return false;
+  v8::Local<v8::Value> scrollbar_placement_value;
+  if (HasValue(&dictionary, "scrollbarPlacement", &scrollbar_placement_value)) {
+    std::string placement;
+    if ((node->type != "list" && node->type != "textarea") ||
+        !ParseScrollbarPlacement(isolate, scrollbar_placement_value,
+                                 &placement))
+      return false;
+    node->properties.Set("scrollbarPlacement", placement);
+  }
+  if (node->type == "textarea") {
+    static const base::NoDestructor<std::set<std::string>> fields(
+        std::set<std::string>{"type", "id", "disabled", "visible", "width",
+                              "height", "maxWidth", "flex", "tooltip", "style",
+                              "value", "placeholder", "maxLength",
+                              "submitOnEnter", "scrollbarPlacement"});
+    auto context = isolate->GetCurrentContext();
+    v8::Local<v8::Array> names;
+    if (!value.As<v8::Object>()->GetOwnPropertyNames(context).ToLocal(&names))
+      return false;
+    for (uint32_t i = 0; i < names->Length(); ++i) {
+      v8::Local<v8::Value> name, field;
+      std::string key;
+      if (!names->Get(context, i).ToLocal(&name) ||
+          !gin::ConvertFromV8(isolate, name, &key) || !fields->contains(key) ||
+          !dictionary.Get(key, &field))
+        return false;
+      if (key == "type" || key == "id" || key == "value" ||
+          key == "placeholder" || key == "tooltip" ||
+          key == "scrollbarPlacement") {
+        if (!field->IsString() ||
+            field.As<v8::String>()->Length() > (key == "id" ? 256 : 65536))
+          return false;
+      } else if (key == "disabled" || key == "visible" ||
+                 key == "submitOnEnter") {
+        if (!field->IsBoolean())
+          return false;
+      } else if (key != "style") {
+        double number;
+        const int maximum =
+            key == "maxLength" ? 65536 : (key == "flex" ? 1000 : 100000);
+        if (!field->IsNumber() ||
+            !gin::ConvertFromV8(isolate, field, &number) ||
+            !std::isfinite(number) || number < 0 || number > maximum ||
+            (key == "maxLength" && std::floor(number) != number))
+          return false;
+      }
+    }
+  }
   for (const char* key : {"text", "value", "placeholder", "tooltip",
                           "accessibleName", "variant"}) {
     if (std::string_view(key) == "value" && node->type == "progress")
@@ -129,8 +195,8 @@ bool ParseNode(v8::Isolate* isolate,
       return false;
     node->properties.Set(key, text);
   }
-  for (const char* key :
-       {"disabled", "visible", "muted", "checked", "singleLine", "selected"}) {
+  for (const char* key : {"disabled", "visible", "muted", "checked",
+                          "singleLine", "selected", "submitOnEnter"}) {
     v8::Local<v8::Value> field;
     if (!HasValue(&dictionary, key, &field))
       continue;
@@ -277,6 +343,20 @@ gin_helper::WrappableBase* NativePanel::New(gin::Arguments* args) {
     args->ThrowTypeError("Invalid NativePanel theme");
     return nullptr;
   }
+  v8::Local<v8::Value> material_value;
+  if (HasValue(&dictionary, "backgroundMaterial", &material_value) &&
+      !ParseBackgroundMaterial(args->isolate(), material_value,
+                               &options.background_material)) {
+    args->ThrowTypeError("Invalid NativePanel backgroundMaterial");
+    return nullptr;
+  }
+  v8::Local<v8::Value> scrollbar_placement_value;
+  if (HasValue(&dictionary, "scrollbarPlacement", &scrollbar_placement_value) &&
+      !ParseScrollbarPlacement(args->isolate(), scrollbar_placement_value,
+                               &options.scrollbar_placement)) {
+    args->ThrowTypeError("Invalid NativePanel scrollbarPlacement");
+    return nullptr;
+  }
   dictionary.Get("radius", &options.radius);
   dictionary.Get("contentInset", &options.content_inset);
   dictionary.Get("shadow", &options.shadow);
@@ -293,6 +373,8 @@ gin_helper::WrappableBase* NativePanel::New(gin::Arguments* args) {
   auto* panel = new NativePanel();
   panel->InitWithArgs(args);
   panel->theme_ = options.theme.Clone();
+  panel->background_material_ = options.background_material;
+  panel->scrollbar_placement_ = options.scrollbar_placement;
   panel->radius_ = options.radius;
   panel->content_inset_ = options.content_inset;
   panel->shadow_ = options.shadow;
@@ -356,6 +438,8 @@ void NativePanel::Update(gin::Arguments* args) {
   std::optional<NativePanelNode> content;
   std::optional<gfx::Rect> anchor;
   base::DictValue theme = theme_.Clone();
+  std::string background_material = background_material_;
+  std::string scrollbar_placement = scrollbar_placement_;
   int radius = radius_;
   int content_inset = content_inset_;
   bool shadow = shadow_;
@@ -400,15 +484,30 @@ void NativePanel::Update(gin::Arguments* args) {
     args->ThrowTypeError("Invalid NativePanel contentInset");
     return;
   }
+  if (HasValue(&dictionary, "backgroundMaterial", &value) &&
+      !ParseBackgroundMaterial(args->isolate(), value, &background_material)) {
+    args->ThrowTypeError("Invalid NativePanel backgroundMaterial");
+    return;
+  }
+  if (HasValue(&dictionary, "scrollbarPlacement", &value) &&
+      !ParseScrollbarPlacement(args->isolate(), value, &scrollbar_placement)) {
+    args->ThrowTypeError("Invalid NativePanel scrollbarPlacement");
+    return;
+  }
   if (content)
     host_->UpdateContent(std::move(*content));
   if (theme != theme_ || radius != radius_ || shadow != shadow_ ||
-      content_inset != content_inset_) {
-    host_->UpdateAppearance(theme.Clone(), radius, shadow, content_inset);
+      content_inset != content_inset_ ||
+      background_material != background_material_ ||
+      scrollbar_placement != scrollbar_placement_) {
+    host_->UpdateAppearance(theme.Clone(), radius, shadow, content_inset,
+                            background_material, scrollbar_placement);
     theme_ = std::move(theme);
     radius_ = radius;
     content_inset_ = content_inset;
     shadow_ = shadow;
+    background_material_ = std::move(background_material);
+    scrollbar_placement_ = std::move(scrollbar_placement);
   }
   if (anchor)
     host_->UpdateAnchor(*anchor);

@@ -18,6 +18,7 @@ const types = new Set([
   'button',
   'toggle',
   'input',
+  'textarea',
   'option',
   'list',
   'separator',
@@ -31,12 +32,13 @@ const fields: Record<string, string[]> = {
   item: ['children', 'gap', 'padding', 'selected', 'accessibleName'],
   iconButton: ['image', 'accessibleName'],
   column: ['children', 'gap', 'padding'],
-  list: ['children', 'gap', 'padding'],
+  list: ['children', 'gap', 'padding', 'scrollbarPlacement'],
   text: ['text', 'muted', 'fontSize', 'singleLine', 'highlights', 'linkRange'],
   icon: ['image'],
   button: ['text', 'variant', 'image'],
   toggle: ['text', 'checked'],
   input: ['value', 'placeholder', 'maxLength'],
+  textarea: ['value', 'placeholder', 'maxLength', 'submitOnEnter', 'scrollbarPlacement'],
   option: ['items', 'value'],
   separator: [],
   progress: ['value']
@@ -123,6 +125,7 @@ function content(value: unknown): RecordValue {
       if (key in node) boolean(node[key], key);
     }
     if ('style' in node) result.style = style(node.style);
+    if ('scrollbarPlacement' in node) result.scrollbarPlacement = scrollbarPlacement(node.scrollbarPlacement);
     if ('accessibleName' in node) string(node.accessibleName, 'accessibleName');
     if (node.type === 'iconButton' && !node.accessibleName) throw new TypeError('iconButton requires accessibleName');
     if ('variant' in node && !['default', 'plain', 'outlined'].includes(node.variant)) {
@@ -170,9 +173,10 @@ function content(value: unknown): RecordValue {
       result.linkRange = { ...node.linkRange };
     }
     if (node.type === 'toggle') boolean(node.checked, 'checked');
-    if (node.type === 'input') {
+    if (node.type === 'input' || node.type === 'textarea') {
       if ('value' in node) string(node.value, 'value');
       if ('placeholder' in node) string(node.placeholder, 'placeholder');
+      if ('submitOnEnter' in node) boolean(node.submitOnEnter, 'submitOnEnter');
       if ('maxLength' in node) {
         number(node.maxLength, 'maxLength', 0, 65536);
         if (!Number.isInteger(node.maxLength)) throw new TypeError('maxLength must be an integer');
@@ -237,13 +241,42 @@ function theme(value: unknown): RecordValue {
   return { mode: 'system', ...result };
 }
 
+function backgroundMaterial(value: unknown): string {
+  if (typeof value !== 'string' || !['none', 'acrylic'].includes(value)) {
+    throw new TypeError('backgroundMaterial must be none or acrylic');
+  }
+  return value;
+}
+
+function scrollbarPlacement(value: unknown): string {
+  if (typeof value !== 'string' || !['overlay', 'gutter'].includes(value)) {
+    throw new TypeError('scrollbarPlacement must be overlay or gutter');
+  }
+  return value;
+}
+
 function patch(value: unknown): RecordValue {
   object(value, 'patch');
-  keys(value, ['content', 'anchorBounds', 'theme', 'radius', 'shadow', 'contentInset'], 'patch');
+  keys(
+    value,
+    [
+      'content',
+      'anchorBounds',
+      'theme',
+      'radius',
+      'shadow',
+      'contentInset',
+      'backgroundMaterial',
+      'scrollbarPlacement'
+    ],
+    'patch'
+  );
   const result: RecordValue = { ...value };
   if ('content' in value) result.content = content(value.content);
   if ('anchorBounds' in value) result.anchorBounds = validateNativePanelAnchor(value.anchorBounds);
   if ('theme' in value) result.theme = theme(value.theme);
+  if ('backgroundMaterial' in value) result.backgroundMaterial = backgroundMaterial(value.backgroundMaterial);
+  if ('scrollbarPlacement' in value) result.scrollbarPlacement = scrollbarPlacement(value.scrollbarPlacement);
   if ('radius' in value) number(value.radius, 'radius', 0, 1000);
   if ('shadow' in value) boolean(value.shadow, 'shadow');
   if ('contentInset' in value) {
@@ -263,6 +296,8 @@ function options(value: unknown): RecordValue {
       'sourceWebContents',
       'content',
       'theme',
+      'backgroundMaterial',
+      'scrollbarPlacement',
       'radius',
       'contentInset',
       'shadow',
@@ -294,6 +329,8 @@ function options(value: unknown): RecordValue {
     ...value,
     content: content(value.content),
     theme: theme(value.theme ?? 'system'),
+    backgroundMaterial: value.backgroundMaterial ?? 'none',
+    scrollbarPlacement: value.scrollbarPlacement ?? 'gutter',
     radius: value.radius ?? 12,
     contentInset: value.contentInset ?? 12,
     shadow: value.shadow ?? true,
@@ -302,7 +339,9 @@ function options(value: unknown): RecordValue {
     dismissOnEscape: value.dismissOnEscape ?? true,
     ...patch(
       Object.fromEntries(
-        ['radius', 'shadow', 'contentInset'].filter((key) => key in value).map((key) => [key, value[key]])
+        ['radius', 'shadow', 'contentInset', 'backgroundMaterial', 'scrollbarPlacement']
+          .filter((key) => key in value)
+          .map((key) => [key, value[key]])
       )
     )
   };

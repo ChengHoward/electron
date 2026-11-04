@@ -4,6 +4,7 @@
 
 #include "shell/browser/ui/views/native_panel.h"
 
+#include <dwmapi.h>
 #include <windows.h>
 #include <windowsx.h>
 
@@ -27,8 +28,8 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/win/windows_version.h"
 #include "cc/paint/paint_flags.h"
-#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -48,6 +49,9 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/render_text.h"
+#include "ui/gfx/selection_model.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/gfx/skia_paint_util.h"
 #include "ui/native_theme/native_theme.h"
@@ -58,6 +62,7 @@
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/combobox/combobox.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -65,15 +70,14 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/scrollbar/base_scroll_bar_thumb.h"
 #include "ui/views/controls/scrollbar/scroll_bar.h"
-#include "ui/views/controls/scrollbar/scroll_bar_button.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/styled_label.h"
+#include "ui/views/controls/textarea/textarea.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/layout/flex_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/view_class_properties.h"
@@ -112,6 +116,10 @@ int Integer(const base::DictValue& data, std::string_view key, int fallback) {
   if (auto value = data.FindDouble(key))
     return static_cast<int>(*value);
   return fallback;
+}
+
+bool IsTextControl(std::string_view type) {
+  return type == "input" || type == "textarea";
 }
 
 SkColor Color(const base::DictValue& theme,
@@ -429,6 +437,80 @@ using PanelLabel = DimensionedView<views::Label>;
 using PanelLinkedLabel = DimensionedView<views::StyledLabel>;
 using PanelContainer = DimensionedView<views::View>;
 
+class PanelScrollBar;
+
+class PanelTextarea final : public views::Textarea,
+                            private views::ScrollBarController {
+ public:
+  using KeyHandler =
+      base::RepeatingCallback<bool(views::Textfield*, const ui::KeyEvent&)>;
+
+  explicit PanelTextarea(KeyHandler key_handler);
+
+  void SetAppearance(const base::DictValue& style);
+  void SetScrollbarPlacement(const std::string& placement);
+  void SyncScrollbar();
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
+
+  // RenderText normally scrolls the caret into view when fonts or bounds are
+  // measured again. A cosmetic update must preserve a separately scrolled
+  // editing viewport, including while an IME owns the selection.
+  base::ScopedClosureRunner PreserveViewport() {
+    return base::ScopedClosureRunner(base::BindOnce(
+        [](base::WeakPtr<PanelTextarea> textarea, std::u16string text,
+           gfx::SelectionModel selection, gfx::Vector2d offset) {
+          if (textarea && textarea->GetText() == text &&
+              textarea->GetSelectionModel() == selection) {
+            textarea->GetRenderText()->SetDisplayOffset(offset);
+            textarea->UpdateCursorViewPosition();
+            textarea->UpdateCursorVisibility();
+            textarea->SyncScrollbar();
+            textarea->SchedulePaint();
+          }
+        },
+        weak_factory_.GetWeakPtr(), std::u16string(GetText()),
+        GetSelectionModel(), GetRenderText()->GetUpdatedDisplayOffset()));
+  }
+
+  void AppendState(base::DictValue* state);
+
+ protected:
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  void OnDidSchedulePaint(const gfx::Rect& rect) override;
+
+  bool PreHandleKeyPressed(const ui::KeyEvent& event) override {
+    if (event.key_code() == ui::VKEY_RETURN) {
+      // Textarea handles Return before TextfieldController. Give the host its
+      // submit-on-Enter opportunity first, without turning IME confirmation
+      // into either a submit or a new line.
+      if (IsIMEComposing())
+        return false;
+      if (key_handler_.Run(this, event))
+        return true;
+    }
+    return views::Textarea::PreHandleKeyPressed(event);
+  }
+
+ private:
+  void ScrollToPosition(views::ScrollBar* source, int position) override;
+  int GetScrollIncrement(views::ScrollBar* source,
+                         bool is_page,
+                         bool is_positive) override;
+  void NotifyViewportChanged();
+
+  bool custom_appearance_ = false;
+  bool syncing_scrollbar_ = false;
+  bool scrollbar_overflowing_ = false;
+  bool measured_scrollbar_ = false;
+  int border_width_ = 1;
+  gfx::Rect measured_viewport_;
+  std::u16string measured_text_;
+  std::string measured_font_;
+  raw_ptr<PanelScrollBar> scrollbar_ = nullptr;
+  KeyHandler key_handler_;
+  base::WeakPtrFactory<PanelTextarea> weak_factory_{this};
+};
+
 // A real native Button with arbitrary native child views. Child buttons remain
 // independent event targets; there is no DOM-style bubbling to this row.
 class PanelAction final : public views::Button {
@@ -504,11 +586,63 @@ gfx::Insets ControlInsets(const base::DictValue& style, int fallback = 0) {
                            Integer(style, "paddingRight", fallback));
 }
 
+void PanelTextarea::SetAppearance(const base::DictValue& style) {
+  const bool borderless = style.FindBool("borderless").value_or(false);
+  const bool custom =
+      borderless || style.contains("background") ||
+      style.contains("borderColor") || style.contains("borderWidth") ||
+      style.contains("radius") || style.contains("paddingTop") ||
+      style.contains("paddingRight") || style.contains("paddingBottom") ||
+      style.contains("paddingLeft");
+  if (!custom && !custom_appearance_)
+    return;
+  custom_appearance_ = custom;
+  SetBackgroundEnabled(true);
+  if (!custom) {
+    border_width_ = 1;
+    SetUseDefaultBorder(true);
+    SetCornerRadius(std::nullopt);
+    // SetUseDefaultBorder only flips a flag. Refresh the default native border
+    // even when the corner radius was already unset, then restore its ring.
+    SetExtraInsets(gfx::Insets());
+    SetBackgroundColor(std::nullopt);
+    views::FocusRing::Install(this);
+  } else {
+    SetCornerRadius(style.contains("radius")
+                        ? std::make_optional<float>(Integer(style, "radius", 0))
+                        : std::nullopt);
+    const int stroke = borderless ? 0 : Integer(style, "borderWidth", 1);
+    border_width_ = stroke;
+    const gfx::Insets padding = ControlInsets(style, borderless ? 2 : 6);
+    SetBorder(stroke > 0 ? views::CreatePaddedBorder(
+                               views::CreateRoundedRectBorder(
+                                   stroke, GetCornerRadius(),
+                                   Color(style, "borderColor",
+                                         GetColorProvider()->GetColor(
+                                             ui::kColorTextfieldOutline))),
+                               padding)
+                         : views::CreateEmptyBorder(padding));
+    // Textfield's own painter uses GetCornerRadius(), so opaque backgrounds
+    // respect the rounded border instead of filling the transparent corners.
+    // Keeping it enabled also preserves native text/placeholder antialiasing.
+    SetBackgroundColor(
+        style.contains("background")
+            ? std::optional<ui::ColorVariant>(
+                  Color(style, "background", SK_ColorTRANSPARENT))
+        : borderless ? std::optional<ui::ColorVariant>(SK_ColorTRANSPARENT)
+                     : std::nullopt);
+  }
+  // A fixed-size textarea can change padding without changing its bounds.
+  // Recompute RenderText's viewport immediately in that case as well.
+  FitToLocalBounds();
+  SyncScrollbar();
+}
+
 int ScrollPosition(views::ScrollView* scroll) {
   return scroll->CurrentOffset().y();
 }
 
-constexpr int kPanelScrollbarWidth = 15;
+constexpr int kPanelScrollbarWidth = 12;
 
 SkColor ScrollbarColor(views::View* view,
                        bool track,
@@ -516,24 +650,53 @@ SkColor ScrollbarColor(views::View* view,
   const auto* colors = view->GetColorProvider();
   const SkColor background = colors->GetColor(ui::kColorMenuBackground);
   if (view->GetNativeTheme()->forced_colors() !=
-      ui::ColorProviderKey::ForcedColors::kNone)
-    return track ? background : colors->GetColor(ui::kColorLabelForeground);
+      ui::ColorProviderKey::ForcedColors::kNone) {
+    return colors->GetColor(track ? ui::kColorCssSystemWindow
+                            : state == views::Button::STATE_NORMAL
+                                ? ui::kColorCssSystemWindowText
+                                : ui::kColorCssSystemHighlight);
+  }
   const bool dark = color_utils::GetRelativeLuminance(background) < 0.5;
   if (track)
-    return dark ? SkColorSetRGB(42, 42, 42) : SkColorSetRGB(250, 250, 250);
+    return state == views::Button::STATE_NORMAL ? SK_ColorTRANSPARENT
+           : dark ? SkColorSetARGB(16, 255, 255, 255)
+                  : SkColorSetARGB(10, 0, 0, 0);
   if (state == views::Button::STATE_PRESSED)
-    return dark ? SkColorSetRGB(188, 188, 188) : SkColorSetRGB(96, 96, 96);
+    return dark ? SkColorSetARGB(210, 255, 255, 255)
+                : SkColorSetARGB(180, 0, 0, 0);
   if (state == views::Button::STATE_HOVERED)
-    return dark ? SkColorSetRGB(168, 168, 168) : SkColorSetRGB(112, 112, 112);
-  return SkColorSetRGB(141, 141, 141);
+    return dark ? SkColorSetARGB(170, 255, 255, 255)
+                : SkColorSetARGB(140, 0, 0, 0);
+  return dark ? SkColorSetARGB(110, 255, 255, 255)
+              : SkColorSetARGB(90, 0, 0, 0);
 }
 
 class PanelScrollThumb final : public views::BaseScrollBarThumb {
   METADATA_HEADER(PanelScrollThumb, views::BaseScrollBarThumb)
+
  public:
-  explicit PanelScrollThumb(views::ScrollBar* bar) : BaseScrollBarThumb(bar) {}
+  explicit PanelScrollThumb(views::ScrollBar* bar)
+      : BaseScrollBarThumb(bar), bar_(bar) {
+    SetSnapBackOnDragOutside(false);
+  }
   gfx::Size CalculatePreferredSize(const views::SizeBounds&) const override {
-    return gfx::Size(kPanelScrollbarWidth, 20);
+    return gfx::Size(kPanelScrollbarWidth,
+                     std::min(24, bar_->GetTrackBounds().height()));
+  }
+  views::Button::ButtonState VisualState() const { return GetState(); }
+  gfx::RectF PaintBounds() const {
+    const bool forced = GetNativeTheme()->forced_colors() !=
+                        ui::ColorProviderKey::ForcedColors::kNone;
+    const int thickness =
+        forced || GetState() != views::Button::STATE_NORMAL ? 6 : 4;
+    gfx::RectF bounds(GetLocalBounds());
+    bounds.Inset(gfx::InsetsF::VH(0, (width() - thickness) / 2.f));
+    return bounds;
+  }
+  gfx::Rect PaintBoundsInScreen() const {
+    gfx::Rect bounds = gfx::ToEnclosingRect(PaintBounds());
+    ConvertRectToScreen(this, &bounds);
+    return bounds;
   }
 
  protected:
@@ -541,46 +704,15 @@ class PanelScrollThumb final : public views::BaseScrollBarThumb {
     cc::PaintFlags paint;
     paint.setAntiAlias(true);
     paint.setColor(ScrollbarColor(this, false, GetState()));
-    gfx::RectF bounds(GetLocalBounds());
-    bounds.Inset(gfx::InsetsF::VH(0, 3));
+    const gfx::RectF bounds = PaintBounds();
     canvas->DrawRoundRect(bounds, bounds.width() / 2, paint);
-  }
-};
-
-BEGIN_METADATA(PanelScrollThumb)
-END_METADATA
-
-class PanelScrollArrow final : public views::ScrollBarButton {
-  METADATA_HEADER(PanelScrollArrow, views::ScrollBarButton)
-
- public:
-  PanelScrollArrow(PressedCallback callback, bool down)
-      : ScrollBarButton(std::move(callback), down ? Type::kDown : Type::kUp),
-        down_(down) {}
-  gfx::Size CalculatePreferredSize(const views::SizeBounds&) const override {
-    return gfx::Size(kPanelScrollbarWidth, kPanelScrollbarWidth);
-  }
-
- protected:
-  void PaintButtonContents(gfx::Canvas* canvas) override {
-    const float x = width() / 2.0f, y = height() / 2.0f;
-    const float direction = down_ ? 1 : -1;
-    SkPathBuilder arrow;
-    arrow.moveTo(x - 3.5f, y - direction * 2);
-    arrow.lineTo(x + 3.5f, y - direction * 2);
-    arrow.lineTo(x, y + direction * 2.5f);
-    arrow.close();
-    cc::PaintFlags paint;
-    paint.setAntiAlias(true);
-    paint.setColor(ScrollbarColor(this, false, GetState()));
-    canvas->DrawPath(arrow.detach(), paint);
   }
 
  private:
-  const bool down_;
+  raw_ptr<views::ScrollBar> bar_;
 };
 
-BEGIN_METADATA(PanelScrollArrow)
+BEGIN_METADATA(PanelScrollThumb)
 END_METADATA
 
 class PanelScrollBar final : public views::ScrollBar {
@@ -588,56 +720,215 @@ class PanelScrollBar final : public views::ScrollBar {
 
  public:
   PanelScrollBar() : ScrollBar(Orientation::kVertical) {
-    auto* layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
-    layout->SetOrientation(views::LayoutOrientation::kVertical);
-    auto callback = [](PanelScrollBar* bar, ScrollAmount amount) {
-      bar->ScrollByAmount(amount);
-    };
-    previous_ = AddChildView(std::make_unique<PanelScrollArrow>(
-        base::BindRepeating(callback, base::Unretained(this),
-                            ScrollAmount::kPrevLine),
-        false));
-    previous_->set_context_menu_controller(this);
+    SetNotifyEnterExitOnChild(true);
     SetThumb(new PanelScrollThumb(this));
-    GetThumb()->SetProperty(
-        views::kFlexBehaviorKey,
-        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
-                                 views::MaximumFlexSizeRule::kUnbounded));
-    next_ = AddChildView(std::make_unique<PanelScrollArrow>(
-        base::BindRepeating(callback, base::Unretained(this),
-                            ScrollAmount::kNextLine),
-        true));
-    next_->set_context_menu_controller(this);
   }
+  void SetPlacement(std::string_view placement) {
+    if (placement_ == placement)
+      return;
+    placement_ = placement;
+    if (parent())
+      parent()->InvalidateLayout();
+    PreferredSizeChanged();
+    SchedulePaint();
+  }
+  const std::string& placement() const { return placement_; }
+  bool OverlapsContent() const override { return placement_ == "overlay"; }
   int GetThickness() const override { return kPanelScrollbarWidth; }
   gfx::Rect GetTrackBounds() const override {
-    return gfx::Rect(0, kPanelScrollbarWidth, width(),
-                     std::max(0, height() - 2 * kPanelScrollbarWidth));
+    gfx::Rect bounds = GetLocalBounds();
+    bounds.Inset(gfx::Insets::VH(std::min(2, height() / 2), 0));
+    return bounds;
+  }
+  void Update(int viewport_size,
+              int content_size,
+              int contents_scroll_offset) override {
+    viewport_size_ = viewport_size;
+    content_size_ = content_size;
+    contents_offset_ = std::clamp(contents_scroll_offset, 0,
+                                  std::max(0, content_size - viewport_size));
+    ScrollBar::Update(viewport_size, content_size, contents_offset_);
   }
   base::DictValue GetState() const {
+    gfx::Rect track = GetTrackBounds();
+    ConvertRectToScreen(this, &track);
+    const auto* thumb = static_cast<PanelScrollThumb*>(GetThumb());
     return base::DictValue()
         .Set("bounds", RectValue(GetBoundsInScreen()))
+        .Set("track", RectValue(track))
         .Set("thumb", RectValue(GetThumb()->GetBoundsInScreen()))
-        .Set("previous", RectValue(previous_->GetBoundsInScreen()))
-        .Set("next", RectValue(next_->GetBoundsInScreen()))
+        .Set("thumbPaintBounds", RectValue(thumb->PaintBoundsInScreen()))
         .Set("visible", GetVisible())
-        .Set("position", GetPosition())
+        .Set("placement", placement_)
+        .Set("hovered", IsMouseHovered())
+        .Set("pressed", thumb->VisualState() == views::Button::STATE_PRESSED)
+        .Set("position", contents_offset_)
         .Set("maximum", GetMaxPosition());
   }
 
  protected:
   void OnPaint(gfx::Canvas* canvas) override {
-    canvas->FillRect(GetLocalBounds(),
-                     ScrollbarColor(this, true, views::Button::STATE_NORMAL));
+    const SkColor color =
+        ScrollbarColor(this, true,
+                       IsMouseHovered() ? views::Button::STATE_HOVERED
+                                        : views::Button::STATE_NORMAL);
+    if (SkColorGetA(color))
+      canvas->FillRect(GetLocalBounds(), color);
+  }
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    ScrollBar::OnMouseEntered(event);
+    SchedulePaint();
+  }
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    ScrollBar::OnMouseExited(event);
+    SchedulePaint();
+  }
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    ScrollBar::OnBoundsChanged(previous_bounds);
+    Update(viewport_size_, content_size_, contents_offset_);
+  }
+  void ScrollToPosition(int position) override {
+    contents_offset_ = position;
+    ScrollBar::ScrollToPosition(position);
   }
 
  private:
-  raw_ptr<PanelScrollArrow> previous_;
-  raw_ptr<PanelScrollArrow> next_;
+  int viewport_size_ = 0;
+  int content_size_ = 0;
+  int contents_offset_ = 0;
+  std::string placement_ = "gutter";
 };
 
 BEGIN_METADATA(PanelScrollBar)
 END_METADATA
+
+PanelTextarea::PanelTextarea(KeyHandler key_handler)
+    : key_handler_(std::move(key_handler)) {
+  scrollbar_ = AddChildView(std::make_unique<PanelScrollBar>());
+  scrollbar_->set_controller(this);
+  scrollbar_->SetVisible(false);
+}
+
+void PanelTextarea::SetScrollbarPlacement(const std::string& placement) {
+  scrollbar_->SetPlacement(placement);
+  SyncScrollbar();
+}
+
+void PanelTextarea::SyncScrollbar() {
+  if (!scrollbar_ || syncing_scrollbar_ || GetLocalBounds().IsEmpty())
+    return;
+  base::AutoReset<bool> syncing(&syncing_scrollbar_, true);
+  gfx::RenderText* render = GetRenderText();
+  const gfx::Rect previous_viewport = render->display_rect();
+  const gfx::Vector2d previous_offset = render->GetUpdatedDisplayOffset();
+  gfx::Rect full = GetLocalBounds();
+  full.Inset(GetInsets());
+  full.set_x(GetMirroredXForRect(full));
+  const auto& fonts = GetFontList();
+  const std::string font =
+      fonts.GetPrimaryFont().GetFontName() + "/" +
+      std::to_string(fonts.GetFontSize()) + "/" +
+      std::to_string(fonts.GetFontStyle()) + "/" +
+      std::to_string(static_cast<int>(fonts.GetFontWeight()));
+  // Cursor blinking and thumb hover also schedule paints. Measure the wider
+  // unscrolled text only when its content, font, or available space changed.
+  if (!measured_scrollbar_ || measured_viewport_ != full ||
+      measured_text_ != GetText() || measured_font_ != font) {
+    render->SetDisplayRect(full);
+    scrollbar_overflowing_ = render->GetStringSize().height() > full.height();
+    measured_scrollbar_ = true;
+    measured_viewport_ = full;
+    measured_text_ = GetText();
+    measured_font_ = font;
+  }
+  // The scrollbar belongs to the editor's visual edge, independently of the
+  // text padding. Gutter mode reserves only the space needed to avoid it.
+  gfx::Rect bar_area = GetLocalBounds();
+  bar_area.Inset(gfx::Insets(border_width_ + 2));
+  const int gutter = std::min(kPanelScrollbarWidth, bar_area.width());
+  const gfx::Rect bar_bounds(bar_area.right() - gutter, bar_area.y(), gutter,
+                             bar_area.height());
+  gfx::Rect viewport = full;
+  if (scrollbar_overflowing_ && !scrollbar_->OverlapsContent()) {
+    viewport.set_width(std::max(
+        0, std::min(viewport.right(), bar_bounds.x() - 2) - viewport.x()));
+  }
+  render->SetDisplayRect(viewport);
+  if (viewport == previous_viewport)
+    render->SetDisplayOffset(previous_offset);
+  const gfx::Vector2d offset = render->GetUpdatedDisplayOffset();
+  scrollbar_->SetBoundsRect(bar_bounds);
+  scrollbar_->SetVisible(scrollbar_overflowing_);
+  scrollbar_->Update(viewport.height(), render->GetStringSize().height(),
+                     -offset.y());
+  GetViewAccessibility().SetScrollYMin(0);
+  GetViewAccessibility().SetScrollYMax(scrollbar_->GetMaxPosition());
+  if (viewport != previous_viewport || offset != previous_offset)
+    NotifyViewportChanged();
+}
+
+void PanelTextarea::NotifyViewportChanged() {
+  UpdateCursorViewPosition();
+  UpdateCursorVisibility();
+  GetViewAccessibility().SetScrollY(
+      -GetRenderText()->GetUpdatedDisplayOffset().y());
+  if (auto* method = GetInputMethod())
+    method->OnCaretBoundsChanged(this);
+}
+
+bool PanelTextarea::OnMouseWheel(const ui::MouseWheelEvent& event) {
+  const bool handled = views::Textarea::OnMouseWheel(event);
+  SyncScrollbar();
+  NotifyViewportChanged();
+  return handled;
+}
+
+void PanelTextarea::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  views::Textarea::OnBoundsChanged(previous_bounds);
+  SyncScrollbar();
+}
+
+void PanelTextarea::OnDidSchedulePaint(const gfx::Rect& rect) {
+  views::Textarea::OnDidSchedulePaint(rect);
+  SyncScrollbar();
+}
+
+void PanelTextarea::ScrollToPosition(views::ScrollBar* source, int position) {
+  gfx::RenderText* render = GetRenderText();
+  render->SetDisplayOffset(
+      gfx::Vector2d(render->GetUpdatedDisplayOffset().x(), -position));
+  SyncScrollbar();
+  NotifyViewportChanged();
+  SchedulePaint();
+}
+
+int PanelTextarea::GetScrollIncrement(views::ScrollBar* source,
+                                      bool is_page,
+                                      bool is_positive) {
+  const int line = std::max(1, GetFontList().GetHeight());
+  return is_page
+             ? std::max(line, GetRenderText()->display_rect().height() - line)
+             : line;
+}
+
+void PanelTextarea::AppendState(base::DictValue* state) {
+  SyncScrollbar();
+  const gfx::Vector2d offset = GetRenderText()->GetUpdatedDisplayOffset();
+  gfx::Rect viewport = GetRenderText()->display_rect();
+  ConvertRectToScreen(this, &viewport);
+  state->Set("lineCount", static_cast<int>(GetNumLines()));
+  state->Set("displayOffset",
+             base::DictValue().Set("x", offset.x()).Set("y", offset.y()));
+  state->Set("viewportBounds", RectValue(viewport));
+  const gfx::Insets insets = GetInsets();
+  state->Set("contentInsets", base::DictValue()
+                                  .Set("top", insets.top())
+                                  .Set("right", insets.right())
+                                  .Set("bottom", insets.bottom())
+                                  .Set("left", insets.left()));
+  state->Set("scrollbar", scrollbar_->GetState());
+  state->Set("scrollbarPlacement", scrollbar_->placement());
+}
 
 }  // namespace
 
@@ -663,6 +954,14 @@ class NativePanelSurface final : public views::View {
     bounds.Inset(shadow_ ? kShadowInset : 0);
     return bounds;
   }
+  void SetAcrylicApplied(bool applied, bool requested) {
+    const bool fallback = requested && !applied;
+    if (acrylic_applied_ == applied && opaque_material_fallback_ == fallback)
+      return;
+    acrylic_applied_ = applied;
+    opaque_material_fallback_ = fallback;
+    SchedulePaint();
+  }
   bool ContainsBodyPoint(gfx::Point point) const {
     const gfx::Rect body = BodyBounds();
     if (!body.Contains(point))
@@ -678,11 +977,14 @@ class NativePanelSurface final : public views::View {
 
  private:
   void OnPaintBackground(gfx::Canvas* canvas) override {
-    bool dark =
-        GetColorProvider()->GetColor(ui::kColorMenuBackground) != SK_ColorWHITE;
-    const SkColor background =
+    const bool dark =
+        color_utils::GetRelativeLuminance(
+            GetColorProvider()->GetColor(ui::kColorMenuBackground)) < 0.5;
+    SkColor background =
         Color(theme_, "background",
               GetColorProvider()->GetColor(ui::kColorMenuBackground));
+    if (opaque_material_fallback_)
+      background = SkColorSetA(background, SK_AlphaOPAQUE);
     const SkColor border =
         Color(theme_, "border", dark ? 0xff555555 : 0xffdadce0);
     cc::PaintFlags fill;
@@ -692,9 +994,17 @@ class NativePanelSurface final : public views::View {
       fill.setLooper(gfx::CreateShadowDrawLooper(
           {gfx::ShadowValue(gfx::Vector2d(0, 3), 12, 0x50000000)}));
     }
-    canvas->DrawRoundRect(BodyBounds(), radius_, fill);
-    if (shadow_only_)
+    if (shadow_only_) {
+      canvas->DrawRoundRect(BodyBounds(), radius_, fill);
+      // A solid body in this separate HWND would hide the host from DWM's
+      // backdrop sampler. Keep only its input-transparent exterior shadow.
+      fill.setLooper(nullptr);
+      fill.setBlendMode(SkBlendMode::kClear);
+      canvas->DrawRoundRect(BodyBounds(), radius_, fill);
       return;
+    }
+    if (!acrylic_applied_)
+      canvas->DrawRoundRect(BodyBounds(), radius_, fill);
     cc::PaintFlags stroke;
     stroke.setAntiAlias(true);
     stroke.setColor(border);
@@ -707,6 +1017,8 @@ class NativePanelSurface final : public views::View {
   base::DictValue theme_;
   int radius_ = 12;
   bool shadow_ = true;
+  bool acrylic_applied_ = false;
+  bool opaque_material_fallback_ = false;
   const bool shadow_only_;
 };
 
@@ -764,7 +1076,9 @@ NativePanelHost::NativePanelHost(views::Widget* parent,
   surface_->AddPreTargetHandler(this);
   auto scroll = std::make_unique<views::ScrollView>();
   outer_scroll_ = scroll.get();
-  scroll->SetVerticalScrollBar(std::make_unique<PanelScrollBar>());
+  auto scrollbar = std::make_unique<PanelScrollBar>();
+  scrollbar->SetPlacement(options_.scrollbar_placement);
+  scroll->SetVerticalScrollBar(std::move(scrollbar));
   scroll->SetPaintToLayer();
   scroll->layer()->SetFillsBoundsOpaquely(false);
   scroll->layer()->SetMasksToBounds(true);
@@ -946,6 +1260,19 @@ LRESULT CALLBACK NativePanelHost::WindowProcedure(HWND window,
   if (weak_self && (message == WM_SIZE || message == WM_DPICHANGED ||
                     message == WM_THEMECHANGED))
     weak_self->UpdateInputRegion();
+  if (weak_self && !weak_self->destroying_ &&
+      (message == WM_SETTINGCHANGE || message == WM_THEMECHANGED ||
+       message == WM_DWMCOMPOSITIONCHANGED || message == WM_POWERBROADCAST)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<NativePanelHost> host) {
+                         if (host && !host->destroying_ && host->widget_) {
+                           host->material_system_configuration_.clear();
+                           host->ApplyTheme();
+                         }
+                       },
+                       weak_self));
+  }
   return result;
 }
 
@@ -1021,8 +1348,18 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
     entry->control = row->AddChildView(
         std::make_unique<views::ToggleButton>(std::move(callback)));
     result = std::move(row);
-  } else if (node.type == "input") {
-    auto input = std::make_unique<views::Textfield>();
+  } else if (IsTextControl(node.type)) {
+    std::unique_ptr<views::Textfield> input;
+    if (node.type == "textarea") {
+      input = std::make_unique<PanelTextarea>(base::BindRepeating(
+          [](base::WeakPtr<NativePanelHost> host, views::Textfield* sender,
+             const ui::KeyEvent& event) {
+            return host && host->HandleKeyEvent(sender, event);
+          },
+          weak_factory_.GetWeakPtr()));
+    } else {
+      input = std::make_unique<views::Textfield>();
+    }
     input->SetController(this);
     input->SetDefaultWidthInChars(16);
     input->SetPlaceholderTextColorId(ui::kColorTextfieldForegroundPlaceholder);
@@ -1136,7 +1473,7 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     if (checked && (!old_checked || *old_checked != *checked))
       control->SetIsOn(checked->GetBool());
     control->GetViewAccessibility().SetName(text);
-  } else if (node.type == "input") {
+  } else if (IsTextControl(node.type)) {
     auto* input = static_cast<views::Textfield*>(view);
     const std::string* value = properties.FindString("value");
     const std::string* old_value = entry->properties.FindString("value");
@@ -1152,7 +1489,11 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     }
     input->SetPlaceholderText(
         base::UTF8ToUTF16(String(properties, "placeholder")));
-    if (style->FindBool("borderless").value_or(false)) {
+    if (node.type == "textarea") {
+      static_cast<PanelTextarea*>(input)->SetAppearance(*style);
+      static_cast<PanelTextarea*>(input)->SetScrollbarPlacement(
+          String(properties, "scrollbarPlacement", "gutter"));
+    } else if (style->FindBool("borderless").value_or(false)) {
       input->SetBorder(views::CreateEmptyBorder(ControlInsets(*style, 2)));
       // Keep a transparent native painter so Textfield disables LCD rendering
       // for both text and placeholder on this translucent panel window.
@@ -1191,6 +1532,8 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
   } else if (node.type == "list") {
     const int height = Integer(properties, "height", 240);
     entry->scroll->ClipHeightTo(height, height);
+    static_cast<PanelScrollBar*>(entry->scroll->vertical_scroll_bar())
+        ->SetPlacement(String(properties, "scrollbarPlacement", "gutter"));
   }
   if (node.type == "item" || node.type == "iconButton") {
     view->GetViewAccessibility().SetName(base::UTF8ToUTF16(String(
@@ -1292,6 +1635,7 @@ void NativePanelHost::RemoveSubtree(views::View* root) {
 }
 
 void NativePanelHost::UpdateContent(NativePanelNode content) {
+  auto textarea_viewports = PreserveTextareaViewports();
   base::AutoReset<bool> applying(&applying_, true);
   const int outer_scroll_position = ScrollPosition(outer_scroll_);
   struct Desired {
@@ -1377,9 +1721,86 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
   }
 }
 
+void NativePanelHost::UpdateBackgroundMaterial() {
+  if (!native_windows_valid_ || !hwnd_ || !surface_ || applying_material_ ||
+      destroying_)
+    return;
+  base::AutoReset<bool> applying(&applying_material_, true);
+  bool enable = options_.background_material == "acrylic";
+  material_fallback_reason_.clear();
+  const auto* native_theme = ui::NativeTheme::GetInstanceForNativeUi();
+  const bool supported =
+      base::win::GetVersion() >= base::win::Version::WIN11_22H2;
+  BOOL composition = FALSE;
+  SYSTEM_POWER_STATUS power = {};
+  if (enable) {
+    if (!supported) {
+      material_fallback_reason_ = "unsupported-windows-version";
+    } else if (native_theme->forced_colors() !=
+               ui::ColorProviderKey::ForcedColors::kNone) {
+      material_fallback_reason_ = "forced-colors";
+    } else if (native_theme->prefers_reduced_transparency()) {
+      material_fallback_reason_ = "reduced-transparency";
+    } else if (::GetSystemPowerStatus(&power) && power.SystemStatusFlag == 1) {
+      material_fallback_reason_ = "battery-saver";
+    } else if (FAILED(::DwmIsCompositionEnabled(&composition)) ||
+               !composition) {
+      material_fallback_reason_ = "composition-unavailable";
+    }
+    enable = material_fallback_reason_.empty();
+  }
+
+  // Leave an ordinary panel's native frame untouched. Reconfigure DWM only
+  // for material transitions, theme/policy changes or composition recovery.
+  const std::string mode = String(options_.theme, "mode", "system");
+  const BOOL dark =
+      mode == "dark" ||
+      (mode == "system" && native_theme->preferred_color_scheme() ==
+                               ui::NativeTheme::PreferredColorScheme::kDark);
+  const std::string configuration =
+      std::string(enable ? "acrylic:" : "none:") + (dark ? "dark" : "light");
+  if (supported && configuration != material_system_configuration_ &&
+      (options_.background_material == "acrylic" || acrylic_applied_ ||
+       !material_system_configuration_.empty())) {
+    ::DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
+                            sizeof(dark));
+    const MARGINS margins =
+        enable ? MARGINS{-1, -1, -1, -1} : MARGINS{0, 0, 0, 0};
+    const HRESULT frame_result =
+        ::DwmExtendFrameIntoClientArea(hwnd_, &margins);
+    const DWM_SYSTEMBACKDROP_TYPE backdrop =
+        enable ? DWMSBT_TRANSIENTWINDOW : DWMSBT_NONE;
+    const HRESULT backdrop_result = ::DwmSetWindowAttribute(
+        hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+    if (enable && (FAILED(frame_result) || FAILED(backdrop_result))) {
+      enable = false;
+      material_fallback_reason_ = "dwm-unavailable";
+      const MARGINS reset = {};
+      ::DwmExtendFrameIntoClientArea(hwnd_, &reset);
+      const DWM_SYSTEMBACKDROP_TYPE none = DWMSBT_NONE;
+      ::DwmSetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &none,
+                              sizeof(none));
+    }
+    // The panel supplies its own outline. DWM must not add a caption strip or
+    // a second colored border to this frameless, separately shadowed popup.
+    const COLORREF color = enable ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
+    ::DwmSetWindowAttribute(hwnd_, DWMWA_CAPTION_COLOR, &color, sizeof(color));
+    ::DwmSetWindowAttribute(hwnd_, DWMWA_BORDER_COLOR, &color, sizeof(color));
+    if (enable)
+      ::DefWindowProc(hwnd_, WM_NCACTIVATE, TRUE, -1);
+    material_system_configuration_ =
+        std::string(enable ? "acrylic:" : "none:") + (dark ? "dark" : "light");
+  }
+  acrylic_applied_ = enable;
+  surface_->SetAcrylicApplied(enable,
+                              options_.background_material == "acrylic");
+  UpdateInputRegion();
+}
+
 void NativePanelHost::ApplyTheme() {
   if (applying_theme_)
     return;
+  auto textarea_viewports = PreserveTextareaViewports();
   base::AutoReset<bool> applying_theme(&applying_theme_, true);
   static_cast<PanelWidget*>(widget_.get())->SetPanelTheme(options_.theme);
   EnsureShadowWindow();
@@ -1391,6 +1812,7 @@ void NativePanelHost::ApplyTheme() {
   }
   surface_->SetAppearance(options_.theme, options_.radius, options_.shadow,
                           options_.content_inset);
+  UpdateBackgroundMaterial();
   const auto* provider = surface_->GetColorProvider();
   SkColor text = Color(options_.theme, "text",
                        provider->GetColor(ui::kColorLabelForeground));
@@ -1468,8 +1890,10 @@ void NativePanelHost::ApplyTheme() {
       button->SetHorizontalAlignment(alignment == "start" ? gfx::ALIGN_LEFT
                                      : alignment == "end" ? gfx::ALIGN_RIGHT
                                                           : gfx::ALIGN_CENTER);
-    } else if (entry->type == "input") {
+    } else if (IsTextControl(entry->type)) {
       static_cast<views::Textfield*>(entry->view.get())->SetFontList(font);
+      if (entry->type == "textarea")
+        static_cast<PanelTextarea*>(entry->view.get())->SetAppearance(*style);
     } else if (entry->type == "toggle") {
       static_cast<views::ToggleButton*>(entry->control.get())
           ->SetTrackOnColor(accent);
@@ -1482,7 +1906,7 @@ void NativePanelHost::ApplyTheme() {
           ->SetAppearance(
               *style, entry->properties.FindBool("selected").value_or(false),
               SkColorSetARGB(18, 128, 128, 128));
-    } else if (entry->type != "button" && entry->type != "input") {
+    } else if (entry->type != "button" && !IsTextControl(entry->type)) {
       entry->view->SetBackground(views::CreateRoundedRectBackground(
           Color(*style, "background", SK_ColorTRANSPARENT),
           Integer(*style, "radius", 0)));
@@ -1498,7 +1922,10 @@ void NativePanelHost::ApplyTheme() {
 void NativePanelHost::UpdateAppearance(base::DictValue theme,
                                        int radius,
                                        bool shadow,
-                                       int content_inset) {
+                                       int content_inset,
+                                       const std::string& background_material,
+                                       const std::string& scrollbar_placement) {
+  auto textarea_viewports = PreserveTextareaViewports();
   std::string focused_link;
   auto* focused = widget_->GetFocusManager()->GetFocusedView();
   for (const auto& [id, entry] : entries_)
@@ -1509,6 +1936,10 @@ void NativePanelHost::UpdateAppearance(base::DictValue theme,
   options_.theme = std::move(theme);
   options_.radius = radius;
   options_.shadow = shadow;
+  options_.background_material = background_material;
+  options_.scrollbar_placement = scrollbar_placement;
+  static_cast<PanelScrollBar*>(outer_scroll_->vertical_scroll_bar())
+      ->SetPlacement(scrollbar_placement);
   ApplyTheme();
   LayoutAtAnchor();
   if (!focused_link.empty()) {
@@ -1565,6 +1996,7 @@ void NativePanelHost::UpdateAnchor(const gfx::Rect& anchor) {
 }
 
 void NativePanelHost::LayoutAtAnchor() {
+  auto textarea_viewports = PreserveTextareaViewports();
   if (!widget_ || !surface_ || !content_container_)
     return;
   gfx::Rect work =
@@ -1707,7 +2139,7 @@ bool NativePanelHost::IsComposing() const {
       return true;
   }
   for (const auto& [id, entry] : entries_) {
-    if (entry->type == "input" &&
+    if (IsTextControl(entry->type) &&
         static_cast<views::Textfield*>(entry->view.get())->IsIMEComposing())
       return true;
   }
@@ -1803,7 +2235,7 @@ void NativePanelHost::SendAction(const std::string& id,
   base::DictValue detail;
   detail.Set("id", id);
   detail.Set("type", type);
-  if (entry.type == "input") {
+  if (IsTextControl(entry.type)) {
     detail.Set(
         "value",
         base::UTF16ToUTF8(
@@ -1844,7 +2276,7 @@ void NativePanelHost::ContentsChanged(views::Textfield* sender,
 
 void NativePanelHost::ApplyDeferredInput(const std::string& id) {
   auto found = entries_.find(id);
-  if (found == entries_.end() || found->second->type != "input")
+  if (found == entries_.end() || !IsTextControl(found->second->type))
     return;
   Entry& entry = *found->second;
   auto* input = static_cast<views::Textfield*>(entry.view.get());
@@ -1872,6 +2304,18 @@ void NativePanelHost::OnAfterUserAction(views::Textfield* sender) {
   }
 }
 
+base::ScopedClosureRunner NativePanelHost::PreserveTextareaViewports() {
+  std::vector<base::ScopedClosureRunner> viewports;
+  for (const auto& [id, entry] : entries_) {
+    if (entry->type == "textarea") {
+      viewports.push_back(
+          static_cast<PanelTextarea*>(entry->view.get())->PreserveViewport());
+    }
+  }
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](std::vector<base::ScopedClosureRunner>) {}, std::move(viewports)));
+}
+
 bool NativePanelHost::HandleKeyEvent(views::Textfield* sender,
                                      const ui::KeyEvent& event) {
   if (!sender->IsIMEComposing()) {
@@ -1887,6 +2331,11 @@ bool NativePanelHost::HandleKeyEvent(views::Textfield* sender,
     return false;
   for (const auto& [id, entry] : entries_) {
     if (entry->view == sender) {
+      if (entry->type == "textarea" &&
+          (!entry->properties.FindBool("submitOnEnter").value_or(true) ||
+           event.IsShiftDown() || event.IsControlDown() || event.IsAltDown() ||
+           event.IsCommandDown() || event.IsAltGrDown()))
+        return false;
       SendAction(id, "submit");
       return true;
     }
@@ -1902,7 +2351,7 @@ void NativePanelHost::OnKeyEvent(ui::KeyEvent* event) {
     auto* focused = widget_->GetFocusManager()->GetFocusedView();
     for (const auto& [id, entry] : entries_)
       if (entry->view == focused &&
-          (entry->type == "input" || entry->type == "option"))
+          (IsTextControl(entry->type) || entry->type == "option"))
         return;
     std::vector<Entry*> rows;
     auto collect = [&](auto&& self, const NativePanelNode& node) -> void {
@@ -1951,6 +2400,16 @@ base::DictValue NativePanelHost::GetState() const {
   base::DictValue result;
   result.Set("destroyed", destroying_);
   result.Set("visible", visible_);
+  result.Set("backgroundMaterial", options_.background_material);
+  result.Set("backgroundMaterialApplied",
+             acrylic_applied_ ? "acrylic" : "none");
+  result.Set("materialFallbackReason", material_fallback_reason_);
+  if (hwnd_) {
+    DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_AUTO;
+    if (SUCCEEDED(::DwmGetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE,
+                                          &backdrop, sizeof(backdrop))))
+      result.Set("materialDwmBackdrop", static_cast<int>(backdrop));
+  }
   if (outer_scroll_) {
     result.Set("scrollbar", static_cast<PanelScrollBar*>(
                                 outer_scroll_->vertical_scroll_bar())
@@ -1960,6 +2419,7 @@ base::DictValue NativePanelHost::GetState() const {
   }
   result.Set("anchorBounds", RectValue(anchor_));
   result.Set("theme", options_.theme.Clone());
+  result.Set("scrollbarPlacement", options_.scrollbar_placement);
   result.Set("windowHandle",
              std::to_string(reinterpret_cast<uintptr_t>(hwnd_)));
   result.Set("nativeWindowsValid", native_windows_valid_);
@@ -2010,10 +2470,18 @@ base::DictValue NativePanelHost::GetState() const {
          entry->linked_label->Contains(
              widget_->GetFocusManager()->GetFocusedView())))
       result.Set("focusedId", id);
-    if (entry->type == "input") {
+    if (IsTextControl(entry->type)) {
       auto* input = static_cast<views::Textfield*>(entry->view.get());
       control.Set("value", base::UTF16ToUTF8(input->GetText()));
       control.Set("composing", input->IsIMEComposing());
+      const gfx::Range selection = input->GetSelectedRange();
+      control.Set("selection",
+                  base::DictValue()
+                      .Set("start", static_cast<int>(selection.start()))
+                      .Set("end", static_cast<int>(selection.end())));
+      control.Set("caretBounds", RectValue(input->GetCaretBounds()));
+      if (entry->type == "textarea")
+        static_cast<PanelTextarea*>(input)->AppendState(&control);
     } else if (entry->type == "toggle") {
       control.Set(
           "checked",
@@ -2030,9 +2498,10 @@ base::DictValue NativePanelHost::GetState() const {
     }
     if (entry->scroll) {
       control.Set("scrollOffset", ScrollPosition(entry->scroll));
-      control.Set("scrollbar", static_cast<PanelScrollBar*>(
-                                   entry->scroll->vertical_scroll_bar())
-                                   ->GetState());
+      auto* scrollbar =
+          static_cast<PanelScrollBar*>(entry->scroll->vertical_scroll_bar());
+      control.Set("scrollbar", scrollbar->GetState());
+      control.Set("scrollbarPlacement", scrollbar->placement());
     }
     controls.Append(std::move(control));
   }

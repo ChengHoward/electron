@@ -44,6 +44,8 @@ class NativePanel final : public gin_helper::EventEmitter<NativePanel> {
   void OnClosed();
   bool destroyed_ = false;
   base::DictValue theme_;
+  std::string background_material_ = "none";
+  std::string scrollbar_placement_ = "gutter";
   int radius_ = 12;
   int content_inset_ = 12;
   bool shadow_ = true;

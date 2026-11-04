@@ -1,5 +1,15 @@
 /* Real native UI acceptance and screenshots. Run with the newly built Electron. */
-const { app, BrowserWindow, NativePanel, Menu, nativeImage, nativeTheme, screen, webContents } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  NativePanel,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  screen,
+  systemPreferences,
+  webContents
+} = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,6 +25,7 @@ assert.ok(output, 'An explicit output directory is required');
 fs.mkdirSync(output, { recursive: true });
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'electron-native-ui-')));
 app.commandLine.appendSwitch('lang', process.env.NATIVE_UI_LANG || 'zh-CN');
+if (process.env.NATIVE_UI_FORCE_HIGH_CONTRAST === '1') app.commandLine.appendSwitch('force-high-contrast');
 const results = [];
 const screenshots = {};
 const panels = [];
@@ -170,8 +181,18 @@ async function click(panel, id) {
   await delay(80);
 }
 async function key(panel, vk, modifiers = []) {
-  await native('key', { hwnd: Number(panelState(panel).windowHandle), vk, modifiers });
+  const result = await native('key', { hwnd: Number(panelState(panel).windowHandle), vk, modifiers });
   await delay(80);
+  return result;
+}
+async function typeText(panel, value) {
+  await native('text', { hwnd: Number(panelState(panel).windowHandle), text: value });
+  await delay(80);
+}
+async function repeatKey(panel, vk, repeat, modifiers = []) {
+  const result = await native('key', { hwnd: Number(panelState(panel).windowHandle), vk, repeat, modifiers });
+  await delay(80);
+  return result;
 }
 async function capturePanel(panel, name) {
   await delay(240);
@@ -370,6 +391,1223 @@ function comment() {
       iconButton('comment-microphone', 'mic', '语音输入', { width: 24, height: 24 })
     ]
   };
+}
+function note({ value, submitOnEnter, maxLength, dark = false, saveId = 'note-save', saveText = '保存' } = {}) {
+  return {
+    type: 'column',
+    id: 'note',
+    width: 340,
+    gap: 12,
+    children: [
+      {
+        type: 'textarea',
+        id: 'note-body',
+        height: 168,
+        placeholder: '写下想法…',
+        ...(value === undefined ? {} : { value }),
+        ...(submitOnEnter === undefined ? {} : { submitOnEnter }),
+        ...(maxLength === undefined ? {} : { maxLength }),
+        style: {
+          background: dark ? '#252525' : '#FAFAFA',
+          borderColor: dark ? '#494949' : '#E5E5E5',
+          borderWidth: 1,
+          radius: 10,
+          paddingTop: 10,
+          paddingBottom: 10,
+          paddingLeft: 12,
+          paddingRight: 12
+        }
+      },
+      {
+        type: 'row',
+        id: 'note-footer',
+        gap: 8,
+        children: [
+          text('note-spacer', '', { flex: 1 }),
+          { type: 'button', id: 'note-cancel', text: '取消', variant: 'plain', width: 58, height: 30 },
+          { type: 'button', id: saveId, text: saveText, width: 58, height: 30, style: { radius: 7 } }
+        ]
+      }
+    ]
+  };
+}
+function noteTheme(dark = false) {
+  return {
+    mode: dark ? 'dark' : 'light',
+    fontSize: 13,
+    background: dark ? '#202020' : '#FFFFFF',
+    text: dark ? '#E9E9E9' : '#171717',
+    muted: dark ? '#AAAAAA' : '#969696',
+    border: dark ? '#424242' : '#E4E4E4'
+  };
+}
+function editingState(panel) {
+  const field = node(panel, 'note-body');
+  assert.ok(field.selection && Number.isInteger(field.selection.start) && Number.isInteger(field.selection.end));
+  assert.ok(field.caretBounds && field.viewportBounds && field.displayOffset, 'Native textarea diagnostics');
+  return {
+    value: field.value,
+    selection: field.selection,
+    caretBounds: field.caretBounds,
+    viewportBounds: field.viewportBounds,
+    displayOffset: field.displayOffset,
+    lineCount: field.lineCount,
+    focusedId: panelState(panel).focusedId,
+    windowHandle: panelState(panel).windowHandle
+  };
+}
+async function textareaPixels(panel, { background, border, borderWidth, corner, insets }) {
+  await delay(160);
+  const field = node(panel, 'note-body');
+  const bounds = screen.dipToScreenRect(parent, field.bounds);
+  const scale = screen.getDisplayMatching(field.bounds).scaleFactor;
+  const stripLength = Math.ceil((borderWidth + 3) * scale);
+  const points = [
+    { x: bounds.x + Math.round(bounds.width * 0.7), y: bounds.y + bounds.height - Math.ceil(12 * scale) },
+    { x: bounds.x + 2, y: bounds.y + 2 },
+    ...Array.from({ length: stripLength }, (_, i) => ({ x: bounds.x + Math.floor(bounds.width / 2), y: bounds.y + i }))
+  ];
+  const { pixels } = await native('pixels', { hwnd: Number(panelState(panel).windowHandle), points });
+  const near = (actual, expected) => actual.every((v, i) => Math.abs(v - expected[i]) <= 3);
+  assert.ok(near(pixels[0].rgb, background), 'Actual native editor background: ' + JSON.stringify(pixels[0]));
+  assert.ok(near(pixels[1].rgb, corner), 'Actual native editor corner shape: ' + JSON.stringify(pixels[1]));
+  const borderPixels = pixels.slice(2).filter((p) => near(p.rgb, border));
+  assert.ok(
+    borderPixels.length >= Math.max(1, Math.floor(borderWidth * scale) - 1),
+    'Expected native border color/thickness: ' + JSON.stringify(pixels)
+  );
+  assert.ok(borderPixels.length <= Math.ceil(borderWidth * scale) + 1, 'Border must retain the requested thin stroke');
+  const actualInsets = {
+    top: field.viewportBounds.y - field.bounds.y,
+    left: field.viewportBounds.x - field.bounds.x,
+    right: field.bounds.x + field.bounds.width - field.viewportBounds.x - field.viewportBounds.width,
+    bottom: field.bounds.y + field.bounds.height - field.viewportBounds.y - field.viewportBounds.height
+  };
+  assert.deepEqual(field.contentInsets, insets, 'The native editing viewport includes both padding and border');
+  for (const side of ['top', 'left', 'right', 'bottom']) {
+    assert.ok(
+      Math.abs(actualInsets[side] - insets[side]) <= 1,
+      `Native ${side} content padding: ${JSON.stringify(actualInsets)}`
+    );
+  }
+  return { bounds, scale, pixels, actualInsets };
+}
+async function withNote(options, fn) {
+  const p = newPanel(note(options), { focusMode: 'input', contentInset: 14, radius: 14, theme: noteTheme() });
+  const actions = [];
+  let draft = options?.value || '';
+  p.on('action', (action) => {
+    actions.push(action);
+    if (action.id === 'note-body' && action.type === 'change') draft = action.value;
+  });
+  try {
+    await show(p, 176, 130);
+    await fn(p, actions, () => draft);
+  } finally {
+    p.destroy();
+  }
+}
+async function textareaChecks() {
+  await check('textarea: fixed-height note, physical wrapping and light/dark native screenshots', async () => {
+    await withNote({}, async (p, actions) => {
+      const initial = panelState(p);
+      assert.equal(initial.nativeWindowsValid, true);
+      assert.equal(node(p, 'note-body').bounds.height, 168);
+      await click(p, 'note-body');
+      const line = 'A long native note keeps wrapping inside the fixed editor. '.repeat(5);
+      await typeText(p, line);
+      const field = node(p, 'note-body');
+      assert.equal(field.value, line);
+      assert.ok(field.lineCount > 1, 'A single logical line must wrap into multiple native display lines');
+      assert.equal(field.bounds.height, 168);
+      assert.deepEqual(panelState(p).contentBounds, initial.contentBounds);
+      assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+      await key(p, 0x41, [0x11]);
+      await typeText(p, '整理今天的想法');
+      await key(p, 0x0d, [0x10]);
+      await typeText(p, '保留重要信息，稍后继续。');
+      await key(p, 0x0d, [0x10]);
+      await key(p, 0x0d, [0x10]);
+      await typeText(p, '周五前完成界面复核，保存需要跟进的细节。');
+      const lightState = editingState(p);
+      await capturePanel(p, 'textarea-note-light');
+      const lightPixels = await textareaPixels(p, {
+        background: [250, 250, 250],
+        border: [229, 229, 229],
+        borderWidth: 1,
+        corner: [255, 255, 255],
+        insets: { top: 11, right: 13, bottom: 11, left: 13 }
+      });
+      p.update({ content: note({ dark: true }), theme: noteTheme(true) });
+      assert.deepEqual(editingState(p), lightState, 'Appearance changes retain native editing state');
+      await capturePanel(p, 'textarea-note-dark');
+      const darkPixels = await textareaPixels(p, {
+        background: [37, 37, 37],
+        border: [73, 73, 73],
+        borderWidth: 1,
+        corner: [32, 32, 32],
+        insets: { top: 11, right: 13, bottom: 11, left: 13 }
+      });
+      const custom = note();
+      custom.children[0].style = {
+        background: '#E8F2FF',
+        borderColor: '#738BA5',
+        borderWidth: 3,
+        radius: 0,
+        paddingTop: 14,
+        paddingBottom: 14,
+        paddingLeft: 16,
+        paddingRight: 16
+      };
+      p.update({ content: custom, theme: noteTheme() });
+      const customPixels = await textareaPixels(p, {
+        background: [232, 242, 255],
+        border: [115, 139, 165],
+        borderWidth: 3,
+        corner: [115, 139, 165],
+        insets: { top: 17, right: 19, bottom: 17, left: 19 }
+      });
+      snapshot.textarea = {
+        wrapLineCount: field.lineCount,
+        fixedHeight: field.bounds.height,
+        lightPixels,
+        darkPixels,
+        customPixels
+      };
+      assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+    });
+  });
+  await check(
+    'textarea: default Enter submits full multiline value and custom save/cancel use host draft',
+    async () => {
+      await withNote({}, async (p, actions, draft) => {
+        await click(p, 'note-body');
+        await typeText(p, 'First line');
+        await key(p, 0x0d, [0x10]);
+        await typeText(p, '第二行');
+        const expected = 'First line\n第二行';
+        assert.equal(node(p, 'note-body').value, expected);
+        assert.equal(draft(), expected);
+        await key(p, 0x0d);
+        assert.deepEqual(
+          actions.filter((a) => a.type === 'submit'),
+          [{ id: 'note-body', type: 'submit', value: expected }]
+        );
+        assert.equal(node(p, 'note-body').value, expected, 'Submit must not insert a newline');
+        assert.equal(panelState(p).visible, true);
+        const saved = [];
+        const onSave = (action) => {
+          if (action.id === 'note-archive' && action.type === 'click') saved.push(draft());
+        };
+        p.on('action', onSave);
+        p.update({ content: note({ saveId: 'note-archive', saveText: '存档' }) });
+        assert.equal(node(p, 'note-body').value, expected);
+        await click(p, 'note-archive');
+        assert.deepEqual(saved, [expected], 'Application-defined replacement button reads the current multiline draft');
+        await click(p, 'note-cancel');
+        assert.equal(actions.filter((a) => a.id === 'note-cancel' && a.type === 'click').length, 1);
+        assert.equal(saved.length, 1, 'Cancel does not trigger the save listener');
+        p.off('action', onSave);
+      });
+    }
+  );
+  await check('textarea: submitOnEnter false keeps Enter and Shift+Enter as physical newlines', async () => {
+    await withNote({ submitOnEnter: false }, async (p, actions, draft) => {
+      await click(p, 'note-body');
+      await typeText(p, 'one');
+      await key(p, 0x0d);
+      await typeText(p, 'two');
+      await key(p, 0x0d, [0x10]);
+      await typeText(p, '三');
+      assert.equal(node(p, 'note-body').value, 'one\ntwo\n三');
+      assert.equal(draft(), 'one\ntwo\n三');
+      assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+      p.update({ content: note({ submitOnEnter: true }) });
+      await key(p, 0x0d);
+      assert.equal(actions.filter((a) => a.type === 'submit').at(-1).value, 'one\ntwo\n三');
+    });
+  });
+  await check('textarea: maxLength counts multiline UTF-16 input and zero restores unlimited editing', async () => {
+    await withNote({ maxLength: 9, submitOnEnter: false }, async (p, actions, draft) => {
+      await click(p, 'note-body');
+      await typeText(p, '你好🙂a');
+      await key(p, 0x0d);
+      await typeText(p, '123456');
+      assert.equal(node(p, 'note-body').value, '你好🙂a\n123');
+      assert.equal(draft(), '你好🙂a\n123');
+      assert.ok(actions.filter((a) => a.type === 'change').every((a) => a.value.length <= 9));
+      p.update({ content: note({ maxLength: 0, submitOnEnter: false }) });
+      await typeText(p, '456789');
+      assert.equal(node(p, 'note-body').value, '你好🙂a\n123456789');
+      assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+    });
+  });
+  await check('textarea: draft, reversed selection, caret and viewport survive content/theme updates', async () => {
+    await withNote({}, async (p, actions) => {
+      await click(p, 'note-body');
+      await typeText(p, 'Draft selection survives stable updates.');
+      await key(p, 0x0d, [0x10]);
+      await typeText(p, 'Second native line');
+      const beforeKey = editingState(p);
+      const driver = await repeatKey(p, 0x25, 6, [0x10]);
+      const before = editingState(p);
+      snapshot.textareaSelectionAttempt = { beforeKey, driver, afterKey: before };
+      assert.ok(before.selection.start > before.selection.end, 'Shift+Left creates a reversed native selection');
+      const count = actions.length;
+      p.update({ content: note() });
+      assert.deepEqual(editingState(p), before);
+      p.update({ theme: { ...noteTheme(), accent: '#567AA6' } });
+      assert.deepEqual(editingState(p), before);
+      assert.equal(actions.length, count, 'Reconciliation does not synthesize edits or submissions');
+      await typeText(p, '更新');
+      assert.equal(node(p, 'note-body').value, before.value.slice(0, -6) + '更新');
+      snapshot.textareaSelection = { before, afterReplacement: editingState(p) };
+    });
+  });
+  await check('textarea: long content scrolls internally, Up/Down select text and Tab traverses controls', async () => {
+    const value = Array.from({ length: 45 }, (_, i) => `Native line ${String(i + 1).padStart(2, '0')} — 保留正文`).join(
+      '\n'
+    );
+    await withNote({ value, submitOnEnter: false }, async (p, actions) => {
+      await click(p, 'note-body');
+      await key(p, 0x23, [0x11]);
+      const bottom = editingState(p);
+      assert.ok(bottom.lineCount >= 45);
+      assert.ok(bottom.displayOffset.y < 0, 'The native editor scrolls its own multiline viewport');
+      assert.ok(bottom.caretBounds.y >= bottom.viewportBounds.y - 1);
+      assert.ok(
+        bottom.caretBounds.y + bottom.caretBounds.height <= bottom.viewportBounds.y + bottom.viewportBounds.height + 1
+      );
+      p.update({ content: note({ value, submitOnEnter: false }) });
+      assert.deepEqual(editingState(p), bottom, 'Unchanged source values preserve the scrolled draft');
+      const driver = await key(p, 0x26, [0x10]);
+      const selection = node(p, 'note-body').selection;
+      snapshot.textareaScrollAttempt = { bottom, driver, afterUp: editingState(p) };
+      assert.notEqual(selection.start, selection.end);
+      assert.equal(panelState(p).focusedId, 'note-body');
+      await key(p, 0x28);
+      assert.equal(panelState(p).focusedId, 'note-body');
+      assert.equal(node(p, 'note-body').value, value);
+      const rect = node(p, 'note-body').bounds;
+      await native('wheel', {
+        hwnd: Number(panelState(p).windowHandle),
+        ...physicalPoint({ x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) }),
+        delta: 720
+      });
+      await delay(120);
+      assert.ok(
+        node(p, 'note-body').displayOffset.y > bottom.displayOffset.y,
+        'Physical wheel scrolls upward inside textarea'
+      );
+      const scrolled = editingState(p);
+      p.update({ content: note({ value, submitOnEnter: false }), theme: { ...noteTheme(), accent: '#567AA6' } });
+      assert.deepEqual(
+        editingState(p),
+        scrolled,
+        'Updates preserve a manually scrolled viewport independently of the caret'
+      );
+      assert.equal(node(p, 'note-body').bounds.height, 168);
+      await key(p, 0x09);
+      assert.equal(panelState(p).focusedId, 'note-cancel');
+      await key(p, 0x09, [0x10]);
+      assert.equal(panelState(p).focusedId, 'note-body');
+      assert.equal(actions.filter((a) => ['click', 'submit'].includes(a.type)).length, 0);
+      snapshot.textareaScroll = { bottom, afterWheel: scrolled, afterTab: editingState(p) };
+    });
+  });
+  await check('textarea: Chinese IME survives updates, reserves first Escape and commits before submit', async () => {
+    const layoutId = originalDesktop.imeLayouts.find((layout) => (layout & 0x3ff) === 4);
+    assert.ok(layoutId, 'An installed Chinese IME is required');
+    await withNote({}, async (p, actions, draft) => {
+      const dismissed = [];
+      p.on('dismissed', (event) => dismissed.push(event));
+      let previous;
+      try {
+        await click(p, 'note-body');
+        previous = await native('ime', { hwnd: Number(panelState(p).windowHandle), layout: layoutId, keys: 'nihao' });
+        snapshot.textareaImeAttempt = { driver: previous, field: node(p, 'note-body'), state: panelState(p) };
+        // Windows gives TEXT_AREA a separate TSF document. Its initial Pinyin
+        // mode can be English even when the owning HWND already has a Chinese
+        // HKL; IMM32 may have no context for this TSF-only control. Set that
+        // fixture precondition with the real Pinyin Shift toggle, then require
+        // actual native composition and a Chinese commit below.
+        for (let i = 0; i < 4 && !node(p, 'note-body').composing; i++) await delay(100);
+        if (!node(p, 'note-body').composing && node(p, 'note-body').value === 'nihao') {
+          await key(p, 0x41, [0x11]);
+          await key(p, 0x08);
+          assert.equal(node(p, 'note-body').value, '');
+          await key(p, 0x10);
+          const retry = await native('ime', {
+            hwnd: Number(panelState(p).windowHandle),
+            layout: layoutId,
+            keys: 'nihao'
+          });
+          snapshot.textareaImeAttempt.nativeModeRetry = { driver: retry, field: node(p, 'note-body') };
+          for (let i = 0; i < 4 && !node(p, 'note-body').composing; i++) await delay(100);
+        }
+        assert.equal(node(p, 'note-body').composing, true);
+        p.update({ content: note(), theme: { ...noteTheme(), accent: '#567AA6' } });
+        assert.equal(node(p, 'note-body').composing, true);
+        assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+        await key(p, 0x1b);
+        assert.equal(panelState(p).visible, true);
+        assert.equal(dismissed.length, 0);
+        await native('ime', { hwnd: Number(panelState(p).windowHandle), layout: layoutId, keys: 'nihao' });
+        assert.equal(node(p, 'note-body').composing, true);
+        await key(p, 0x20);
+        assert.equal(node(p, 'note-body').composing, false);
+        assert.match(node(p, 'note-body').value, /[\u3400-\u9fff]/);
+        await native('ime', { hwnd: Number(panelState(p).windowHandle), layout: layoutId, keys: 'nihao' });
+        assert.equal(node(p, 'note-body').composing, true);
+        await key(p, 0x0d);
+        assert.equal(node(p, 'note-body').composing, false);
+        assert.match(node(p, 'note-body').value, /[\u3400-\u9fff]/);
+        assert.equal(
+          node(p, 'note-body').value.includes('\n'),
+          false,
+          'IME confirmation Enter must not insert a newline'
+        );
+        assert.equal(
+          actions.filter((a) => a.type === 'submit').length,
+          0,
+          'IME confirmation Enter is not a form submission'
+        );
+        assert.equal(draft(), node(p, 'note-body').value);
+        await key(p, 0x0d);
+        assert.equal(actions.filter((a) => a.type === 'submit').length, 1);
+        assert.equal(actions.find((a) => a.type === 'submit').value, draft());
+        await key(p, 0x1b);
+        assert.equal(panelState(p).visible, false, 'Non-composing Escape follows the panel dismissal policy');
+        assert.deepEqual(dismissed, [{ reason: 'escape' }]);
+      } finally {
+        if (previous) await native('layout', { hwnd: Number(panelState(p).windowHandle), layout: previous.oldLayout });
+      }
+    });
+  });
+  await check('textarea: invalid schema updates reject atomically without extra WebContents', async () => {
+    await withNote({}, async (p, actions) => {
+      const before = panelState(p);
+      const count = webContents.getAllWebContents().length;
+      for (const fields of [
+        { submitOnEnter: 'true' },
+        { submitOnEnter: null },
+        { value: 3 },
+        { placeholder: false },
+        { maxLength: -1 },
+        { maxLength: 1.5 },
+        { maxLength: 65537 },
+        { height: -1 },
+        { style: { borderColor: 'gray' } },
+        { multiline: true }
+      ]) {
+        const content = note();
+        Object.assign(content.children[0], fields);
+        assert.throws(() => p.update({ content, theme: 'dark' }));
+        assert.deepEqual(panelState(p), before);
+      }
+      const content = note();
+      content.children[0].type = 'input';
+      content.children[0].submitOnEnter = true;
+      assert.throws(() => p.update({ content }));
+      assert.deepEqual(panelState(p), before);
+      assert.equal(actions.length, 0);
+      assert.equal(webContents.getAllWebContents().length, count);
+      assert.equal(count, snapshot.webContentsBefore);
+    });
+  });
+  await check('textarea: existing single-line input still submits on Enter without a newline', async () => {
+    const p = newPanel(
+      { type: 'input', id: 'single-input', width: 280, placeholder: '单行输入' },
+      { focusMode: 'input' }
+    );
+    const actions = [];
+    p.on('action', (action) => actions.push(action));
+    try {
+      await show(p, 176, 130);
+      await click(p, 'single-input');
+      await typeText(p, 'Single line 回归');
+      await key(p, 0x0d);
+      assert.equal(node(p, 'single-input').value, 'Single line 回归');
+      assert.deepEqual(
+        actions.filter((a) => a.type === 'submit'),
+        [{ id: 'single-input', type: 'submit', value: 'Single line 回归' }]
+      );
+      assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+    } finally {
+      p.destroy();
+    }
+  });
+}
+function scrollCenter(rect) {
+  return physicalPoint({ x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) });
+}
+function assertModernScrollbar(bar) {
+  assert.equal(bar.visible, true);
+  assert.equal(bar.bounds.width, 12, 'The native scroll gutter has a consistent width');
+  assert.equal(bar.track.width, 12);
+  assert.ok(bar.track.y >= bar.bounds.y && bar.track.y - bar.bounds.y <= 2);
+  assert.ok(bar.bounds.height - bar.track.height <= 4, 'Only end-cap padding remains; no arrow-button slots');
+  for (const name of ['previous', 'next', 'previousButton', 'nextButton']) {
+    assert.ok(!bar[name] || bar[name].width * bar[name].height === 0, `No ${name} arrow hit target`);
+  }
+  assert.ok(bar.thumbPaintBounds.height >= 24, 'The rounded thumb retains a usable minimum size');
+  assert.equal(
+    bar.thumbPaintBounds.width,
+    nativeTheme.shouldUseHighContrastColors || bar.hovered || bar.pressed ? 6 : 4
+  );
+}
+async function scrollVisualPixels(panel, bar) {
+  const paint = screen.dipToScreenRect(parent, bar.thumbPaintBounds);
+  const sampleY = Math.floor(paint.y + paint.height / 2);
+  const points = [
+    { x: Math.floor(paint.x + paint.width / 2), y: sampleY },
+    { x: paint.x, y: paint.y },
+    physicalPoint({ x: bar.track.x, y: Math.round(bar.track.y + bar.track.height / 2) }),
+    physicalPoint({ x: bar.track.x - 2, y: Math.round(bar.track.y + bar.track.height / 2) })
+  ];
+  const { pixels } = await native('pixels', { hwnd: Number(panelState(panel).windowHandle), points });
+  const distance = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+  assert.ok(distance(pixels[0].rgb, pixels[3].rgb) > 15, 'The native thumb is visibly distinct from the surface');
+  assert.ok(
+    distance(pixels[1].rgb, pixels[3].rgb) < distance(pixels[0].rgb, pixels[3].rgb),
+    'The end cap is actually rounded'
+  );
+  assert.ok(distance(pixels[2].rgb, pixels[3].rgb) <= 20, 'Track edge remains transparent or lightly tinted');
+  return pixels;
+}
+async function exerciseScrollbar(panel, getBar, getOffset, contentPoint, name, darkPatch = { theme: 'dark' }) {
+  const state = panelState(panel);
+  await native('move', {
+    hwnd: Number(state.windowHandle),
+    ...physicalPoint({ x: state.contentBounds.x + 5, y: state.contentBounds.y + 24 }),
+    keepCursor: true
+  });
+  await delay(120);
+  assertModernScrollbar(getBar());
+  const normal = await scrollVisualPixels(panel, getBar());
+  await capturePanel(panel, `${name}-light`);
+  const initial = getOffset();
+  const wheelPoint = contentPoint();
+  const attempt = { initial, wheelPoint, initialState: panelState(panel), initialBar: getBar() };
+  (snapshot.scrollbarAttempts ??= {})[name] = attempt;
+  await native('wheel', { hwnd: Number(state.windowHandle), ...wheelPoint, delta: -360 });
+  await delay(120);
+  const wheelOffset = getOffset();
+  Object.assign(attempt, { wheelOffset, wheelState: panelState(panel), wheelBar: getBar() });
+  if (wheelOffset === initial) await capturePanel(panel, `${name}-wheel-no-change`);
+  assert.ok(wheelOffset > initial, 'Physical wheel changes the content offset');
+  assert.ok(Math.abs(getBar().position - wheelOffset) <= 1, 'Scrollbar position is the actual content offset');
+  const bar = getBar();
+  const pageY = Math.min(bar.track.y + bar.track.height - 3, bar.thumb.y + bar.thumb.height + 30);
+  await native('click', {
+    hwnd: Number(state.windowHandle),
+    ...physicalPoint({ x: Math.round(bar.track.x + bar.track.width / 2), y: Math.round(pageY) })
+  });
+  await delay(120);
+  assert.ok(getOffset() > wheelOffset, 'Clicking below the thumb pages the real viewport');
+  const dragging = getBar();
+  await native('drag', {
+    hwnd: Number(state.windowHandle),
+    ...scrollCenter(dragging.thumb),
+    end: physicalPoint({
+      x: Math.round(dragging.track.x + dragging.track.width / 2),
+      y: Math.round(dragging.track.y + dragging.track.height - 2)
+    })
+  });
+  await delay(120);
+  assert.ok(getOffset() > getBar().maximum * 0.9, 'Dragging the thumb reaches the last content lines');
+  const offset = getOffset();
+  const materialStates = [];
+  for (const backgroundMaterial of ['acrylic', 'none']) {
+    panel.update({ backgroundMaterial });
+    await delay(160);
+    assert.equal(getOffset(), offset, 'Material updates retain list/outer/textarea scroll position');
+    assert.equal(panelState(panel).windowHandle, state.windowHandle, 'Material updates reuse the existing native host');
+    materialStates.push(await materialState(panel, backgroundMaterial));
+    if (backgroundMaterial === 'acrylic') await capturePanel(panel, `${name}-acrylic-light`);
+  }
+  await native('move', { hwnd: Number(state.windowHandle), ...scrollCenter(getBar().thumb), keepCursor: true });
+  await delay(160);
+  assertModernScrollbar(getBar());
+  assert.equal(getBar().hovered, true);
+  assert.equal(getBar().thumbPaintBounds.width, 6);
+  await capturePanel(panel, `${name}-hover`);
+  panel.update(darkPatch);
+  await delay(160);
+  assert.equal(getOffset(), offset, 'Theme update preserves the current content offset');
+  assertModernScrollbar(getBar());
+  const darkPixels = await scrollVisualPixels(panel, getBar());
+  assert.notDeepEqual(darkPixels[0].rgb, normal[0].rgb, 'The scrollbar paints using the updated theme');
+  await capturePanel(panel, `${name}-dark`);
+  panel.update({ backgroundMaterial: 'acrylic' });
+  await delay(160);
+  assert.equal(getOffset(), offset);
+  await capturePanel(panel, `${name}-acrylic-dark`);
+  panel.update({ backgroundMaterial: 'none' });
+  assert.equal(getOffset(), offset);
+  return {
+    initial,
+    wheelOffset,
+    finalOffset: getOffset(),
+    scrollbar: getBar(),
+    normalPixels: normal,
+    darkPixels,
+    materialStates
+  };
+}
+async function materialState(panel, requested) {
+  const state = panelState(panel);
+  const osState = await native('material', { hwnd: Number(state.windowHandle) });
+  assert.equal(state.backgroundMaterial, requested);
+  if (osState.hresult === 0) {
+    assert.equal(
+      state.materialDwmBackdrop,
+      osState.backdrop,
+      'Backend diagnostics agree with an independent DWM query'
+    );
+  } else {
+    assert.ok(
+      state.materialDwmBackdrop === undefined || state.materialDwmBackdrop === -1,
+      'Unavailable DWM attributes are reported explicitly'
+    );
+  }
+  if (requested === 'none') {
+    assert.equal(state.backgroundMaterialApplied, 'none');
+    assert.notEqual(osState.backdrop, 3);
+  } else {
+    const eligible =
+      osState.windowsBuild >= 22621 &&
+      osState.composition &&
+      osState.transparencyEnabled &&
+      !nativeTheme.shouldUseHighContrastColors &&
+      !osState.highContrast &&
+      !osState.energySaver;
+    if (eligible && osState.hresult === 0) {
+      assert.equal(state.backgroundMaterialApplied, 'acrylic');
+      assert.equal(osState.backdrop, 3, 'Official DWMWA_SYSTEMBACKDROP_TYPE is DWMSBT_TRANSIENTWINDOW');
+    } else {
+      assert.equal(state.backgroundMaterialApplied, 'none');
+      assert.ok(state.materialFallbackReason, 'System-policy degradation is explicit');
+    }
+  }
+  return { requested, applied: state.backgroundMaterialApplied, fallback: state.materialFallbackReason, osState };
+}
+async function acrylicChecks() {
+  if (process.env.NATIVE_UI_FORCE_HIGH_CONTRAST === '1') {
+    await check(
+      'acrylic fallback: process-only forced colors makes acrylic opaque and keeps none transparency',
+      async () => {
+        assert.equal(nativeTheme.shouldUseHighContrastColors, true);
+        const content = {
+          type: 'column',
+          id: 'fallback-root',
+          width: 330,
+          children: [
+            { type: 'column', id: 'fallback-blank', height: 80, children: [] },
+            {
+              type: 'list',
+              id: 'fallback-list',
+              height: 124,
+              children: Array.from({ length: 40 }, (_, i) =>
+                text(`fallback-line-${i}`, `System color ${i + 1}`, { height: 26 })
+              )
+            }
+          ]
+        };
+        const p = newPanel(content, {
+          backgroundMaterial: 'acrylic',
+          theme: { mode: 'light', background: '#00FFFFFF' }
+        });
+        try {
+          await show(p, 176, 130);
+          const state = panelState(p);
+          assert.equal(state.backgroundMaterial, 'acrylic');
+          assert.equal(state.backgroundMaterialApplied, 'none');
+          assert.equal(state.materialFallbackReason, 'forced-colors');
+          const environment = await native('material', { hwnd: Number(state.windowHandle) });
+          assert.notEqual(environment.backdrop, 3);
+          const bounds = screen.dipToScreenRect(parent, state.contentBounds);
+          const points = Array.from({ length: 8 }, (_, i) => ({ x: bounds.x + 40 + i * 4, y: bounds.y + 40 }));
+          await parent.webContents.executeJavaScript(`(() => {
+          const c=document.createElement('canvas');c.id='fallback-pattern';c.width=Math.ceil(innerWidth*devicePixelRatio);c.height=Math.ceil(innerHeight*devicePixelRatio);
+          c.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none';document.body.append(c);
+          const g=c.getContext('2d');for(let y=0;y<c.height;y+=4)for(let x=0;x<c.width;x+=4){g.fillStyle=((x/4+y/4)%2)?'#FFFFFF':'#000000';g.fillRect(x,y,4,4)}
+        })()`);
+          p.hide();
+          await delay(240);
+          const reference = await native('pixels', { hwnd: handle(), points });
+          assert.ok(
+            Math.max(...reference.pixels.map((p) => p.rgb[0])) - Math.min(...reference.pixels.map((p) => p.rgb[0])) >
+              200
+          );
+          await show(p, 176, 130);
+          const opaque = await native('pixels', { hwnd: Number(state.windowHandle), points });
+          for (const pixel of opaque.pixels) {
+            assert.deepEqual(
+              pixel.rgb,
+              [255, 255, 255],
+              'Fallback forces the requested transparent white to opaque white'
+            );
+          }
+          await capturePanel(p, 'acrylic-fallback-opaque');
+          await native('move', {
+            hwnd: Number(state.windowHandle),
+            ...physicalPoint({ x: state.contentBounds.x + 5, y: state.contentBounds.y + 24 }),
+            keepCursor: true
+          });
+          await delay(120);
+          const bar = node(p, 'fallback-list').scrollbar;
+          assert.equal(bar.visible, true);
+          assert.equal(bar.thumbPaintBounds.width, 6, 'Forced colors retain the thicker accessible thumb');
+          const rgb = (name) =>
+            systemPreferences
+              .getColor(name)
+              .slice(1, 7)
+              .match(/../g)
+              .map((v) => parseInt(v, 16));
+          const systemPalette = { window: rgb('window'), text: rgb('window-text'), highlight: rgb('highlight') };
+          const scrollbarPixels = await native('pixels', {
+            hwnd: Number(state.windowHandle),
+            points: [
+              scrollCenter(bar.thumbPaintBounds),
+              physicalPoint({
+                x: Math.round(bar.track.x + bar.track.width / 2),
+                y: Math.round(bar.track.y + bar.track.height - 4)
+              })
+            ]
+          });
+          assert.deepEqual(
+            scrollbarPixels.pixels[0].rgb,
+            systemPalette.text,
+            'The normal thumb uses the public Windows system text color'
+          );
+          assert.deepEqual(
+            scrollbarPixels.pixels[1].rgb,
+            systemPalette.window,
+            'The forced-color track uses the public Windows system window color'
+          );
+          await native('move', { hwnd: Number(state.windowHandle), ...scrollCenter(bar.thumb), keepCursor: true });
+          await delay(120);
+          const hoverPixels = await native('pixels', {
+            hwnd: Number(state.windowHandle),
+            points: [scrollCenter(node(p, 'fallback-list').scrollbar.thumbPaintBounds)]
+          });
+          assert.deepEqual(
+            hoverPixels.pixels[0].rgb,
+            systemPalette.highlight,
+            'Hover uses the public Windows highlight color'
+          );
+          p.update({ backgroundMaterial: 'none' });
+          await delay(240);
+          assert.equal(panelState(p).backgroundMaterialApplied, 'none');
+          const nonePixels = [];
+          for (let i = 0; i < points.length; i++) {
+            const hit = await native('hit', points[i]);
+            assert.ok(
+              [handle(), Number(state.windowHandle)].includes(hit.root),
+              'Transparent samples stay inside the owned test windows'
+            );
+            const pixel = await native('pixel', points[i]);
+            nonePixels.push(pixel.rgb);
+            assert.ok(
+              pixel.rgb.every((v, c) => Math.abs(v - reference.pixels[i].rgb[c]) <= 3),
+              'None keeps the pre-existing transparent-theme behavior'
+            );
+          }
+          const center = scrollCenter(state.contentBounds);
+          const hit = await native('hit', center);
+          assert.ok([handle(), Number(state.windowHandle)].includes(hit.root));
+          const file = path.join(output, 'acrylic-fallback-none-transparent.png');
+          await native('screenshot', { hwnd: hit.root, bounds, path: file });
+          screenshots['acrylic-fallback-none-transparent'] = { path: file, state: panelState(p) };
+          snapshot.materialFallback = {
+            environment,
+            reference,
+            opaque,
+            nonePixels,
+            systemPalette,
+            scrollbarPixels,
+            hoverPixels
+          };
+          assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+        } finally {
+          p.destroy();
+          await parent.webContents.executeJavaScript("document.querySelector('#fallback-pattern')?.remove()");
+        }
+      }
+    );
+  }
+  await check('acrylic: constructor/update enum validation is atomic and creates no WebContents', async () => {
+    const p = newPanel(note(), { focusMode: 'input', backgroundMaterial: 'acrylic' });
+    try {
+      await show(p, 176, 130);
+      snapshot.materialEnvironment = await materialState(p, 'acrylic');
+      const before = panelState(p);
+      for (const backgroundMaterial of [null, true, 1, '', 'mica', 'Acrylic', {}, []]) {
+        assert.throws(() => newPanel(note(), { backgroundMaterial }));
+        assert.throws(() =>
+          p.update({ backgroundMaterial, theme: 'dark', content: note({ value: 'must not apply' }) })
+        );
+        assert.deepEqual(panelState(p), before);
+      }
+      assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+    } finally {
+      p.destroy();
+    }
+  });
+  await check(
+    'acrylic: official backdrop readback, actual blur and opaque child boundary in light/dark screenshots',
+    async () => {
+      const tree = {
+        type: 'column',
+        id: 'material-sample',
+        width: 320,
+        height: 220,
+        children: [
+          { type: 'column', id: 'material-space', height: 130, children: [] },
+          {
+            type: 'column',
+            id: 'material-opaque',
+            width: 140,
+            height: 48,
+            style: { background: '#D9E8F5' },
+            children: []
+          }
+        ]
+      };
+      const p = newPanel(tree, { backgroundMaterial: 'none' });
+      try {
+        await show(p, 176, 130);
+        const body = panelState(p).contentBounds;
+        const bounds = screen.dipToScreenRect(parent, body);
+        const host = screen.dipToScreenRect(parent, parent.getContentBounds());
+        const scale = screen.getDisplayMatching(body).scaleFactor;
+        const high = {
+          x: Math.round(22 * scale),
+          y: Math.round(22 * scale),
+          width: Math.round(96 * scale),
+          height: Math.round(70 * scale)
+        };
+        const low = {
+          x: Math.round(154 * scale),
+          y: Math.round(22 * scale),
+          width: Math.round(120 * scale),
+          height: Math.round(70 * scale)
+        };
+        await parent.webContents.executeJavaScript(`(() => {
+        const canvas=document.createElement('canvas');canvas.id='material-pattern';
+        canvas.width=Math.ceil(innerWidth*devicePixelRatio);canvas.height=Math.ceil(innerHeight*devicePixelRatio);
+        canvas.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;z-index:2147483647;pointer-events:none';
+        document.body.append(canvas);const c=canvas.getContext('2d');c.fillStyle='#BAC5D1';c.fillRect(0,0,canvas.width,canvas.height);
+        const origin={x:${bounds.x - host.x},y:${bounds.y - host.y}},high=${JSON.stringify(high)},low=${JSON.stringify(low)};
+        for(let y=0;y<high.height;y+=4)for(let x=0;x<high.width;x+=4){c.fillStyle=((x/4+y/4)%2)?'#FFFFFF':'#000000';c.fillRect(origin.x+high.x+x,origin.y+high.y+y,4,4)}
+        c.fillStyle='#202020';c.fillRect(origin.x+low.x,origin.y+low.y,low.width/2,low.height);
+        c.fillStyle='#E0E0E0';c.fillRect(origin.x+low.x+low.width/2,origin.y+low.y,low.width/2,low.height);
+      })()`);
+        p.hide();
+        await delay(300);
+        const reference = path.join(output, 'acrylic-host-pattern.png');
+        await native('screenshot', { hwnd: handle(), bounds, path: reference });
+        screenshots['acrylic-host-pattern'] = { path: reference, bounds };
+        await show(p, 176, 130);
+        await capturePanel(p, 'acrylic-none');
+        const none = await materialState(p, 'none');
+        p.update({ backgroundMaterial: 'acrylic', theme: 'light' });
+        await delay(350);
+        const light = await materialState(p, 'acrylic');
+        await capturePanel(p, 'acrylic-light');
+        const opaque = scrollCenter(node(p, 'material-opaque').bounds);
+        assert.deepEqual(
+          (await native('pixel', opaque)).rgb,
+          [217, 232, 245],
+          'An opaque child covers the material at its own bounds'
+        );
+        p.update({ theme: 'dark' });
+        await delay(350);
+        const dark = await materialState(p, 'acrylic');
+        await capturePanel(p, 'acrylic-dark');
+        const contrast = await native('image-contrast', {
+          images: {
+            reference,
+            none: screenshots['acrylic-none'].path,
+            light: screenshots['acrylic-light'].path,
+            dark: screenshots['acrylic-dark'].path
+          },
+          regions: { high, low }
+        });
+        const referenceContrast = contrast.images.reference;
+        assert.ok(
+          referenceContrast.highDeviation > 80 && referenceContrast.lowContrast > 150,
+          'The own-window reference has both high and low frequency contrast'
+        );
+        assert.ok(
+          contrast.images.none.highDeviation < 3 && contrast.images.none.lowContrast < 3,
+          'Solid material hides the host pattern'
+        );
+        for (const [name, observed] of [
+          ['light', light],
+          ['dark', dark]
+        ]) {
+          if (observed.applied === 'acrylic') {
+            const measured = contrast.images[name];
+            assert.ok(measured.lowContrast > 2, 'The system backdrop samples the real host behind it');
+            const attenuation =
+              measured.highDeviation /
+              measured.lowContrast /
+              (referenceContrast.highDeviation / referenceContrast.lowContrast);
+            assert.ok(
+              attenuation < 0.6,
+              `${name} high-frequency blur differs from simple alpha transparency: ${attenuation}`
+            );
+            measured.relativeHighFrequency = attenuation;
+          }
+        }
+        snapshot.materialBlur = { none, light, dark, contrast };
+        for (const isDark of [false, true]) {
+          const content = note({
+            dark: isDark,
+            submitOnEnter: false,
+            value: Array.from({ length: 24 }, (_, i) => `第 ${i + 1} 行 · 记录想法与待办事项`).join('\n')
+          });
+          content.children.unshift(text('acrylic-note-title', '便笺', { fontSize: 16 }));
+          content.children[1].style = { borderless: true, paddingTop: 6, paddingLeft: 4, paddingRight: 4 };
+          p.update({ backgroundMaterial: 'acrylic', theme: noteTheme(isDark), content });
+          await delay(250);
+          await capturePanel(p, `acrylic-note-${isDark ? 'dark' : 'light'}`);
+        }
+        (snapshot.limitations ??= []).push(
+          'Global transparency/high-contrast/energy-saver settings were read only; alternate policy states require a separate system configured by its user.'
+        );
+        assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+      } finally {
+        p.destroy();
+        await parent.webContents.executeJavaScript("document.querySelector('#material-pattern')?.remove()");
+      }
+    }
+  );
+  await check(
+    'acrylic: none/acrylic updates retain multiline draft, focus, selection, caret and scrolled viewport',
+    async () => {
+      const value = Array.from({ length: 35 }, (_, i) => `Material draft ${i + 1} — 保留编辑状态`).join('\n');
+      await withNote({ value, submitOnEnter: false }, async (p, actions) => {
+        await click(p, 'note-body');
+        await key(p, 0x23, [0x11]);
+        await repeatKey(p, 0x25, 6, [0x10]);
+        const before = editingState(p);
+        assert.notEqual(before.selection.start, before.selection.end);
+        assert.ok(before.displayOffset.y < 0);
+        const count = actions.length;
+        const states = [];
+        for (const backgroundMaterial of ['acrylic', 'none', 'acrylic', 'none']) {
+          p.update({ backgroundMaterial });
+          await delay(120);
+          assert.deepEqual(editingState(p), before);
+          states.push(await materialState(p, backgroundMaterial));
+        }
+        assert.equal(actions.length, count);
+        assert.equal(webContents.getAllWebContents().length, snapshot.webContentsBefore);
+        snapshot.materialEditing = { before, states };
+      });
+    }
+  );
+  await check('acrylic: material updates preserve real Chinese IME composition and commit', async () => {
+    const layoutId = originalDesktop.imeLayouts.find((layout) => (layout & 0x3ff) === 4);
+    assert.ok(layoutId, 'An installed Chinese IME is required');
+    await withNote({}, async (p, actions) => {
+      let previous;
+      try {
+        await click(p, 'note-body');
+        previous = await native('ime', { hwnd: Number(panelState(p).windowHandle), layout: layoutId, keys: 'nihao' });
+        if (!node(p, 'note-body').composing && node(p, 'note-body').value === 'nihao') {
+          await key(p, 0x41, [0x11]);
+          await key(p, 0x08);
+          await key(p, 0x10);
+          await native('ime', { hwnd: Number(panelState(p).windowHandle), layout: layoutId, keys: 'nihao' });
+        }
+        assert.equal(node(p, 'note-body').composing, true);
+        const before = editingState(p);
+        for (const backgroundMaterial of ['acrylic', 'none']) {
+          p.update({ backgroundMaterial });
+          assert.equal(node(p, 'note-body').composing, true);
+          assert.deepEqual(editingState(p), before);
+        }
+        for (const scrollbarPlacement of ['overlay', 'gutter']) {
+          const content = note();
+          content.children[0].scrollbarPlacement = scrollbarPlacement;
+          p.update({ content });
+          const current = node(p, 'note-body');
+          assert.equal(current.composing, true, 'Changing placement retains the active IME');
+          assert.equal(current.value, before.value);
+          assert.deepEqual(current.selection, before.selection);
+          assert.equal(panelState(p).focusedId, before.focusedId);
+        }
+        await key(p, 0x20);
+        assert.equal(node(p, 'note-body').composing, false);
+        assert.match(node(p, 'note-body').value, /[\u3400-\u9fff]/);
+        assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+      } finally {
+        if (previous) await native('layout', { hwnd: Number(panelState(p).windowHandle), layout: previous.oldLayout });
+      }
+    });
+  });
+  await check('scrollbars: outer overflow shares the arrowless thumb, track paging, wheel and drag', async () => {
+    const content = {
+      type: 'column',
+      id: 'outer-scroll-fixture',
+      width: 330,
+      children: Array.from({ length: 100 }, (_, i) => text(`outer-line-${i}`, `外层内容 ${i + 1}`, { height: 30 }))
+    };
+    const p = newPanel(content);
+    const originalBounds = parent.getBounds();
+    try {
+      parent.setBounds(screen.getDisplayMatching(originalBounds).workArea);
+      await delay(180);
+      await show(p, 130, 90);
+      const getBar = () => panelState(p).scrollbar;
+      const result = await exerciseScrollbar(
+        p,
+        getBar,
+        () => getBar().position,
+        () => {
+          const b = panelState(p).contentBounds;
+          return physicalPoint({ x: Math.round(b.x + b.width / 2), y: b.y + 50 });
+        },
+        'scrollbar-outer'
+      );
+      const offset = getBar().position;
+      p.update({ content });
+      assert.equal(getBar().position, offset);
+      snapshot.outerScrollbar = result;
+    } finally {
+      p.destroy();
+      parent.setBounds(originalBounds);
+      await delay(120);
+    }
+  });
+  await check(
+    'scrollbars: textarea uses the same native arrowless scrollbar without changing the fixed editor height',
+    async () => {
+      const value = Array.from({ length: 55 }, (_, i) => `编辑区内容 ${i + 1} — 继续记录`).join('\n');
+      await withNote({ value, submitOnEnter: false }, async (p, actions) => {
+        await click(p, 'note-body');
+        // Views Textarea inherits Home as a line command, even with Control.
+        // Collapse Select All at the left edge to establish the document start.
+        await key(p, 0x41, [0x11]);
+        await key(p, 0x25);
+        const field = () => node(p, 'note-body');
+        assert.deepEqual(field().selection, { start: 0, end: 0 });
+        assert.equal(field().displayOffset.y, 0, 'Wheel begins at the verified top of the document');
+        const result = await exerciseScrollbar(
+          p,
+          () => field().scrollbar,
+          () => -field().displayOffset.y,
+          () => scrollCenter(field().viewportBounds),
+          'scrollbar-textarea',
+          { theme: noteTheme(true), content: note({ value, submitOnEnter: false, dark: true }) }
+        );
+        assert.equal(field().bounds.height, 168);
+        assert.equal(field().value, value);
+        assert.equal(actions.filter((a) => a.type === 'submit').length, 0);
+        snapshot.textareaScrollbar = result;
+      });
+    }
+  );
+}
+async function scrollbarPlacementChecks() {
+  await check('scrollbar placement: strict enums, atomic patches and independent node defaults', async () => {
+    const tree = () => ({
+      type: 'list',
+      id: 'placement-list',
+      width: 300,
+      height: 130,
+      children: Array.from({ length: 20 }, (_, i) => text(`placement-${i}`, `内容 ${i + 1}`, { height: 28 }))
+    });
+    const p = newPanel(tree(), { scrollbarPlacement: 'overlay' });
+    try {
+      await show(p, 176, 130);
+      assert.equal(panelState(p).scrollbar.placement, 'overlay');
+      assert.equal(
+        node(p, 'placement-list').scrollbar.placement,
+        'gutter',
+        'Node default does not inherit the outer placement'
+      );
+      const before = panelState(p);
+      for (const scrollbarPlacement of [null, true, 1, '', 'inside', 'outside', {}, []]) {
+        assert.throws(() => newPanel(tree(), { scrollbarPlacement }));
+        assert.throws(() => p.update({ scrollbarPlacement, theme: 'dark' }));
+        assert.throws(() => p.update({ content: { ...tree(), scrollbarPlacement }, theme: 'dark' }));
+        assert.throws(() => p.update({ content: { type: 'textarea', id: 'invalid-editor', scrollbarPlacement } }));
+        assert.deepEqual(panelState(p), before);
+      }
+      assert.throws(() =>
+        p.update({ content: { type: 'text', id: 'invalid-label', text: 'x', scrollbarPlacement: 'overlay' } })
+      );
+      assert.throws(() => p.update({ content: { ...tree(), style: { scrollbarPlacement: 'overlay' } } }));
+      p.update({ theme: 'dark' });
+      assert.equal(panelState(p).scrollbar.placement, 'overlay');
+      p.update({ scrollbarPlacement: 'gutter' });
+      assert.equal(panelState(p).scrollbar.placement, 'gutter');
+    } finally {
+      p.destroy();
+    }
+  });
+  await check(
+    'scrollbar placement: textarea hugs the frame independently of text padding and retains editing state',
+    async () => {
+      const value = Array.from({ length: 50 }, (_, i) => `第 ${i + 1} 行 · 便笺正文`).join('\n');
+      const tree = (placement = 'gutter', padding = {}, dark = false, includeValue = false) => {
+        const content = note({ dark, ...(includeValue ? { value } : {}), submitOnEnter: false });
+        content.children[0].scrollbarPlacement = placement;
+        Object.assign(content.children[0].style, { paddingRight: 0 }, padding);
+        return content;
+      };
+      const p = newPanel(tree('gutter', {}, false, true), { focusMode: 'input', theme: noteTheme() });
+      const actions = [];
+      p.on('action', (a) => actions.push(a));
+      try {
+        await show(p, 176, 130);
+        await click(p, 'note-body');
+        await key(p, 0x41, [0x11]);
+        await key(p, 0x25);
+        const field = () => node(p, 'note-body');
+        const initial = field();
+        const bar = initial.scrollbar.bounds;
+        assert.equal(
+          initial.bounds.x + initial.bounds.width - bar.x - bar.width,
+          3,
+          'The bar sits 2 DIP inside the 1 DIP frame'
+        );
+        assert.equal(bar.y - initial.bounds.y, 3, 'Text top padding does not inset the scrollbar');
+        assert.ok(
+          initial.viewportBounds.x + initial.viewportBounds.width <= bar.x - 2,
+          'Gutter mode reserves room outside the editing viewport'
+        );
+        await native('wheel', {
+          hwnd: Number(panelState(p).windowHandle),
+          ...scrollCenter(initial.viewportBounds),
+          delta: -120
+        });
+        await delay(120);
+        const offset = field().displayOffset;
+        assert.ok(offset.y < 0);
+        const selection = field().selection;
+        const states = [];
+        for (const dark of [false, true]) {
+          for (const placement of ['overlay', 'gutter']) {
+            p.update({ content: tree(placement, {}, dark), theme: noteTheme(dark) });
+            await delay(160);
+            const current = field();
+            assert.deepEqual(current.bounds, initial.bounds);
+            assert.deepEqual(current.scrollbar.bounds, bar);
+            assert.equal(current.scrollbar.placement, placement);
+            assert.equal(current.value, value);
+            assert.deepEqual(current.selection, selection);
+            assert.deepEqual(current.displayOffset, offset);
+            assert.equal(panelState(p).focusedId, 'note-body');
+            if (placement === 'overlay') {
+              assert.equal(
+                current.viewportBounds.x + current.viewportBounds.width,
+                current.bounds.x + current.bounds.width - 1
+              );
+              assert.ok(current.viewportBounds.width > initial.viewportBounds.width);
+            } else {
+              assert.equal(current.viewportBounds.width, initial.viewportBounds.width);
+            }
+            await capturePanel(p, `textarea-placement-${placement}-${dark ? 'dark' : 'light'}`);
+            states.push(current);
+          }
+        }
+        p.update({
+          content: tree('gutter', { paddingTop: 30, paddingRight: 44, paddingBottom: 22 }),
+          theme: noteTheme()
+        });
+        await delay(100);
+        assert.deepEqual(field().scrollbar.bounds, bar, 'Large asymmetric text padding does not move the bar');
+        assert.equal(field().viewportBounds.y - field().bounds.y, 31);
+        assert.equal(
+          field().bounds.x + field().bounds.width - field().viewportBounds.x - field().viewportBounds.width,
+          45
+        );
+        assert.equal(field().value, value);
+        assert.deepEqual(field().selection, selection);
+        assert.equal(actions.length, 0, 'Layout changes do not emit editing actions');
+        snapshot.textareaPlacement = { initial, states, padded: field() };
+      } finally {
+        p.destroy();
+      }
+    }
+  );
+  await check('scrollbar placement: list overlay and gutter change only the viewport allocation', async () => {
+    const tree = (scrollbarPlacement = 'gutter') => ({
+      type: 'list',
+      id: 'placement-list',
+      width: 320,
+      height: 180,
+      scrollbarPlacement,
+      style: { paddingTop: 20, paddingRight: 30 },
+      children: Array.from({ length: 30 }, (_, i) => text(`placement-row-${i}`, `列表内容 ${i + 1}`, { height: 30 }))
+    });
+    const p = newPanel(tree());
+    try {
+      await show(p, 176, 130);
+      const initial = node(p, 'placement-list');
+      const child = node(p, 'placement-row-0').bounds;
+      await native('wheel', { hwnd: Number(panelState(p).windowHandle), ...scrollCenter(initial.bounds), delta: -120 });
+      await delay(100);
+      const offset = node(p, 'placement-list').scrollOffset;
+      assert.ok(offset > 0);
+      for (const placement of ['overlay', 'gutter', 'overlay']) {
+        p.update({ content: tree(placement) });
+        await delay(100);
+        const current = node(p, 'placement-list');
+        assert.deepEqual(current.bounds, initial.bounds);
+        assert.equal(current.scrollOffset, offset);
+        assert.equal(current.scrollbar.placement, placement);
+        assert.equal(node(p, 'placement-row-0').bounds.width, child.width + (placement === 'overlay' ? 12 : 0));
+      }
+      snapshot.listPlacement = panelState(p);
+    } finally {
+      p.destroy();
+    }
+  });
+  await check(
+    'scrollbar placement: outer overflow switches live without moving the panel or scroll position',
+    async () => {
+      const content = {
+        type: 'column',
+        id: 'placement-outer',
+        width: 300,
+        children: Array.from({ length: 100 }, (_, i) =>
+          text(`placement-outer-${i}`, `面板内容 ${i + 1}`, { height: 30 })
+        )
+      };
+      const p = newPanel(content);
+      try {
+        await show(p, 130, 90);
+        const initial = panelState(p);
+        assert.equal(initial.scrollbar.visible, true);
+        await native('wheel', {
+          hwnd: Number(initial.windowHandle),
+          ...scrollCenter(initial.contentBounds),
+          delta: -120
+        });
+        await delay(100);
+        const offset = panelState(p).scrollbar.position;
+        assert.ok(offset > 0);
+        for (const scrollbarPlacement of ['overlay', 'gutter']) {
+          p.update({ scrollbarPlacement });
+          await delay(120);
+          const state = panelState(p);
+          assert.deepEqual(state.bounds, initial.bounds);
+          assert.equal(state.scrollbar.placement, scrollbarPlacement);
+          assert.equal(state.scrollbar.position, offset);
+        }
+        snapshot.outerPlacement = panelState(p);
+      } finally {
+        p.destroy();
+      }
+    }
+  );
 }
 function zoomControls(value = 100) {
   return [
@@ -851,6 +2089,9 @@ async function all() {
       p.destroy();
     }
   });
+  await textareaChecks();
+  await acrylicChecks();
+  await scrollbarPlacementChecks();
   await check(
     'menu: isolated appearance, native segmented zoom, repeated clicks, refresh and no NativePanel',
     async () => {
@@ -1348,7 +2589,7 @@ async function all() {
     }
   });
   await check(
-    'scrollbars: rounded gray thumb, arrows, track paging, native drag, hover and stable scroll updates',
+    'scrollbars: list uses a thin rounded arrowless thumb, transparent track, native paging/drag and hover',
     async () => {
       const tree = () => ({
         type: 'column',
@@ -1373,52 +2614,20 @@ async function all() {
       const p = newPanel(tree());
       const actions = [];
       p.on('action', (a) => actions.push(a));
-      const center = (r) => physicalPoint({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
       const bar = () => node(p, 'scroll-list').scrollbar;
-      const press = async (r) => {
-        await native('click', { hwnd: Number(panelState(p).windowHandle), ...center(r) });
-        await delay(80);
-      };
       try {
         await show(p, 130, 100);
-        assert.equal(bar().bounds.width, 15);
-        assert.equal(bar().visible, true);
-        await native('move', {
-          hwnd: Number(panelState(p).windowHandle),
-          ...center(node(p, 'scroll-title').bounds),
-          keepCursor: true
-        });
-        await delay(100);
-        assert.deepEqual((await native('pixel', center(bar().thumb))).rgb, [141, 141, 141]);
-        await capturePanel(p, 'scrollbar-light');
-        await press(bar().next);
-        const down = node(p, 'scroll-list').scrollOffset;
-        assert.ok(down > 0);
-        await press(bar().previous);
-        assert.ok(node(p, 'scroll-list').scrollOffset < down);
-        const b = bar();
-        await press({ x: b.bounds.x, y: b.thumb.y + b.thumb.height + 30, width: b.bounds.width, height: 15 });
-        assert.ok(node(p, 'scroll-list').scrollOffset > down);
-        const dragging = bar();
-        await native('drag', {
-          hwnd: Number(panelState(p).windowHandle),
-          ...center(dragging.thumb),
-          end: physicalPoint({
-            x: Math.round(dragging.bounds.x + dragging.bounds.width / 2),
-            y: Math.round(dragging.next.y - 2)
-          })
-        });
-        await delay(100);
-        assert.ok(node(p, 'scroll-list').scrollOffset > bar().maximum * 0.9);
+        const result = await exerciseScrollbar(
+          p,
+          bar,
+          () => node(p, 'scroll-list').scrollOffset,
+          () => scrollCenter(node(p, 'scroll-list').bounds),
+          'scrollbar-list'
+        );
         const offset = node(p, 'scroll-list').scrollOffset;
         p.update({ content: tree() });
         assert.equal(node(p, 'scroll-list').scrollOffset, offset);
-        await native('move', { hwnd: Number(panelState(p).windowHandle), ...center(bar().thumb), keepCursor: true });
-        await delay(150);
-        assert.deepEqual((await native('pixel', center(bar().thumb))).rgb, [112, 112, 112]);
-        await capturePanel(p, 'scrollbar-hover');
-        p.update({ theme: 'dark' });
-        await capturePanel(p, 'scrollbar-dark');
+        snapshot.listScrollbar = result;
         assert.equal(actions.length, 0);
         const short = tree();
         short.children[1].children.length = 1;

@@ -1,0 +1,139 @@
+{
+  "date": "2026-11-04T06:47:28.482090+00:00",
+  "status": "local-preview-tested-not-published",
+  "platform": "win32",
+  "arch": "x64",
+  "executable": "D:\\electron\\main\\src\\out\\Release\\electron.exe",
+  "executableSha256": "64c5e8fb4e13082722e9031cd35e6507a9224fccb8cb54a5299563e03d5b422c",
+  "upstreamVersions": {
+    "node": "24.22.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "150",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.11",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026e",
+    "undici": "7.29.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.6.75.16-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "45.0.0-beta.5",
+    "chrome": "156.0.8078.36"
+  },
+  "sourceBaseline": "2caa20bd1db2d37f66dc774ffb95cefce6d22794",
+  "sourceState": "Uncommitted local textarea changes; published .6 artifacts unchanged",
+  "summary": {
+    "total": 124,
+    "passed": 124,
+    "failed": 0
+  },
+  "schemaValidation": {
+    "total": 75,
+    "passed": 75,
+    "failed": 0
+  },
+  "suites": [
+    {
+      "name": "textarea",
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "name": "zh-CN",
+      "total": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    {
+      "name": "baseline",
+      "total": 42,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "name": "en-US",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "ar",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "Agent/input/click regressions",
+      "total": 46,
+      "passed": 46,
+      "failed": 0
+    }
+  ],
+  "typesGenerationAndTsSmokePassed": true,
+  "gnDependencyTargetsPassed": 6,
+  "implementation": "Chromium Views Textarea; no added WebContents",
+  "keyboard": {
+    "default": "Enter submits",
+    "newline": "Shift+Enter",
+    "submitOnEnterFalse": "Enter inserts newline"
+  },
+  "resourceHashes": {
+    "resources.pak": "f17aefec32e2dd9fd323c6e232b7618e6f0c1202f30378bb0979f8ec3a52368d",
+    "chrome_100_percent.pak": "1e3faad5a13060a8f134029dfd92604b54c79fd0c46df82ea483d66396561712",
+    "chrome_200_percent.pak": "abf4ea81e8fb9d278d3fed6b123341b2a1f7c87f79691da7ad547f47a4a7d291",
+    "locales/zh-CN.pak": "d0730df6b91ce1eda800b80c1985bba4f491b4a8d1fb66859ed16f87f4d67932",
+    "locales/en-US.pak": "de43db43fe0072543ab225f6d762cce3656a1639bf9e25f371fe0e80d9eabba7",
+    "locales/ar.pak": "5fb4f8b4fd74830c553d57270fd95ea262c1f062fcbb5324b4fb5dc8e951db5c"
+  },
+  "sourceHashes": {
+    "lib/browser/api/native-panel.ts": "f68eeb63da3e10b76426a5998a4dd59aa73c5a3c12ee11c73f3ff68d16fa6230",
+    "shell/browser/api/electron_api_native_panel.cc": "942fa5596f4b3b2d09ac7d0c0350dc04ffe070886a08d88771ecd57c5f081d41",
+    "shell/browser/ui/views/native_panel.cc": "2e67b5107de79c818da5e4d6a8ba496890589646c0c571ce904029bff255510a",
+    "shell/browser/ui/views/native_panel.h": "b9825bef3a3655e5f394b25c86caa5a6a4a7b29624a0fb3883a37a262cdae396",
+    "test/native-panels/native-ui-preview.cjs": "40bfd310db02429c3d03c546a0b3235c2f4eae0e38cdbecad3d30ac5621971c3",
+    "test/native-panels/native-panels-win.py": "fa45df87200b5f6ffff2ec23d3a6b2f3b3d6414e651980ece5dd29f551c49f6c",
+    "test/native-panels/run_native_ui_preview.py": "33cd429ca0d9642a2445dfc6eec4866a219092da8544c1fee8485363c49d14bb",
+    "electron.d.ts": "45ece471d27e2a0b11f932a2ea4d68413a1752fc2c23877acbf75e38a01b44a5"
+  },
+  "screenshotsSha256": {
+    "textarea-note-light.png": "ef2f0bb96bed2abb042b13e3b33994cc58c979bce9bfff56c79da4486340210a",
+    "textarea-note-dark.png": "603a9e7655b6496bcd90308261b8cf005e61539943c9bf60a796568e4dbc01d3"
+  },
+  "reportHashes": {
+    "final-run.json": "a008523832e42ac51cd88bdbe7efb09da5927e06cae4bb9f97aa16677cb8252d",
+    "schema-validation.json": "8d915f395a5a0e9b89d1e5d337f1fac6617e56b78182d9641dcc62ebf37334ee",
+    "ar\\results.json": "cfeed245d04ca82ee80b56de6152a2c98da32688caac028f0b31bffc1618467a",
+    "baseline\\native-panels-results-page-info-edges.json": "1fb3c3ed56a8c18795a93ee96c28ba63711b2eb114111f68a7d316df0c916ab3",
+    "baseline\\native-panels-results.json": "0be95449534f1a3c6fe5aa7024f431b63486688f7235e63b87286b60c25eae07",
+    "en-US\\results.json": "815bd2a91d84f669a0737b0c3fc342b8b2cbb6e562ef1e0299c850a4c59d352c",
+    "regressions\\native-panels-regression-agent.json": "cbd06ee9dd52a33546e4bfc8a2fe14628d371def86fb76496a7fbb71f55bbe20",
+    "regressions\\native-panels-regression-agent.json.focus.json": "1b2573cfcddea45f18449dfcf515b88112586ec9d164d7debca8bf3e0ec2dc11",
+    "regressions\\native-panels-regression-click.json": "9a2b7eb5ce0b366866aaf155f287db9f6a6f085d965b9bfaaebea4dc8a5778b9",
+    "regressions\\native-panels-regression-input.json": "252840783c657fc1e7ba87f524f2834bfb890550c087f9feae375f25f8032300",
+    "regressions\\native-panels-regressions.json": "2a2d048602f807b7c7e4ec6097e555b9655d7ee9761c852c4f2c4c5834d29ccb",
+    "textarea\\results.json": "699cf7c4106fe4c6ea485efedfd75d72071bab06223eaee255ddaf2efdd81ee9",
+    "zh-CN\\results.json": "115cc6e3aea72971f5584cfc94758662af6972c675a84b21315f0fc7dee967d2"
+  },
+  "documentationSha256": "e1c9d18dd2acb040b4ee094a84a399ea90c65f453efd47f199fe3cd3a59ed09d",
+  "initialAttempt": "6/9, preserved under textarea-initial-attempt; driver scan/extended flags fixed, same executable final 9/9",
+  "published": false
+}

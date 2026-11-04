@@ -42,11 +42,40 @@ app.whenReady().then(() => {
 })
 ```
 
-Overflow areas and `list` controls use a native vertical scrollbar with a 15 DIP
-track, gray rounded thumb, and up/down arrows. It follows the panel's light or
-dark theme, supports native dragging and scrolling, and disappears when all
-content fits. Its geometry is built in, with no per-panel CSS or process-wide
-scrollbar changes.
+Overflow areas, `list` controls, and multiline editors use a native vertical
+scrollbar with a 12 DIP gutter and no arrow buttons. Its gray rounded thumb is
+4 DIP wide normally and 6 DIP wide when hovered or pressed; the track is
+transparent normally and lightly tinted during interaction. It follows the
+panel's light or dark theme, supports native dragging and scrolling, and
+disappears when all content fits. Its geometry is built in, with no per-panel
+CSS or process-wide scrollbar changes. This scrollbar appearance is an
+unreleased source change and is not included in `45.0.0-cloudbypass.6`.
+
+`scrollbarPlacement: 'gutter'` is the default and reserves a separate 12 DIP
+strip beside the viewport while scrolling is needed. `'overlay'` draws over
+the viewport without reserving that space. The panel option controls only
+outer overflow; each `list` or `textarea` node has its own independent option
+and defaults to `gutter`. Neither mode places the scrollbar outside its
+allocated bounds or visual border. Text padding does not move the scrollbar
+away from the border; hosts can reserve right padding to keep overlay text clear.
+
+On supported Windows versions, `backgroundMaterial: 'acrylic'` requests a
+system-drawn panel backdrop. The default is `none`. Windows controls the
+material's opacity and may use a solid fallback based on system settings,
+power state, or activation. `theme.background` supplies the fallback color;
+opaque child backgrounds cover the material. This source-preview option does
+not change `Menu` and is not included in `45.0.0-cloudbypass.6`.
+
+A `textarea` node provides a native multiline editor with automatic wrapping
+and internal scrolling when its fixed height is exceeded. Enter submits its
+current text by default and Shift+Enter inserts a line break; set
+`submitOnEnter: false` to make Enter insert a line break too. Track `change`
+values in the host when a separate Save button uses the draft. The existing `input` node remains single-line
+and submits on Enter. See [NativePanelContent](structures/native-panel-content.md)
+for editor fields and sizing.
+
+The `textarea` control and its `submitOnEnter` option are source-preview
+additions and are not included in the published `45.0.0-cloudbypass.6` package.
 
 ## Class: NativePanel
 
@@ -131,7 +160,9 @@ Returns:
 Emitted for a native control action. A button, clickable row, icon button or
 inline text link emits `click`; a toggle or option
 emits `change`, and a single-line input emits `change` while editing and `submit`
-when committed with Enter.
+when committed with Enter. A multiline `textarea` emits `change`; by default,
+Enter emits `submit` with its current text and Shift+Enter inserts a line break.
+With `submitOnEnter: false`, Enter inserts a line break instead of submitting.
 The application performs the requested operation. Opening, focusing, hovering,
 or dismissing a panel does not implicitly perform a business action.
 

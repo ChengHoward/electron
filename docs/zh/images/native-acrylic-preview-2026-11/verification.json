@@ -1,0 +1,519 @@
+{
+  "completedUtc": "2026-11-04T07:35:25.779984+00:00",
+  "status": "local-preview-tested-not-published",
+  "published": false,
+  "platform": "win32",
+  "arch": "x64",
+  "executable": "D:\\electron\\main\\src\\out\\Release\\electron.exe",
+  "executableSha256": "bbd02f3fed48537a5a1b7f66d313a7a73a64cfb20e80f74aea35898e4809b468",
+  "sourceBaseline": "2caa20bd1db2d37f66dc774ffb95cefce6d22794",
+  "sourceState": "Uncommitted local Textarea, acrylic and scrollbar changes; released .6 artifacts unchanged",
+  "versions": {
+    "node": "24.22.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "150",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.11",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026e",
+    "undici": "7.29.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.6.75.16-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "45.0.0-beta.5",
+    "chrome": "156.0.8078.36"
+  },
+  "summary": {
+    "total": 135,
+    "passed": 135,
+    "failed": 0
+  },
+  "suites": [
+    {
+      "name": "zh-CN",
+      "total": 40,
+      "passed": 40,
+      "failed": 0
+    },
+    {
+      "name": "high-contrast",
+      "total": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "baseline",
+      "total": 42,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "name": "en-US",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "ar",
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "name": "agent",
+      "total": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    {
+      "name": "input",
+      "total": 26,
+      "passed": 26,
+      "failed": 0
+    },
+    {
+      "name": "click",
+      "total": 9,
+      "passed": 9,
+      "failed": 0
+    }
+  ],
+  "schemaSuites": [
+    {
+      "report": "material-schema-validation.json",
+      "total": 42,
+      "passed": 42,
+      "failed": 0
+    },
+    {
+      "report": "scrollbar-placement-schema-validation.json",
+      "total": 84,
+      "passed": 84,
+      "failed": 0
+    }
+  ],
+  "schemaSummary": {
+    "total": 126,
+    "passed": 126,
+    "failed": 0
+  },
+  "typescriptGenerationAndSmokePassed": true,
+  "gnDependencyTargetsPassed": 1,
+  "implementation": "Native Chromium Views controls and official Windows DWM transient backdrop; no added WebContents",
+  "scrollbarPlacement": {
+    "default": "gutter",
+    "supported": [
+      "overlay",
+      "gutter"
+    ],
+    "textareaBarInset": "2 DIP inside the border, independent of text padding"
+  },
+  "materialEvidence": {
+    "none": {
+      "requested": "none",
+      "applied": "none",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 0,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "light": {
+      "requested": "acrylic",
+      "applied": "acrylic",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 3,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "dark": {
+      "requested": "acrylic",
+      "applied": "acrylic",
+      "fallback": "",
+      "osState": {
+        "attribute": 38,
+        "hresult": 0,
+        "backdrop": 3,
+        "composition": true,
+        "windowsBuild": 26100,
+        "transparencyEnabled": true,
+        "highContrast": false,
+        "energySaver": false
+      }
+    },
+    "contrast": {
+      "images": {
+        "reference": {
+          "highDeviation": 127.5,
+          "lowContrast": 192
+        },
+        "none": {
+          "highDeviation": 0,
+          "lowContrast": 0
+        },
+        "light": {
+          "highDeviation": 4.108939855546846,
+          "lowContrast": 52.25803879883074,
+          "relativeHighFrequency": 0.11840436725120859
+        },
+        "dark": {
+          "highDeviation": 4.116746800855988,
+          "lowContrast": 52.256444326335355,
+          "relativeHighFrequency": 0.11863295405676567
+        }
+      }
+    }
+  },
+  "fallbackEvidence": {
+    "environment": {
+      "attribute": 38,
+      "hresult": 0,
+      "backdrop": 1,
+      "composition": true,
+      "windowsBuild": 26100,
+      "transparencyEnabled": true,
+      "highContrast": false,
+      "energySaver": false
+    },
+    "reference": {
+      "pixels": [
+        {
+          "x": 430,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 434,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 438,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 442,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 446,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 454,
+          "y": 381,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 458,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "opaque": {
+      "pixels": [
+        {
+          "x": 430,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 434,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 438,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 442,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 446,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 450,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 454,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 458,
+          "y": 381,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "nonePixels": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "systemPalette": {
+      "window": [
+        255,
+        255,
+        255
+      ],
+      "text": [
+        0,
+        0,
+        0
+      ],
+      "highlight": [
+        0,
+        120,
+        215
+      ]
+    },
+    "scrollbarPixels": {
+      "pixels": [
+        {
+          "x": 938,
+          "y": 537,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 938,
+          "y": 719,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "hoverPixels": {
+      "pixels": [
+        {
+          "x": 938,
+          "y": 537,
+          "rgb": [
+            0,
+            120,
+            215
+          ]
+        }
+      ]
+    }
+  },
+  "initialAttempts": {
+    "prototype": "probe-initial: 6/7. The textarea wheel fixture started at the bottom; fixed document-start preparation, no production fix required.",
+    "englishLocale": "en-US-initial: 2/3. Native submenu keyboard open passed a 3/3 rerun with the same executable and unchanged test source."
+  },
+  "limitations": [
+    "Forced-colors fallback verified in a dedicated child process; global Windows settings were not modified.",
+    "Unsupported OS, reduced transparency and battery-saver branches were reviewed but not toggled on this machine.",
+    "DWM acceptance does not guarantee a visible blur when the window is inactive or system policy changes."
+  ],
+  "sourceHashes": {
+    "lib/browser/api/native-panel.ts": "d4e9450135902a229d33a9a27ed0f3adf8803715bdca937bfe0b5332f01bbbf5",
+    "shell/browser/api/electron_api_native_panel.cc": "7c18f56153ce168f06d25a4c312dbc3e63c623ab9aa6b553e76043bfc37b6542",
+    "shell/browser/api/electron_api_native_panel.h": "590e8e74fb567fad3a4f4fc2103394dd759cab1caad063b35d5501229c191823",
+    "shell/browser/ui/views/native_panel.cc": "a06fcc60b6c0a288257a4c66323464b673414b4df268d4888ffa30b495dc3d8a",
+    "shell/browser/ui/views/native_panel.h": "2e9051688f197b56f793e6179788c31fcb07f2c38908f6a5d4ba2f036847a626",
+    "test/native-panels/native-ui-preview.cjs": "4dd2483f20d9cb4a09401b50efbaa76a627a235c434bad53a96804a51c886e2a",
+    "test/native-panels/native-panels-win.py": "cd8e5179c39d7d67620fe379c36a6cd52d9b088eb06c3162d292dc21917e9250",
+    "test/native-panels/run_native_ui_preview.py": "c1e894e3619ed3e4a7af85a0b68c8321c86fb80336abb6dc64dcf050efe278ac",
+    "electron.d.ts": "c53f57357bc5a4aafcee927147eb8ba0814a57c10060dffbc1f96502f83b1a88"
+  },
+  "resourceHashes": {
+    "resources.pak": "f17aefec32e2dd9fd323c6e232b7618e6f0c1202f30378bb0979f8ec3a52368d",
+    "chrome_100_percent.pak": "1e3faad5a13060a8f134029dfd92604b54c79fd0c46df82ea483d66396561712",
+    "chrome_200_percent.pak": "abf4ea81e8fb9d278d3fed6b123341b2a1f7c87f79691da7ad547f47a4a7d291",
+    "locales/zh-CN.pak": "d0730df6b91ce1eda800b80c1985bba4f491b4a8d1fb66859ed16f87f4d67932",
+    "locales/en-US.pak": "de43db43fe0072543ab225f6d762cce3656a1639bf9e25f371fe0e80d9eabba7",
+    "locales/ar.pak": "5fb4f8b4fd74830c553d57270fd95ea262c1f062fcbb5324b4fb5dc8e951db5c"
+  },
+  "screenshotsSha256": {
+    "acrylic-light.png": "1f15975cbbd225c23d18054de39f49355aed7a0e8c42011deee6f0dc45b326cb",
+    "acrylic-dark.png": "231be97a866b9c387df24f250257558ffac284a88c092262967535247ee44826",
+    "acrylic-note-light.png": "2af2d71de89888037c302e7bbb0350bccc7fffaa7045ed817980c002669aa4ea",
+    "acrylic-note-dark.png": "22038ae2324613e1b979cf6cfa7a1188402e345b4d33cc82b158e52d6deaa3c0",
+    "scrollbar-list-light.png": "8a589529c353507f9eb4e3ecc1732305f793bbee0b132a07db890c7970618e07",
+    "scrollbar-list-dark.png": "301773d3e25de17049f1f9bb8e4dce1c1458ec0b42fdf9fd8edf62a2941859a8",
+    "scrollbar-outer-light.png": "348400711f639477ba8c73af99e7fb787ad0ac9dd3e84a8e7301ef1a19f3a774",
+    "scrollbar-outer-dark.png": "c7d0adad00dbbfce70c866ad0b7b59b65e17f9b06b22527b07b4eedb458b791f",
+    "scrollbar-textarea-light.png": "62ced73cb80f608fd5e58ed19c3564a021aa6b74cadd675154c424d4b8b90055",
+    "scrollbar-textarea-dark.png": "1adb4247ec70e34e26771524f2ac3c900c55c85b4b556e3ecfe530c87c8bfb78",
+    "textarea-placement-gutter-light.png": "bbd2c80792449fccd37f1199ef5577676e631199e008a0284824ba5bc4bfc510",
+    "textarea-placement-overlay-light.png": "bbd2c80792449fccd37f1199ef5577676e631199e008a0284824ba5bc4bfc510",
+    "textarea-placement-gutter-dark.png": "cb7e805f9079477ca4883c56abe170751d3a958d6a8e926d899520120b38cfb0",
+    "textarea-placement-overlay-dark.png": "cb7e805f9079477ca4883c56abe170751d3a958d6a8e926d899520120b38cfb0"
+  },
+  "reportHashes": {
+    "ar\\results.json": "9170d798b69ecbeb101c08cbf4821725c21e51e22214c5add3b13220b54e2a1a",
+    "baseline\\native-panels-results-page-info-edges.json": "8a8ece1cdbbe1727f9163bce4420513528ac8a5572f39a3d52fb2a3b01cbc6aa",
+    "baseline\\native-panels-results.json": "c130177569153a8728ed22d964e95f6b9da01a87d3e29e9c98e1e99f6e630434",
+    "en-US\\results.json": "96715bfd42049c03714db99e41a04dea6b58a3148d93ad990ab5d01da300e4ac",
+    "en-US-initial\\results.json": "b25e93db624cfd13807ea267aab19f14f302e2a9f985b10e33ce6e938b74b7b4",
+    "final-run-initial.json": "27db1585005b257ebaed7d31217ae176e514ef78178ec9c8cad70320771392f9",
+    "final-run.json": "eec7d3a3a73511507ebdc6a7ab05ec5e2b41ab562f084356054855bd3b539b62",
+    "high-contrast\\results.json": "91d6e352b0185841808848d980f295a15e52091dbd9bd3742b6350953e4d21cd",
+    "material-schema-validation.json": "39e5bdc533f721e9a4331555db82dbf4c3fb71cfe38c67c854ce9fc0813dcaad",
+    "regressions\\native-panels-regression-agent.json": "cbd06ee9dd52a33546e4bfc8a2fe14628d371def86fb76496a7fbb71f55bbe20",
+    "regressions\\native-panels-regression-agent.json.focus.json": "1b2573cfcddea45f18449dfcf515b88112586ec9d164d7debca8bf3e0ec2dc11",
+    "regressions\\native-panels-regression-click.json": "9a2b7eb5ce0b366866aaf155f287db9f6a6f085d965b9bfaaebea4dc8a5778b9",
+    "regressions\\native-panels-regression-input.json": "62f512daa71658a766a6eb02e4395a2fc6200046fbcaef222d64b4ee352f7e72",
+    "regressions\\native-panels-regressions.json": "b6b2951f2c0f2de1644766ce2d3467f7837e24ce9b0fbcc8b0a1f52b083c89df",
+    "schema-verification-manifest.json": "34b473157a2ec3a45aa0a6bcab520c56e7e2393bef1766ab770730fe1404974e",
+    "scrollbar-placement-schema-validation.json": "14f4f9fcbe8ccbf4205c90de49b2ea4ec9e623dcc77a04a74234112310485124",
+    "zh-CN\\results.json": "f6ed31b7bc065928c016685dc0e94928cc25b1edfdaee3b50ef8e1f3e1990748"
+  }
+}

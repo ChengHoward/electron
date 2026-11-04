@@ -11,6 +11,7 @@ user = ctypes.WinDLL('user32', use_last_error=True)
 kernel = ctypes.WinDLL('kernel32', use_last_error=True)
 gdi = ctypes.WinDLL('gdi32', use_last_error=True)
 imm = ctypes.WinDLL('imm32', use_last_error=True)
+dwm = ctypes.WinDLL('dwmapi', use_last_error=True)
 user.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 HWND = wintypes.HWND
 user.GetWindowThreadProcessId.argtypes = [HWND, ctypes.POINTER(wintypes.DWORD)]
@@ -40,6 +41,10 @@ user.ReleaseDC.argtypes = [HWND, wintypes.HDC]
 user.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
 user.GetKeyboardLayout.argtypes = [wintypes.DWORD]
 user.GetKeyboardLayout.restype = ctypes.c_void_p
+user.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user.GetAsyncKeyState.restype = wintypes.SHORT
+user.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+user.MapVirtualKeyW.restype = wintypes.UINT
 user.PostMessageW.argtypes = [HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 gdi.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
 gdi.GetPixel.restype = wintypes.DWORD
@@ -50,6 +55,9 @@ imm.ImmSetOpenStatus.argtypes = [wintypes.HANDLE, wintypes.BOOL]
 imm.ImmGetConversionStatus.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD)]
 imm.ImmSetConversionStatus.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
 imm.ImmReleaseContext.argtypes = [HWND, wintypes.HANDLE]
+dwm.DwmGetWindowAttribute.argtypes = [HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+dwm.DwmIsCompositionEnabled.argtypes = [ctypes.POINTER(wintypes.BOOL)]
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -139,7 +147,12 @@ def send(packet, pid):
 
 
 def key(vk, pid, up=False):
-    send(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=2 if up else 0)), pid)
+    # Navigation-cluster keys carry E0 on a physical keyboard. Without it,
+    # Windows treats Shift+arrows as shifted keypad navigation and clears Shift.
+    extended = vk in {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+                      0x2d, 0x2e, 0x6f, 0x90, 0xa3, 0xa5}
+    flags = (2 if up else 0) | (1 if extended else 0)
+    send(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, wScan=user.MapVirtualKeyW(vk, 0), dwFlags=flags)), pid)
 
 
 def press(vk, pid):
@@ -226,6 +239,59 @@ if action == 'windows':
     answer['imeLayouts'] = [int(layout or 0) for layout in layouts]
 elif action == 'controls':
     answer = {'controls': controls(int(request['hwnd']), pid)}
+elif action == 'material':
+    # Observe documented DWM state and accessibility/power policy. Never change
+    # the user's transparency, contrast or power settings to manufacture a pass.
+    import winreg
+
+    hwnd = int(request['hwnd'])
+    allowed(hwnd, pid)
+    backdrop = ctypes.c_int(-1)
+    hr = dwm.DwmGetWindowAttribute(HWND(hwnd), 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
+    composition = wintypes.BOOL()
+    dwm.DwmIsCompositionEnabled(ctypes.byref(composition))
+
+    class HIGHCONTRAST(ctypes.Structure):
+        _fields_ = [('cbSize', wintypes.UINT), ('dwFlags', wintypes.DWORD), ('lpszDefaultScheme', wintypes.LPWSTR)]
+
+    class SYSTEM_POWER_STATUS(ctypes.Structure):
+        _fields_ = [('ACLineStatus', wintypes.BYTE), ('BatteryFlag', wintypes.BYTE),
+                    ('BatteryLifePercent', wintypes.BYTE), ('SystemStatusFlag', wintypes.BYTE),
+                    ('BatteryLifeTime', wintypes.DWORD), ('BatteryFullLifeTime', wintypes.DWORD)]
+
+    contrast = HIGHCONTRAST(cbSize=ctypes.sizeof(HIGHCONTRAST))
+    contrast_ok = bool(user.SystemParametersInfoW(0x0042, contrast.cbSize, ctypes.byref(contrast), 0))
+    power = SYSTEM_POWER_STATUS()
+    power_ok = bool(kernel.GetSystemPowerStatus(ctypes.byref(power)))
+    transparency = True
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as settings:
+            transparency = bool(winreg.QueryValueEx(settings, 'EnableTransparency')[0])
+    except FileNotFoundError:
+        pass
+    answer = {'attribute': 38, 'hresult': hr, 'backdrop': backdrop.value,
+              'composition': bool(composition), 'windowsBuild': sys.getwindowsversion().build,
+              'transparencyEnabled': transparency,
+              'highContrast': bool(contrast.dwFlags & 1) if contrast_ok else None,
+              'energySaver': bool(power.SystemStatusFlag) if power_ok else None}
+elif action == 'image-contrast':
+    # Analyze only screenshots that the PID-restricted screenshot action saved.
+    from PIL import Image, ImageStat
+
+    answer = {'images': {}}
+    for name, filename in request['images'].items():
+        with Image.open(filename) as source:
+            gray = source.convert('L')
+            high = request['regions']['high']
+            low = request['regions']['low']
+            high_image = gray.crop((high['x'], high['y'], high['x'] + high['width'], high['y'] + high['height']))
+            inset = max(2, low['width'] // 8)
+            middle = low['x'] + low['width'] // 2
+            left = gray.crop((low['x'] + inset, low['y'] + inset, middle - inset, low['y'] + low['height'] - inset))
+            right = gray.crop((middle + inset, low['y'] + inset, low['x'] + low['width'] - inset, low['y'] + low['height'] - inset))
+            answer['images'][name] = {'highDeviation': ImageStat.Stat(high_image).stddev[0],
+                                      'lowContrast': abs(ImageStat.Stat(left).mean[0] - ImageStat.Stat(right).mean[0])}
 elif action == 'restore':
     cursor = request.get('cursor')
     if cursor:
@@ -248,6 +314,26 @@ elif action == 'screenshot':
                               include_layered_windows=True, all_screens=True)
     captured.save(request['path'])
     answer = {'path': request['path'], 'width': captured.width, 'height': captured.height}
+elif action == 'pixels':
+    points = request['points']
+    if not isinstance(points, list) or not 1 <= len(points) <= 256:
+        raise ValueError('Pixel observations require between 1 and 256 points')
+    expected_root = int(request['hwnd'])
+    dc = user.GetDC(None)
+    try:
+        values = []
+        for point in points:
+            x, y = int(point['x']), int(point['y'])
+            hit = user.WindowFromPoint(wintypes.POINT(x, y))
+            allowed(hit, pid)
+            if int(user.GetAncestor(hit, 2) or 0) != expected_root:
+                raise RuntimeError('Pixel sample is not inside the expected test window')
+            color = gdi.GetPixel(dc, x, y)
+            values.append({'x': x, 'y': y,
+                           'rgb': [color & 255, (color >> 8) & 255, (color >> 16) & 255]})
+        answer = {'pixels': values}
+    finally:
+        user.ReleaseDC(None, dc)
 elif action in ('hit', 'pixel'):
     x, y = int(request['x']), int(request['y'])
     if action == 'hit':
@@ -304,11 +390,30 @@ else:
             send(INPUT(type=1, ki=KEYBDINPUT(wScan=code, dwFlags=6)), pid)
     elif action == 'key':
         modifiers = request.get('modifiers', [])
-        for modifier in modifiers:
-            key(int(modifier), pid)
-        press(int(request['vk']), pid)
-        for modifier in reversed(modifiers):
-            key(int(modifier), pid, True)
+        answer['before'] = {name: bool(user.GetAsyncKeyState(vk) & 0x8000)
+                            for name, vk in [('shift', 0x10), ('control', 0x11), ('alt', 0x12)]}
+        repeat = request.get('repeat', 1)
+        if not isinstance(repeat, int) or isinstance(repeat, bool) or not 1 <= repeat <= 200:
+            raise ValueError('Key repeat must be an integer between 1 and 200')
+        held = []
+        try:
+            for modifier in modifiers:
+                key(int(modifier), pid)
+                held.append(int(modifier))
+            if modifiers:
+                time.sleep(0.025)
+            answer['held'] = {name: bool(user.GetAsyncKeyState(vk) & 0x8000)
+                              for name, vk in [('shift', 0x10), ('control', 0x11), ('alt', 0x12)]}
+            for index in range(repeat):
+                press(int(request['vk']), pid)
+                if index + 1 < repeat:
+                    time.sleep(0.015)
+        finally:
+            for modifier in reversed(held):
+                key(modifier, pid, True)
+        answer.update({'vk': int(request['vk']), 'modifiers': modifiers, 'repeat': repeat,
+                       'after': {name: bool(user.GetAsyncKeyState(vk) & 0x8000)
+                                 for name, vk in [('shift', 0x10), ('control', 0x11), ('alt', 0x12)]}})
     elif action == 'ime':
         layout = int(request['layout'])
         thread = user.GetWindowThreadProcessId(HWND(hwnd), None)
@@ -322,12 +427,15 @@ else:
             imm.ImmSetOpenStatus(context, True)
             imm.ImmSetConversionStatus(context, conversion.value | 1, sentence.value)
             answer['imeOpen'] = bool(imm.ImmGetOpenStatus(context))
+            answer['conversion'] = conversion.value
             imm.ImmReleaseContext(HWND(hwnd), context)
         for character in request.get('keys', ''):
             press(ord(character.upper()), pid)
             time.sleep(0.08)
         answer.update({'oldLayout': int(old_layout or 0),
-                       'activeLayout': int(user.GetKeyboardLayout(thread) or 0)})
+                       'activeLayout': int(user.GetKeyboardLayout(thread) or 0),
+                       'hasImmContext': bool(context), 'foreground': int(user.GetForegroundWindow() or 0),
+                       'keys': request.get('keys', '')})
     elif action == 'layout':
         user.PostMessageW(HWND(hwnd), 0x0050, 0, int(request['layout']))
     else:

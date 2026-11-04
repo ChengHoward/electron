@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
@@ -53,6 +54,8 @@ struct NativePanelOptions {
   ~NativePanelOptions();
   NativePanelNode content;
   base::DictValue theme;
+  std::string background_material = "none";
+  std::string scrollbar_placement = "gutter";
   int radius = 12;
   int content_inset = 12;
   bool shadow = true;
@@ -85,7 +88,9 @@ class NativePanelHost final : private views::WidgetObserver,
   void UpdateAppearance(base::DictValue theme,
                         int radius,
                         bool shadow,
-                        int content_inset);
+                        int content_inset,
+                        const std::string& background_material,
+                        const std::string& scrollbar_placement);
   void UpdateAnchor(const gfx::Rect& anchor);
   void Hide(bool restore_focus = true);
   void Destroy();
@@ -105,6 +110,7 @@ class NativePanelHost final : private views::WidgetObserver,
                                              Entry* entry);
   void ApplyProperties(const NativePanelNode& node, Entry* entry);
   void ApplyTheme();
+  void UpdateBackgroundMaterial();
   void EnsureShadowWindow();
   void UpdateInputRegion();
   void RemoveSubtree(views::View* root);
@@ -112,6 +118,7 @@ class NativePanelHost final : private views::WidgetObserver,
   void Dismiss(const std::string& reason);
   void SendAction(const std::string& id, const std::string& type);
   void ApplyDeferredInput(const std::string& id);
+  base::ScopedClosureRunner PreserveTextareaViewports();
   void RestoreFocus();
   bool IsComposing() const;
   bool IsRelatedWindow(HWND target) const;
@@ -165,6 +172,10 @@ class NativePanelHost final : private views::WidgetObserver,
   bool applying_theme_ = false;
   bool destroying_ = false;
   bool native_windows_valid_ = false;
+  bool acrylic_applied_ = false;
+  bool applying_material_ = false;
+  std::string material_fallback_reason_;
+  std::string material_system_configuration_;
   HWND hwnd_ = nullptr;
   bool applying_input_region_ = false;
   using WindowProc = LRESULT(CALLBACK*)(HWND, UINT, WPARAM, LPARAM);
