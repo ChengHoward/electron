@@ -1,5 +1,8 @@
 # CloudBypass Electron 定制功能说明
 
+<!-- cloudbypass.9-current-start -->
+当前 Windows x64 分发目标为 `45.0.0-cloudbypass.9`；保持 `.8` 定制接口兼容。本次实际核心四组 **55/55**、独立跨 frame **7/7** 及公开类型检查通过；七项明细、实际版本与摘要见文末“跨 frame 光标连续性修复（Windows .9）”。此前 `.8` 的 3 通过/2 失败是修复前历史记录，不替代本次证据。打包、安装与发布结果按对应报告另外记录。
+<!-- cloudbypass.9-current-end -->
 | 项 | 内容 |
 |----|------|
 | 文档版本 | 1.2 |
@@ -14,7 +17,7 @@
 
 ---
 
-本文当前输入/点击示例按 Windows `.8` 接口整理，本构建核心 4 组 55 项及公开类型检查通过。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。历史 `.4`–`.7` 的接口与证据保留在各版本记录。统一配置、默认值、状态、破坏性迁移及范围见 [Agent 自动化](./Agent自动化.md#自动化配置输入隔离与持续渲染windows-8)。
+历史 .8 概要（保留原记录）：本文当前输入/点击示例按 Windows `.8` 接口整理，本构建核心 4 组 55 项及公开类型检查通过。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。历史 `.4`–`.7` 的接口与证据保留在各版本记录。统一配置、默认值、状态、破坏性迁移及范围见 [Agent 自动化](./Agent自动化.md#自动化配置输入隔离与持续渲染windows-8)。
 
 ## 1. 概述
 
@@ -775,3 +778,49 @@ NativePanel 在原有入口上增加 `item`、`iconButton`、`button.variant`、
 实际运行版本：Electron `45.0.0-beta.5`、Chromium `156.0.8078.36`、Node ABI `150`。可执行文件 SHA-256：`6e0844ec5fd9bf77b0010c9c1aacfcfea93fb2b1539de2a4be9b1dd5cddf250d`。
 
 独立报告：`D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/cross-frame-results.json`。同一测试的完整事件、采样及失败明细保留在报告中；真实硬件指针、触摸笔、其他 DPI 或更复杂嵌套结构不由这五项自动外推。
+
+<!-- cloudbypass.9-continuity-start -->
+## 跨 frame 光标连续性修复（Windows .9）
+
+本节记录 `.9` 当前构建，前文 `.8` 及更早内容保留为历史证据。**本次实际七项全部通过，`meetsFullCrossFrameContinuity: true`；在下列七项覆盖范围内达到完整跨 frame 光标连续性。** 核心四组通过数与跨 frame 七项分别统计。
+
+### 兼容方式与内部修复
+
+保持 `.8` 定制方法名称、参数、可选配置和返回结构不变。`setAutomationOptions`、`getAutomationState`、`resetAutomationOptions`、输入/点击及输入序列方法继续使用现有调用方式，`setVirtualCursorImage` 和 `setVirtualCursorFrameRate` 保留；无新增必需配置。公开类型摘要与 `.8` 相同，使用方无需修改现有调用。
+
+鼠标事件经过 Chromium 原生跨 frame 路由管理进入/离开和捕获。移动事件依据实际按住按钮构造底层 `button` 与 modifiers，按下/释放保留其它仍按住的按钮。目标引用继续执行原有文档与节点有效性检查；捕获期间移动和释放遵循原生捕获目标，释放后恢复命中路由。虚拟光标的显示位置仍跟随实际自动化指针位置。
+
+按下和抬起等待实际目标确认，使下一次投递使用更新后的捕获状态；序列移动在入队后继续，保持原有高频投递能力。浏览器内部确认标识区分重复公开时间戳，不改变公开事件时间。OOPIF 元素查询在跨视图变换前后正确换算物理像素与 DIP，使根视口 CSS 坐标与滚动、缩放后的实际输入位置一致。
+
+### 本次运行证据
+
+实际测试时间：2026-11-05 02:30:42 UTC+08:00。分发目标 `45.0.0-cloudbypass.9`；运行内核 Electron `45.0.0-beta.5`、Chromium `156.0.8078.36`、Node `24.22.0`、Node ABI `150`。
+
+可执行文件 SHA-256：`b8f007624ec65f757eca20ca99e22a9af4aea923618875e58161924f1495136b`。
+
+公开 `electron.d.ts` SHA-256：`e622d6eacb9b824210591a52b512bff3ba83e40a3cf66aa0d196914f46c1bf41`，与 `.8` 完全相同。
+
+核心四组：automation-options **10/10**；input-sequence **25/25**；agent **11/11**；click **9/9**，合计 **55/55**；公开类型生成与相关 TypeScript 检查通过。独立跨 frame 为 **7 通过、0 失败、0 无法判定**。
+
+1. **通过**：主文档、同进程 iframe、OOPIF 连续移动与虚拟光标位置（实际用例：`continuous main/same-process/OOPIF root-viewport movement and virtual cursor position`）。
+2. **通过**：两个 iframe 的进入/离开事件与 CSS hover 清理（实际用例：`both iframe documents receive entry and exit events and release CSS hover`）。
+3. **通过**：跨 frame 按住拖拽、显式捕获及 mouseup 清理（实际用例：`held-button drag across frame borders preserves buttons, explicit capture and mouseup cleanup`）。
+4. **通过**：position/target 捕获、多键操作与快速连续派发（实际用例：`raw and target input preserve capture through release, chorded buttons and rapid queued dispatch`）。
+5. **通过**：iframe 导航、移除和完整重置后的捕获清理及后续输入（实际用例：`frame navigation, removal and reset clear invalid capture and allow subsequent input`）。
+6. **通过**：主文档/子文档滚动、125% 缩放后的 CSS/client/page/screen 坐标（实际用例：`CSS viewport/client/page/screen coordinates agree after root/child scrolling and 125 percent zoom`）。
+7. **通过**：可信事件、真实系统光标与前台窗口稳定性（实际用例：`all observed input is trusted and automation leaves the system pointer and foreground unchanged`）。
+
+本次实际进程拓扑：main：OS PID `1724116`、Chromium processId `4`、routingId `1`；same：OS PID `1724116`、Chromium processId `4`、routingId `4`；cross：OS PID `1725180`、Chromium processId `5`、routingId `6`。
+
+核心配置报告单列的真实光标采样原值如下；若包含 `inconclusive_concurrent_system_input`，仅表示该采样受并发系统输入影响未能判定，不能扩写为采样通过。独立跨 frame 第七项按自身事件、真实光标和前台记录判断，与核心采样分开。
+
+- `{"status":"passed","before":{"lastInputTick":296642453,"lastInputTickBeforeCursor":296642453,"cursor":{"x":1536,"y":864},"coherentSnapshot":true,"coordinateSpace":"GetCursorPos"},"after":{"lastInputTick":296642453,"lastInputTickBeforeCursor":296642453,"cursor":{"x":1536,"y":864},"coherentSnapshot":true,"coordinateSpace":"GetCursorPos"}}`
+
+本次核心与独立报告位于 `D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.9`；跨 frame 报告 SHA-256 为 `e803e7aff31493fda977090dd6af2a043a8287110bb29108817e419dea96c2ee`。完整事件、轨迹、坐标、捕获和清理数据以实际 JSON 为准；发行附件应收录本次记录。
+
+### 修复前历史与适用范围
+
+修复前 `.8` 的独立五项记录仍为 **3 通过、2 失败、0 无法判定**，`meetsFullCrossFrameContinuity: false`。该历史构建缺少 OOPIF 的退出事件，显式捕获未形成完整捕获/释放流程；历史可执行文件摘要为 `6e0844ec5fd9bf77b0010c9c1aacfcfea93fb2b1539de2a4be9b1dd5cddf250d`，报告见 `D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/cross-frame-results.json`。这些旧计数不用于证明 `.9`，其原始文档和报告不覆盖、不改写。
+
+本次结论覆盖 Windows x64 上同一 WebContents 的主文档、同进程 iframe、跨域 OOPIF，以及以上七项实际场景。尚未验证的硬件、其它系统/DPI、任意复杂嵌套、系统休眠及渲染进程/GPU 故障不由这些结果自动外推。页面可以观察事件、焦点和操作时序，本功能不承诺网页绝对无法识别自动化。发行包、安装、源码发布和下载核验分别以 manifest 与对应报告记录，本节本身不表示这些发布步骤已完成。
+<!-- cloudbypass.9-continuity-end -->

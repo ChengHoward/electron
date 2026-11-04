@@ -36,6 +36,7 @@
 #include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/power_monitor/power_monitor.h"
@@ -57,6 +58,7 @@
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/input/input_constants.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "components/input/touch_emulator.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -91,6 +93,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/site_instance.h"
@@ -5077,6 +5080,25 @@ int GetDispatchMouseEventModifiers(int modifiers, int buttons) {
   return result;
 }
 
+blink::WebPointerProperties::Button GetDispatchMouseMoveButton(int modifiers) {
+  using Button = blink::WebPointerProperties::Button;
+  Button button = Button::kNoButton;
+  // Match ui::MakeWebMouseEventFromUiEvent, including chorded-button order.
+  // Blink treats kNoButton on a move as an inactive drag even when the
+  // modifiers still contain pressed buttons.
+  if (modifiers & blink::WebInputEvent::kBackButtonDown)
+    button = Button::kBack;
+  if (modifiers & blink::WebInputEvent::kForwardButtonDown)
+    button = Button::kForward;
+  if (modifiers & blink::WebInputEvent::kLeftButtonDown)
+    button = Button::kLeft;
+  if (modifiers & blink::WebInputEvent::kMiddleButtonDown)
+    button = Button::kMiddle;
+  if (modifiers & blink::WebInputEvent::kRightButtonDown)
+    button = Button::kRight;
+  return button;
+}
+
 float GetDispatchMouseEventScaleFactor(content::WebContents* web_contents) {
   auto* wc_impl = static_cast<content::WebContentsImpl*>(web_contents);
   content::RenderWidgetHost* rwh =
@@ -5251,6 +5273,126 @@ void AgentInputDispatchObserver::OnInputEvent(const content::RenderWidgetHost&,
   queued = true;
 }
 
+// Wait for button acknowledgements so capture changes are applied before the
+// next event chooses its target. Sequence moves complete when queued,
+// preserving their dispatch rate without waiting for a frame to be presented on
+// screen.
+class AgentMouseDispatch final
+    : public base::RefCounted<AgentMouseDispatch>,
+      public content::RenderWidgetHost::InputEventObserver,
+      public content::RenderWidgetHostObserver,
+      public content::WebContentsObserver {
+ public:
+  AgentMouseDispatch(content::WebContents* contents,
+                     content::RenderWidgetHostImpl* host,
+                     const blink::WebMouseEvent& event,
+                     bool require_dispatch,
+                     bool wait_for_ack,
+                     base::RepeatingCallback<std::string()> validate,
+                     base::OnceCallback<void(std::string)> complete)
+      : content::WebContentsObserver(contents),
+        host_(host->GetWeakPtr()),
+        event_(event),
+        require_dispatch_(require_dispatch),
+        wait_for_ack_(wait_for_ack),
+        validate_(std::move(validate)),
+        complete_(std::move(complete)) {}
+
+  void Start(base::OnceCallback<bool()> dispatch) {
+    keep_alive_ = this;
+    host_->AddInputEventObserver(this);
+    host_->AddObserver(this);
+    deadline_ = base::TimeTicks::Now() + base::Seconds(5);
+    watchdog_.Start(FROM_HERE, base::Milliseconds(25), this,
+                    &AgentMouseDispatch::Poll);
+    host_->Focus();
+    if (!std::move(dispatch).Run()) {
+      Finish("Failed to route mouse event");
+    } else if (!finished_ && !queued_) {
+      Finish(require_dispatch_ ? "INPUT_NOT_QUEUED" : "");
+    } else if (!finished_ && !wait_for_ack_) {
+      Finish(validate_.Run());
+    }
+  }
+
+ private:
+  friend class base::RefCounted<AgentMouseDispatch>;
+  ~AgentMouseDispatch() override = default;
+
+  bool Matches(const blink::WebInputEvent& event) const {
+    if (event.GetType() != event_.GetType() ||
+        event.TimeStamp() != event_.TimeStamp() ||
+        event.QueuedTimeStamp() != event_.QueuedTimeStamp() ||
+        (event.GetModifiers() & blink::WebInputEvent::kRelativeMotionEvent) !=
+            (event_.GetModifiers() &
+             blink::WebInputEvent::kRelativeMotionEvent)) {
+      return false;
+    }
+    const auto& mouse = static_cast<const blink::WebMouseEvent&>(event);
+    return mouse.id == event_.id && mouse.button == event_.button;
+  }
+
+  void OnInputEvent(const content::RenderWidgetHost&,
+                    const blink::WebInputEvent& event,
+                    InputEventSource) override {
+    if (Matches(event))
+      queued_ = true;
+  }
+
+  void OnInputEventAck(const content::RenderWidgetHost&,
+                       blink::mojom::InputEventResultSource,
+                       blink::mojom::InputEventResultState,
+                       const blink::WebInputEvent& event) override {
+    if (Matches(event))
+      Finish(validate_.Run());
+  }
+
+  void RenderWidgetHostDestroyed(content::RenderWidgetHost* host) override {
+    host->RemoveInputEventObserver(this);
+    host->RemoveObserver(this);
+    host_.reset();
+    Finish("FRAME_UNAVAILABLE");
+  }
+
+  void WebContentsDestroyed() override { Finish("WebContents was destroyed"); }
+
+  void Poll() {
+    auto error = validate_.Run();
+    if (error.empty() && base::TimeTicks::Now() >= deadline_)
+      error = "INPUT_ACK_TIMEOUT";
+    if (!error.empty())
+      Finish(std::move(error));
+  }
+
+  void Finish(std::string error) {
+    if (finished_)
+      return;
+    scoped_refptr<AgentMouseDispatch> protect(this);
+    finished_ = true;
+    watchdog_.Stop();
+    if (host_) {
+      host_->RemoveInputEventObserver(this);
+      host_->RemoveObserver(this);
+    }
+    Observe(nullptr);
+    auto complete = std::move(complete_);
+    keep_alive_.reset();
+    std::move(complete).Run(std::move(error));
+  }
+
+  base::WeakPtr<content::RenderWidgetHostImpl> host_;
+  const blink::WebMouseEvent event_;
+  const bool require_dispatch_;
+  const bool wait_for_ack_;
+  bool queued_ = false;
+  bool finished_ = false;
+  base::TimeTicks deadline_;
+  base::RepeatingTimer watchdog_;
+  base::RepeatingCallback<std::string()> validate_;
+  base::OnceCallback<void(std::string)> complete_;
+  scoped_refptr<AgentMouseDispatch> keep_alive_;
+};
+
 content::RenderFrameHost* AgentInputFrame(
     content::WebContents* contents,
     const gin_helper::Dictionary& params) {
@@ -5360,8 +5502,13 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
   params.Get("clickCount", &click_count);
 
   int event_modifiers = GetDispatchMouseEventModifiers(modifiers, buttons);
-  if (event_type == blink::WebInputEvent::Type::kMouseDown)
+  if (event_type == blink::WebInputEvent::Type::kMouseDown) {
     event_modifiers |= button_modifiers;
+  } else if (event_type == blink::WebInputEvent::Type::kMouseUp) {
+    event_modifiers &= ~button_modifiers;
+  } else if (event_type == blink::WebInputEvent::Type::kMouseMove) {
+    event_button = GetDispatchMouseMoveButton(event_modifiers);
+  }
 
   // Optional CDP fields: timestamp / pointerType / pen properties.
   std::optional<double> timestamp;
@@ -5470,102 +5617,230 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
   }
 
   auto* root_view = static_cast<content::RenderWidgetHostViewBase*>(view);
+  if (event_type != blink::WebInputEvent::Type::kMouseWheel) {
+    // This browser-only field is retained by the mouse ACK callback and is not
+    // serialized to the renderer. Distinguish dispatches even when callers
+    // reuse an identical public timestamp and pointer state.
+    static base::TimeTicks last_dispatch_token;
+    last_dispatch_token = std::max(base::TimeTicks::Now(),
+                                   last_dispatch_token + base::Microseconds(1));
+    mouse_event->SetQueuedTimeStamp(last_dispatch_token);
+  }
   auto shared_event = std::make_shared<std::unique_ptr<blink::WebMouseEvent>>(
       std::move(mouse_event));
   auto shared_promise =
       std::make_shared<gin_helper::Promise<void>>(std::move(promise));
 
-  RouteAgentInput(
-      web_contents(), params, root_view, point_in_root,
-      base::BindOnce(
-          [](base::WeakPtr<WebContents> self, uint64_t generation,
-             content::WeakDocumentPtr document, bool require_dispatch,
-             int sequence_id,
-             std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>> event,
-             std::shared_ptr<gin_helper::Promise<void>> promise,
-             base::WeakPtr<content::RenderWidgetHostViewBase> target,
-             std::optional<gfx::PointF> point) {
-            if (!self || !self->web_contents()) {
-              promise->RejectWithErrorMessage("WebContents was destroyed");
-              return;
-            }
-            if (self->automation_input_generation_ != generation ||
-                !document.AsRenderFrameHostIfValid()) {
-              promise->RejectWithErrorMessage("AUTOMATION_INPUT_CANCELLED");
-              return;
-            }
-            if (sequence_id && self->input_sequence_id_ != sequence_id) {
-              promise->RejectWithErrorMessage("SEQUENCE_CANCELLED");
-              return;
-            }
-            if (sequence_id > 0 && self->input_sequence_) {
-              const auto error = self->input_sequence_->DispatchDeadlineError();
-              if (!error.empty()) {
-                promise->RejectWithErrorMessage(error);
-                return;
-              }
-            }
-            if (!target || !point.has_value()) {
-              promise->RejectWithErrorMessage(
-                  "Failed to resolve target widget for mouse event");
-              return;
-            }
+  auto dispatch_callback = base::BindOnce(
+      [](base::WeakPtr<WebContents> self, uint64_t generation,
+         content::WeakDocumentPtr document, bool require_dispatch,
+         int sequence_id,
+         std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>> event,
+         std::shared_ptr<gin_helper::Promise<void>> promise,
+         base::WeakPtr<content::RenderWidgetHostViewBase> target,
+         std::optional<gfx::PointF> point) {
+        if (!self || !self->web_contents()) {
+          promise->RejectWithErrorMessage("WebContents was destroyed");
+          return;
+        }
+        if (self->automation_input_generation_ != generation ||
+            !document.AsRenderFrameHostIfValid()) {
+          promise->RejectWithErrorMessage("AUTOMATION_INPUT_CANCELLED");
+          return;
+        }
+        if (sequence_id && self->input_sequence_id_ != sequence_id) {
+          promise->RejectWithErrorMessage("SEQUENCE_CANCELLED");
+          return;
+        }
+        if (sequence_id > 0 && self->input_sequence_) {
+          const auto error = self->input_sequence_->DispatchDeadlineError();
+          if (!error.empty()) {
+            promise->RejectWithErrorMessage(error);
+            return;
+          }
+        }
+        if (!target || !point.has_value()) {
+          promise->RejectWithErrorMessage(
+              "Failed to resolve target widget for mouse event");
+          return;
+        }
 
-            (*event)->SetPositionInWidget(*point);
-            gfx::Rect bounds = target->GetViewBounds();
-            (*event)->SetPositionInScreen(*point + bounds.OffsetFromOrigin());
+        blink::WebMouseEvent event_in_root = **event;
+        (*event)->SetPositionInWidget(*point);
+        gfx::Rect bounds = target->GetViewBounds();
+        (*event)->SetPositionInScreen(*point + bounds.OffsetFromOrigin());
+        event_in_root.SetPositionInScreen((*event)->PositionInScreen());
 
-            auto* widget_host = content::RenderWidgetHostImpl::From(
-                target->GetRenderWidgetHost());
-            if (!widget_host) {
-              promise->RejectWithErrorMessage("No RenderWidgetHost for target");
-              return;
-            }
+        auto* widget_host =
+            content::RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
+        if (!widget_host) {
+          promise->RejectWithErrorMessage("No RenderWidgetHost for target");
+          return;
+        }
 
-            if (widget_host->IsIgnoringInputEvents()) {
-              promise->RejectWithErrorMessage("INPUT_IGNORED");
-              return;
-            }
-            AgentInputDispatchObserver observer;
-            widget_host->AddInputEventObserver(&observer);
-            auto host_alive = widget_host->GetWeakPtr();
-            widget_host->Focus();
-            if ((*event)->GetType() ==
-                blink::WebInputEvent::Type::kMouseWheel) {
-              auto* wheel =
-                  static_cast<blink::WebMouseWheelEvent*>(event->get());
-              widget_host->ForwardWheelEvent(*wheel);
-              blink::WebMouseWheelEvent end = *wheel;
-              end.has_synthetic_phase = true;
-              end.delta_x = 0;
-              end.delta_y = 0;
-              end.phase = blink::WebMouseWheelEvent::kPhaseEnded;
-              end.dispatch_type =
-                  blink::WebInputEvent::DispatchType::kEventNonBlocking;
-              widget_host->ForwardWheelEvent(end);
-            } else {
-              widget_host->ForwardMouseEvent(**event);
-            }
-            if (host_alive)
-              host_alive->RemoveInputEventObserver(&observer);
-            if (require_dispatch && !observer.queued) {
-              promise->RejectWithErrorMessage("INPUT_NOT_QUEUED");
-              return;
-            }
-            self->UpdateVirtualCursor(**event, target.get());
-            if (sequence_id > 0 && self->input_sequence_)
-              self->input_sequence_->MouseRouted(widget_host);
-            promise->Resolve();
-          },
-          GetWeakPtr(), automation_input_generation_,
-          (AgentInputFrame(web_contents(), params)
-               ? AgentInputFrame(web_contents(), params)
-               : web_contents()->GetPrimaryMainFrame())
-              ->GetWeakDocumentPtr(),
-          AgentInputFrame(web_contents(), params) != nullptr ||
-              params.Has("_sequenceId"),
-          params.ValueOrDefault<int>("_sequenceId", 0), shared_event,
-          shared_promise));
+        if (widget_host->IsIgnoringInputEvents()) {
+          promise->RejectWithErrorMessage("INPUT_IGNORED");
+          return;
+        }
+
+        if ((*event)->GetType() != blink::WebInputEvent::Type::kMouseWheel) {
+          auto* current_root = static_cast<content::RenderWidgetHostViewBase*>(
+              self->web_contents()->GetRenderWidgetHostView());
+          auto* router = widget_host->GetInputEventRouter();
+          if (!current_root || !router) {
+            promise->RejectWithErrorMessage("No mouse input router available");
+            return;
+          }
+          auto validate = base::BindRepeating(
+              [](base::WeakPtr<WebContents> self, uint64_t generation,
+                 content::WeakDocumentPtr document, int sequence_id) {
+                if (!self || !self->web_contents())
+                  return std::string("WebContents was destroyed");
+                if (self->automation_input_generation_ != generation ||
+                    !document.AsRenderFrameHostIfValid()) {
+                  return std::string("AUTOMATION_INPUT_CANCELLED");
+                }
+                if (sequence_id && self->input_sequence_id_ != sequence_id) {
+                  return std::string("SEQUENCE_CANCELLED");
+                }
+                return std::string();
+              },
+              self, generation, document, sequence_id);
+          auto observer = base::MakeRefCounted<AgentMouseDispatch>(
+              self->web_contents(), widget_host, **event, require_dispatch,
+              (*event)->GetType() != blink::WebInputEvent::Type::kMouseMove ||
+                  (require_dispatch && sequence_id == 0),
+              std::move(validate),
+              base::BindOnce(
+                  [](std::shared_ptr<gin_helper::Promise<void>> promise,
+                     std::string error) {
+                    if (error.empty())
+                      promise->Resolve();
+                    else
+                      promise->RejectWithErrorMessage(error);
+                  },
+                  promise));
+          observer->Start(base::BindOnce(
+              [](base::WeakPtr<WebContents> self,
+                 scoped_refptr<input::RenderWidgetHostInputEventRouter> router,
+                 base::WeakPtr<content::RenderWidgetHostViewBase> root,
+                 base::WeakPtr<content::RenderWidgetHostViewBase> target,
+                 blink::WebMouseEvent root_event,
+                 std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>>
+                     local_event,
+                 std::optional<gfx::PointF> point, int sequence_id) {
+                if (!self || !root || !target)
+                  return false;
+                const bool routed = router->DispatchMouseEventToTarget(
+                    root.get(), target.get(), &root_event, ui::LatencyInfo(),
+                    point);
+                if (routed && self) {
+                  self->UpdateVirtualCursor(**local_event, target.get());
+                  if (sequence_id > 0 && self->input_sequence_ && target) {
+                    self->input_sequence_->MouseRouted(
+                        content::RenderWidgetHostImpl::From(
+                            target->GetRenderWidgetHost()));
+                  }
+                }
+                return routed;
+              },
+              self, base::WrapRefCounted(router), current_root->GetWeakPtr(),
+              target, event_in_root, event, point, sequence_id));
+          return;
+        }
+        AgentInputDispatchObserver observer;
+        widget_host->AddInputEventObserver(&observer);
+        auto host_alive = widget_host->GetWeakPtr();
+        widget_host->Focus();
+        if ((*event)->GetType() == blink::WebInputEvent::Type::kMouseWheel) {
+          auto* wheel = static_cast<blink::WebMouseWheelEvent*>(event->get());
+          widget_host->ForwardWheelEvent(*wheel);
+          blink::WebMouseWheelEvent end = *wheel;
+          end.has_synthetic_phase = true;
+          end.delta_x = 0;
+          end.delta_y = 0;
+          end.phase = blink::WebMouseWheelEvent::kPhaseEnded;
+          end.dispatch_type =
+              blink::WebInputEvent::DispatchType::kEventNonBlocking;
+          widget_host->ForwardWheelEvent(end);
+        } else {
+          widget_host->ForwardMouseEvent(**event);
+        }
+        if (host_alive)
+          host_alive->RemoveInputEventObserver(&observer);
+        if (require_dispatch && !observer.queued) {
+          promise->RejectWithErrorMessage("INPUT_NOT_QUEUED");
+          return;
+        }
+        self->UpdateVirtualCursor(**event, target.get());
+        if (sequence_id > 0 && self->input_sequence_)
+          self->input_sequence_->MouseRouted(widget_host);
+        promise->Resolve();
+      },
+      GetWeakPtr(), automation_input_generation_,
+      (AgentInputFrame(web_contents(), params)
+           ? AgentInputFrame(web_contents(), params)
+           : web_contents()->GetPrimaryMainFrame())
+          ->GetWeakDocumentPtr(),
+      AgentInputFrame(web_contents(), params) != nullptr ||
+          params.Has("_sequenceId"),
+      params.ValueOrDefault<int>("_sequenceId", 0), shared_event,
+      shared_promise);
+
+  if (event_type == blink::WebInputEvent::Type::kMouseWheel) {
+    RouteAgentInput(web_contents(), params, root_view, point_in_root,
+                    std::move(dispatch_callback));
+  } else {
+    auto* router =
+        content::RenderWidgetHostImpl::From(root_view->GetRenderWidgetHost())
+            ->GetInputEventRouter();
+    if (!router) {
+      shared_promise->RejectWithErrorMessage("No mouse input router available");
+      return handle;
+    }
+    content::RenderWidgetHostViewBase* target_hint = nullptr;
+    std::optional<gfx::PointF> target_location_hint;
+    if (auto* frame = AgentInputFrame(web_contents(), params)) {
+      target_hint =
+          static_cast<content::RenderWidgetHostViewBase*>(frame->GetView());
+      double local_x = 0, local_y = 0;
+      if (!target_hint || !params.Get("_agentLocalX", &local_x) ||
+          !params.Get("_agentLocalY", &local_y)) {
+        shared_promise->RejectWithErrorMessage(
+            "Failed to resolve target widget for mouse event");
+        return handle;
+      }
+      target_location_hint = gfx::PointF(local_x, local_y);
+      // Target input carries element-local offsets in x/y. Resolve its real
+      // root position before capture selection or cross-frame boundary events.
+      const gfx::PointF root_location =
+          target_hint->TransformPointToRootCoordSpaceF(*target_location_hint);
+      if (!std::isfinite(root_location.x()) ||
+          !std::isfinite(root_location.y())) {
+        shared_promise->RejectWithErrorMessage("Invalid target coordinates");
+        return handle;
+      }
+      (*shared_event)->SetPositionInWidget(root_location);
+      content::RenderWidgetHostImpl::From(frame->GetRenderWidgetHost())
+          ->ForceFirstFrameAfterNavigationTimeout();
+    }
+    router->FindMouseEventTargetAndCallback(
+        root_view, **shared_event, target_hint, target_location_hint,
+        base::BindOnce(
+            [](base::OnceCallback<void(
+                   base::WeakPtr<content::RenderWidgetHostViewBase>,
+                   std::optional<gfx::PointF>)> callback,
+               base::WeakPtr<input::RenderWidgetHostViewInput> target,
+               std::optional<gfx::PointF> point) {
+              auto* view =
+                  target ? static_cast<content::RenderWidgetHostViewBase*>(
+                               target.get())
+                         : nullptr;
+              std::move(callback).Run(view ? view->GetWeakPtr() : nullptr,
+                                      point);
+            },
+            std::move(dispatch_callback)));
+  }
 
   return handle;
 }
@@ -5616,11 +5891,20 @@ void MapDomElementInfoToRootViewport(content::RenderFrameHost* frame,
                            ? static_cast<double>(bounds.width()) / info->width
                            : 1.0;
   const double safe_scale = scale == 0.0 ? 1.0 : scale;
+  const float device_scale_factor = view->GetDeviceScaleFactor();
+  if (!std::isfinite(device_scale_factor) || device_scale_factor <= 0.f)
+    return;
   gfx::PointF origin(bounds.x(), bounds.y());
   gfx::PointF bottom_right(bounds.x() + bounds.width(),
                            bounds.y() + bounds.height());
+  // BoundsInWidget uses physical pixels, while view transforms use DIPs.
+  // Convert around the transform so the frame offset is scaled exactly once.
+  origin.InvScale(device_scale_factor);
+  bottom_right.InvScale(device_scale_factor);
   origin = view->TransformPointToRootCoordSpaceF(origin);
   bottom_right = view->TransformPointToRootCoordSpaceF(bottom_right);
+  origin.Scale(device_scale_factor);
+  bottom_right.Scale(device_scale_factor);
   const gfx::RectF root_bounds(origin.x(), origin.y(),
                                bottom_right.x() - origin.x(),
                                bottom_right.y() - origin.y());

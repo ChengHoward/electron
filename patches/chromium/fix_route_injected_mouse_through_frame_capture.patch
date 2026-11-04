@@ -1,0 +1,409 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Thu, 5 Nov 2026 00:00:00 +0800
+Subject: fix: route injected mouse input through frame capture
+
+Expose event-aware target resolution and validated mouse dispatch so injected
+input retains native cross-frame enter/leave notifications and capture checks.
+A trusted target hint supports frames without a current visible surface, while
+pointer lock, active capture and DevTools routing keep their native precedence.
+
+Keep callback requests separate from coalescible native events and complete
+abandoned event callbacks asynchronously. Revalidate view registration and the
+ancestor chain before returning targets and before dispatching injected input.
+
+Preserve injected chorded-button capture until the final button is released,
+without changing native platform MouseUp handling.
+
+diff --git a/components/input/render_widget_host_input_event_router.cc b/components/input/render_widget_host_input_event_router.cc
+index 4f4887a27c955..3de05f0e32322 100644
+--- a/components/input/render_widget_host_input_event_router.cc
++++ b/components/input/render_widget_host_input_event_router.cc
+@@ -5,14 +5,17 @@
+ #include "components/input/render_widget_host_input_event_router.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <deque>
+ #include <memory>
+ #include <optional>
+ #include <vector>
+ 
++#include "base/auto_reset.h"
+ #include "base/check_deref.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
++#include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/strings/stringprintf.h"
+@@ -672,6 +675,87 @@ void RenderWidgetHostInputEventRouter::RouteMouseEvent(
+   event_targeter_->FindTargetAndDispatch(root_view, *event, latency);
+ }
+ 
++void RenderWidgetHostInputEventRouter::FindMouseEventTargetAndCallback(
++    RenderWidgetHostViewInput* root_view,
++    const blink::WebMouseEvent& event,
++    RenderWidgetHostViewInput* target_hint,
++    const std::optional<gfx::PointF>& target_location_hint,
++    RenderWidgetTargeter::RenderWidgetHostAtPointCallback callback) {
++  if (!IsViewInMap(root_view) ||
++      !blink::WebInputEvent::IsMouseEventType(event.GetType()) ||
++      !std::isfinite(event.PositionInWidget().x()) ||
++      !std::isfinite(event.PositionInWidget().y())) {
++    std::move(callback).Run({}, std::nullopt);
++    return;
++  }
++
++  const bool has_capture =
++      mouse_capture_target_ &&
++      (event.GetType() == blink::WebInputEvent::Type::kMouseUp ||
++       IsMouseButtonDown(event));
++  if (target_hint && !route_to_root_for_devtools_ &&
++      !root_view->IsPointerLocked() && !has_capture) {
++    if (!IsViewInMap(target_hint) ||
++        (target_hint != root_view &&
++         !RenderWidgetHostViewInput::IsAncestorView(target_hint, root_view)) ||
++        !target_location_hint || !std::isfinite(target_location_hint->x()) ||
++        !std::isfinite(target_location_hint->y())) {
++      std::move(callback).Run({}, std::nullopt);
++      return;
++    }
++    if (event.GetType() == blink::WebInputEvent::Type::kMouseDown) {
++      mouse_down_pre_transformed_coordinate_ = event.PositionInWidget();
++    }
++    std::move(callback).Run(target_hint->GetInputWeakPtr(),
++                            target_location_hint);
++    return;
++  }
++
++  event_targeter_->FindTargetAndCallback(
++      root_view, event,
++      base::BindOnce(
++          [](base::WeakPtr<RenderWidgetHostInputEventRouter> router,
++             base::WeakPtr<RenderWidgetHostViewInput> root,
++             RenderWidgetTargeter::RenderWidgetHostAtPointCallback callback,
++             base::WeakPtr<RenderWidgetHostViewInput> target,
++             std::optional<gfx::PointF> point) {
++            if (!router || !router->IsViewInMap(root.get()) ||
++                !router->IsViewInMap(target.get()) ||
++                (target.get() != root.get() &&
++                 !RenderWidgetHostViewInput::IsAncestorView(target.get(),
++                                                            root.get())) ||
++                !point || !std::isfinite(point->x()) ||
++                !std::isfinite(point->y())) {
++              std::move(callback).Run({}, std::nullopt);
++              return;
++            }
++            std::move(callback).Run(std::move(target), point);
++          },
++          GetWeakPtr(), root_view->GetInputWeakPtr(), std::move(callback)));
++}
++
++bool RenderWidgetHostInputEventRouter::DispatchMouseEventToTarget(
++    RenderWidgetHostViewInput* root_view,
++    RenderWidgetHostViewInput* target,
++    blink::WebMouseEvent* event,
++    const ui::LatencyInfo& latency,
++    const std::optional<gfx::PointF>& target_location) {
++  if (!event || !blink::WebInputEvent::IsMouseEventType(event->GetType()) ||
++      !IsViewInMap(root_view) || !IsViewInMap(target) ||
++      !std::isfinite(event->PositionInWidget().x()) ||
++      !std::isfinite(event->PositionInWidget().y()) ||
++      (target != root_view &&
++       !RenderWidgetHostViewInput::IsAncestorView(target, root_view)) ||
++      !target_location || !std::isfinite(target_location->x()) ||
++      !std::isfinite(target_location->y())) {
++    return false;
++  }
++  scoped_refptr<RenderWidgetHostInputEventRouter> keep_alive(this);
++  base::AutoReset<bool> injected_dispatch(&dispatching_injected_mouse_, true);
++  DispatchEventToTarget(root_view, target, event, latency, target_location);
++  return true;
++}
++
+ void RenderWidgetHostInputEventRouter::DispatchMouseEvent(
+     RenderWidgetHostViewInput* root_view,
+     RenderWidgetHostViewInput* target,
+@@ -693,7 +777,10 @@ void RenderWidgetHostInputEventRouter::DispatchMouseEvent(
+   // platforms where MouseUps are not received when the mouse cursor is off the
+   // browser window.
+   // Also, this is strictly necessary for touch emulation.
+-  if (mouse_event.GetType() == blink::WebInputEvent::Type::kMouseUp ||
++  // Injected input has normalized post-transition button modifiers, so a
++  // chorded MouseUp must keep capture until its final button is released.
++  if ((!dispatching_injected_mouse_ &&
++       mouse_event.GetType() == blink::WebInputEvent::Type::kMouseUp) ||
+       (mouse_event.GetType() != blink::WebInputEvent::Type::kMouseDown &&
+        !IsMouseButtonDown(mouse_event))) {
+     if (mouse_capture_target_) {
+diff --git a/components/input/render_widget_host_input_event_router.h b/components/input/render_widget_host_input_event_router.h
+index 46683f5ac74cd..4c769ce7feca5 100644
+--- a/components/input/render_widget_host_input_event_router.h
++++ b/components/input/render_widget_host_input_event_router.h
+@@ -134,6 +134,23 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
+   void RouteMouseEvent(RenderWidgetHostViewInput* root_view,
+                        const blink::WebMouseEvent* event,
+                        const ui::LatencyInfo& latency);
++  // Resolves injected mouse input without bypassing native capture. A validated
++  // target hint can supply coordinates for frames whose surfaces are hidden.
++  // The caller must dispatch the event after validating its own request state.
++  void FindMouseEventTargetAndCallback(
++      RenderWidgetHostViewInput* root_view,
++      const blink::WebMouseEvent& event,
++      RenderWidgetHostViewInput* target_hint,
++      const std::optional<gfx::PointF>& target_location_hint,
++      RenderWidgetTargeter::RenderWidgetHostAtPointCallback callback);
++  // The event uses root coordinates; target_location uses target coordinates.
++  // Returns false when either view is no longer registered in the same tree.
++  bool DispatchMouseEventToTarget(
++      RenderWidgetHostViewInput* root_view,
++      RenderWidgetHostViewInput* target,
++      blink::WebMouseEvent* event,
++      const ui::LatencyInfo& latency,
++      const std::optional<gfx::PointF>& target_location);
+   void RouteMouseWheelEvent(RenderWidgetHostViewInput* root_view,
+                             blink::WebMouseWheelEvent* event,
+                             const ui::LatencyInfo& latency);
+@@ -436,6 +453,9 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
+   raw_ptr<RenderWidgetHostViewInput> wheel_target_ = nullptr;
+   // Maintains the same target between mouse down and mouse up.
+   raw_ptr<RenderWidgetHostViewInput> mouse_capture_target_ = nullptr;
++  // Injected events provide the buttons still held after each transition.
++  // Native MouseUp modifiers can also include the button being released.
++  bool dispatching_injected_mouse_ = false;
+   // There is no mouse capture set if a mouse down event dispatches to main
+   // frame. The subsequent mouse events might not be delivered to the main frame
+   // if mouse is moved over to an OOP iframe. There is caches mouse state in
+diff --git a/components/input/render_widget_targeter.cc b/components/input/render_widget_targeter.cc
+index bd52a04f5a778..6311b56eca827 100644
+--- a/components/input/render_widget_targeter.cc
++++ b/components/input/render_widget_targeter.cc
+@@ -12,6 +12,7 @@
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/rand_util.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "components/input/render_widget_host_view_input.h"
+@@ -70,11 +71,13 @@ RenderWidgetTargetResult::~RenderWidgetTargetResult() = default;
+ RenderWidgetTargeter::TargetingRequest::TargetingRequest(
+     base::WeakPtr<RenderWidgetHostViewInput> root_view,
+     const blink::WebInputEvent& event,
+-    const ui::LatencyInfo& latency) {
++    const ui::LatencyInfo& latency,
++    RenderWidgetHostAtPointCallback callback) {
+   this->root_view = std::move(root_view);
+   this->location = ComputeEventLocation(event);
+   this->event = event.Clone();
+   this->latency = latency;
++  this->callback = std::move(callback);
+ }
+ 
+ RenderWidgetTargeter::TargetingRequest::TargetingRequest(
+@@ -89,10 +92,34 @@ RenderWidgetTargeter::TargetingRequest::TargetingRequest(
+ RenderWidgetTargeter::TargetingRequest::TargetingRequest(
+     TargetingRequest&& request) = default;
+ 
+-RenderWidgetTargeter::TargetingRequest& RenderWidgetTargeter::TargetingRequest::
+-operator=(TargetingRequest&&) = default;
++RenderWidgetTargeter::TargetingRequest&
++RenderWidgetTargeter::TargetingRequest::operator=(TargetingRequest&& other) {
++  if (this == &other) {
++    return *this;
++  }
++  FailEventCallback();
++  root_view = std::move(other.root_view);
++  callback = std::move(other.callback);
++  location = other.location;
++  event = std::move(other.event);
++  latency = std::move(other.latency);
++  return *this;
++}
++
++RenderWidgetTargeter::TargetingRequest::~TargetingRequest() {
++  FailEventCallback();
++}
+ 
+-RenderWidgetTargeter::TargetingRequest::~TargetingRequest() = default;
++void RenderWidgetTargeter::TargetingRequest::FailEventCallback() {
++  if (event && callback) {
++    // Requests can be discarded while their root or the targeter is being
++    // destroyed. Complete new event callbacks without reentering that teardown.
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(std::move(callback),
++                                  base::WeakPtr<RenderWidgetHostViewInput>(),
++                                  std::nullopt));
++  }
++}
+ 
+ void RenderWidgetTargeter::TargetingRequest::RunCallback(
+     RenderWidgetHostViewInput* target,
+@@ -105,7 +132,8 @@ void RenderWidgetTargeter::TargetingRequest::RunCallback(
+ 
+ bool RenderWidgetTargeter::TargetingRequest::MergeEventIfPossible(
+     const blink::WebInputEvent& new_event) {
+-  if (event && !blink::WebInputEvent::IsTouchEventType(new_event.GetType()) &&
++  if (event && !callback &&
++      !blink::WebInputEvent::IsTouchEventType(new_event.GetType()) &&
+       !blink::WebInputEvent::IsGestureEventType(new_event.GetType()) &&
+       event->CanCoalesce(new_event)) {
+     event->Coalesce(new_event);
+@@ -118,6 +146,10 @@ bool RenderWidgetTargeter::TargetingRequest::IsWebInputEventRequest() const {
+   return !!event;
+ }
+ 
++bool RenderWidgetTargeter::TargetingRequest::HasCallback() const {
++  return !callback.is_null();
++}
++
+ blink::WebInputEvent* RenderWidgetTargeter::TargetingRequest::GetEvent() {
+   return event.get();
+ }
+@@ -179,6 +211,19 @@ void RenderWidgetTargeter::FindTargetAndCallback(
+   ResolveTargetingRequest(std::move(request));
+ }
+ 
++void RenderWidgetTargeter::FindTargetAndCallback(
++    RenderWidgetHostViewInput* root_view,
++    const blink::WebInputEvent& event,
++    RenderWidgetHostAtPointCallback callback) {
++  if (!root_view) {
++    std::move(callback).Run({}, std::nullopt);
++    return;
++  }
++  TargetingRequest request(root_view->GetInputWeakPtr(), event,
++                           ui::LatencyInfo(), std::move(callback));
++  ResolveTargetingRequest(std::move(request));
++}
++
+ void RenderWidgetTargeter::ResolveTargetingRequest(TargetingRequest request) {
+   if (request_in_flight_) {
+     requests_.push(std::move(request));
+@@ -188,6 +233,10 @@ void RenderWidgetTargeter::ResolveTargetingRequest(TargetingRequest request) {
+   RenderWidgetTargetResult result;
+   auto* request_target = request.GetRootView();
+   auto request_target_location = request.GetLocation();
++  if (!request_target) {
++    request.RunCallback(nullptr, std::nullopt);
++    return;
++  }
+ 
+   if (request.IsWebInputEventRequest()) {
+     result = is_autoscroll_in_progress_
+@@ -348,6 +397,7 @@ void RenderWidgetTargeter::QueryClient(
+ }
+ 
+ void RenderWidgetTargeter::FlushEventQueue() {
++  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+   bool events_being_flushed = false;
+   while (!request_in_flight_ && !requests_.empty()) {
+     auto request = std::move(requests_.front());
+@@ -364,6 +414,9 @@ void RenderWidgetTargeter::FlushEventQueue() {
+       events_being_flushed = true;
+     }
+     ResolveTargetingRequest(std::move(request));
++    if (!weak_this) {
++      return;
++    }
+   }
+   delegate_->SetEventsBeingFlushed(false);
+ }
+@@ -470,6 +523,7 @@ void RenderWidgetTargeter::FoundTarget(
+     const std::optional<gfx::PointF>& target_location,
+     TargetingRequest* request) {
+   DCHECK(request);
++  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+   if (request->IsWebInputEventRequest() &&
+       IsMouseMiddleClick(*request->GetEvent())) {
+     middle_click_targeting_pending_ = false;
+@@ -478,18 +532,24 @@ void RenderWidgetTargeter::FoundTarget(
+   // View will be valid but there will no longer be a RenderWidgetHostImpl.
+   if (!request->GetRootView() ||
+       !request->GetRootView()->GetViewRenderInputRouter()) {
++    request->RunCallback(nullptr, std::nullopt);
++    if (weak_this) {
++      FlushEventQueue();
++    }
+     return;
+   }
+ 
+-  if (request->IsWebInputEventRequest()) {
++  if (request->HasCallback()) {
++    request->RunCallback(target, target_location);
++  } else if (request->IsWebInputEventRequest()) {
+     delegate_->DispatchEventToTarget(request->GetRootView(), target,
+                                      request->GetEvent(), request->GetLatency(),
+                                      target_location);
+-  } else {
+-    request->RunCallback(target, target_location);
+   }
+ 
+-  FlushEventQueue();
++  if (weak_this) {
++    FlushEventQueue();
++  }
+ }
+ 
+ void RenderWidgetTargeter::AsyncHitTestTimedOut(
+@@ -502,8 +562,14 @@ void RenderWidgetTargeter::AsyncHitTestTimedOut(
+   TargetingRequest request = std::move(request_in_flight_.value());
+   request_in_flight_.reset();
+ 
+-  if (!request.GetRootView())
++  if (!request.GetRootView()) {
++    auto weak_this = weak_ptr_factory_.GetWeakPtr();
++    request.RunCallback(nullptr, std::nullopt);
++    if (weak_this) {
++      FlushEventQueue();
++    }
+     return;
++  }
+ 
+   if (current_request_target) {
+     // Mark view as unresponsive so further events will not be sent to it.
+diff --git a/components/input/render_widget_targeter.h b/components/input/render_widget_targeter.h
+index 011bf17d49139..51c9320ec9a25 100644
+--- a/components/input/render_widget_targeter.h
++++ b/components/input/render_widget_targeter.h
+@@ -117,6 +117,13 @@ class RenderWidgetTargeter {
+                              const gfx::PointF& point,
+                              RenderWidgetHostAtPointCallback callback);
+ 
++  // Resolves an event using the same targeting rules as FindTargetAndDispatch,
++  // but lets the caller validate its lifetime and dispatch the resolved event.
++  // Callback requests are never coalesced with other input events.
++  void FindTargetAndCallback(RenderWidgetHostViewInput* root_view,
++                             const blink::WebInputEvent& event,
++                             RenderWidgetHostAtPointCallback callback);
++
+   void ViewWillBeDestroyed(RenderWidgetHostViewInput* view);
+ 
+   bool HasEventsPendingDispatch() const;
+@@ -141,7 +148,8 @@ class RenderWidgetTargeter {
+    public:
+     TargetingRequest(base::WeakPtr<RenderWidgetHostViewInput>,
+                      const blink::WebInputEvent&,
+-                     const ui::LatencyInfo&);
++                     const ui::LatencyInfo&,
++                     RenderWidgetHostAtPointCallback = {});
+     TargetingRequest(base::WeakPtr<RenderWidgetHostViewInput>,
+                      const gfx::PointF&,
+                      RenderWidgetHostAtPointCallback);
+@@ -158,12 +166,15 @@ class RenderWidgetTargeter {
+ 
+     bool MergeEventIfPossible(const blink::WebInputEvent& event);
+     bool IsWebInputEventRequest() const;
++    bool HasCallback() const;
+     blink::WebInputEvent* GetEvent();
+     RenderWidgetHostViewInput* GetRootView() const;
+     gfx::PointF GetLocation() const;
+     const ui::LatencyInfo& GetLatency() const;
+ 
+    private:
++    void FailEventCallback();
++
+     base::WeakPtr<RenderWidgetHostViewInput> root_view;
+ 
+     RenderWidgetHostAtPointCallback callback;
