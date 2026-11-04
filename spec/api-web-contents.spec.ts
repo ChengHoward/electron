@@ -2141,15 +2141,13 @@ describe('webContents module', () => {
       const clicked = once(ipcMain, 'dispatch-mouse-clicked');
       await w.webContents.dispatchMouseEvent({
         type: 'mousePressed',
-        x: 100,
-        y: 60,
+        position: { x: 100, y: 60 },
         button: 'left',
         clickCount: 1
       });
       await w.webContents.dispatchMouseEvent({
         type: 'mouseReleased',
-        x: 100,
-        y: 60,
+        position: { x: 100, y: 60 },
         button: 'left',
         clickCount: 1
       });
@@ -2178,8 +2176,7 @@ describe('webContents module', () => {
       const down = once(ipcMain, 'dispatch-pen-down');
       await w.webContents.dispatchMouseEvent({
         type: 'mousePressed',
-        x: 100,
-        y: 60,
+        position: { x: 100, y: 60 },
         button: 'left',
         clickCount: 1,
         pointerType: 'pen',
@@ -2198,7 +2195,7 @@ describe('webContents module', () => {
     });
   });
 
-  describe('querySelectorDeep / getNodeBoxModel / clickSelector', () => {
+  describe('querySelectorDeep / getNodeBoxModel / clickElement', () => {
     afterEach(closeAllWindows);
 
     it('finds elements inside closed shadow roots without debugger', async () => {
@@ -2217,8 +2214,7 @@ describe('webContents module', () => {
   window.__closedRoot = root;
 </script>`);
 
-      const viaPage = await w.webContents.executeJavaScript(
-        'document.querySelector("#inner")');
+      const viaPage = await w.webContents.executeJavaScript('document.querySelector("#inner")');
       expect(viaPage).to.equal(null);
 
       const el = await w.webContents.querySelectorDeep('#inner');
@@ -2255,7 +2251,7 @@ describe('webContents module', () => {
 </script>`);
 
       const clicked = once(ipcMain, 'shadow-clicked');
-      await w.webContents.clickSelector('#inner');
+      await w.webContents.clickElement({ selector: '#inner' });
       const [, isTrusted] = await clicked;
       expect(isTrusted).to.be.true();
       expect(w.webContents.debugger.isAttached()).to.be.false();
@@ -2309,12 +2305,10 @@ describe('webContents module', () => {
       const w = new BrowserWindow({ show: true, width: 400, height: 300 });
       await loadFrames(w);
 
-      const missed = await w.webContents.querySelectorDeep(
-        'iframe.b input[type="checkbox"]');
+      const missed = await w.webContents.querySelectorDeep('iframe.b input[type="checkbox"]');
       expect(missed).to.equal(null);
 
-      const el = await w.webContents.querySelectorAcrossDocuments(
-        'iframe.b input[type="checkbox"]');
+      const el = await w.webContents.querySelectorAcrossDocuments('iframe.b input[type="checkbox"]');
       expect(el).to.not.equal(null);
       expect(el.tagName.toLowerCase()).to.equal('input');
       expect(el.width).to.be.greaterThan(0);
@@ -2324,16 +2318,14 @@ describe('webContents module', () => {
     it('does not use an iframe the selector did not name', async () => {
       const w = new BrowserWindow({ show: true, width: 400, height: 300 });
       await loadFrames(w);
-      const el = await w.webContents.querySelectorAcrossDocuments(
-        'iframe.a input[type="checkbox"]');
+      const el = await w.webContents.querySelectorAcrossDocuments('iframe.a input[type="checkbox"]');
       expect(el).to.equal(null);
     });
 
     it('searches descendant frames when the selector has no iframe hop', async () => {
       const w = new BrowserWindow({ show: true, width: 400, height: 300 });
       await loadFrames(w);
-      const el = await w.webContents.querySelectorAcrossDocuments(
-        'input[type="checkbox"]');
+      const el = await w.webContents.querySelectorAcrossDocuments('input[type="checkbox"]');
       expect(el).to.not.equal(null);
       expect(el.tagName.toLowerCase()).to.equal('input');
     });
@@ -2357,9 +2349,7 @@ describe('webContents module', () => {
     ipcRenderer.send('dispatch-key-input', e.isTrusted, e.target.value);
   });
 </script>`);
-      await w.webContents.executeJavaScript(
-        'document.getElementById("i").focus()'
-      );
+      await w.webContents.executeJavaScript('document.getElementById("i").focus()');
 
       const typed = once(ipcMain, 'dispatch-key-input');
       await w.webContents.dispatchKeyEvent({
@@ -2413,11 +2403,11 @@ describe('webContents module', () => {
       const started = once(ipcMain, 'dispatch-touch-start');
       await w.webContents.dispatchTouchEvent({
         type: 'touchStart',
-        touchPoints: [{ x: 100, y: 60 }]
+        touchPoints: [{ position: { x: 100, y: 60 } }]
       });
       await w.webContents.dispatchTouchEvent({
         type: 'touchEnd',
-        touchPoints: [{ x: 100, y: 60 }]
+        touchPoints: [{ position: { x: 100, y: 60 } }]
       });
       const [, isTrusted, touchCount] = await started;
       expect(isTrusted).to.be.true();

@@ -12,6 +12,8 @@ app.commandLine.appendSwitch('site-per-process');
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'electron-sequence-')));
 const results = [];
 const measurements = [];
+const skipPerformance = process.env.INPUT_TEST_SKIP_PERFORMANCE === '1';
+const skipped = [];
 let win;
 let wc;
 let baseline;
@@ -66,7 +68,10 @@ async function target(name, frame = 'main') {
   assert.ok(matched, `Missing ${name}/${frame}: ${JSON.stringify(snap.frames)}`);
   return matched.target;
 }
-const mouse = (type, atMs = 0, options = {}) => ({ kind: 'mouse', type, atMs, x: 350, y: 60, ...options });
+const mouse = (type, atMs = 0, options = {}) => {
+  const { x = 350, y = 60, ...rest } = options;
+  return { kind: 'mouse', type, atMs, ...rest, [rest.target ? 'offset' : 'position']: { x, y } };
+};
 const key = (type, atMs = 0, options = {}) => ({ kind: 'key', type, atMs, ...options });
 const moves = (count, duration = 1000) =>
   Array.from({ length: count }, (_, i) =>
@@ -114,7 +119,9 @@ app
     baseline = await markerState();
     await check('public methods and strict cursor validation', async () => {
       for (const name of [
-        'setVirtualCursorEnabled',
+        'setAutomationOptions',
+        'getAutomationState',
+        'resetAutomationOptions',
         'setVirtualCursorImage',
         'setVirtualCursorFrameRate',
         'dispatchInputSequence'
@@ -128,7 +135,11 @@ app
         assert.throws(() => wc.setVirtualCursorImage(image));
       }
       assert.throws(() => wc.setVirtualCursorImage(null, { hotspot: { x: -1, y: 0 } }));
-      await assert.rejects(wc.setVirtualCursorEnabled('true'));
+      await assert.rejects(wc.setAutomationOptions({ virtualCursor: { enabled: 'true' } }));
+      assert.equal(wc.setVirtualCursorEnabled, undefined);
+      assert.equal(wc.clickSelector, undefined);
+      await assert.rejects(wc.dispatchMouseEvent({ type: 'mouseMoved', x: 1, y: 2 }));
+      await assert.rejects(wc.setAutomationOptions({ unknown: true }));
     });
     await check('invalid sequences reject before dispatch and remain side effect free', async () => {
       const before = await inspect('events.length');
@@ -253,7 +264,7 @@ app
       const blocker = wc.dispatchInputSequence([mouse('mouseMoved', 150)]);
       const steps = [mouse('mouseMoved', 0, { x: 370, y: 65 })];
       const pending = wc.dispatchInputSequence(steps);
-      steps[0].x = 999;
+      steps[0].position.x = 999;
       steps.push(mouse('mouseMoved'));
       await blocker;
       const result = await pending;
@@ -322,14 +333,14 @@ app
       assert.ok(timed.executionMs < 1500);
     });
     await check('cursor state updates for all native entry points and keyboard leaves it still', async () => {
-      await wc.setVirtualCursorEnabled(true);
-      await wc.dispatchMouseEvent({ type: 'mouseMoved', x: 410.5, y: 80.25 });
+      await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
+      await wc.dispatchMouseEvent({ type: 'mouseMoved', position: { x: 410.5, y: 80.25 } });
       let state = wc._getVirtualCursorState();
       assert.ok(Math.abs(state.x - 410.5) < 0.001);
       assert.ok(Math.abs(state.y - 80.25) < 0.001);
       await completed([key('char', 0, { target: await target('First'), text: 'K' })]);
       assert.equal(wc._getVirtualCursorState().x, state.x);
-      await wc.clickSelector('#button');
+      await wc.clickElement({ selector: '#button' });
       state = wc._getVirtualCursorState();
       assert.ok(state.x < 200);
       assert.equal(state.buttons, 0);
@@ -355,7 +366,13 @@ app
         cursorPixels: { width: 16, height: 16 },
         gpu: app.getGPUFeatureStatus()
       });
-      for (const fps of [15, 30, 60, 120, 0]) {
+      if (skipPerformance)
+        skipped.push({
+          name: 'cursor frame-cap performance matrix',
+          reason: 'INPUT_TEST_SKIP_PERFORMANCE=1; representative 30fps functional case retained',
+          frameRates: [15, 60, 120, 0]
+        });
+      for (const fps of skipPerformance ? [30] : [15, 30, 60, 120, 0]) {
         wc.setVirtualCursorFrameRate(fps);
         const before = wc._getVirtualCursorState();
         const cpu = process.cpuUsage();
@@ -408,42 +425,52 @@ app
         const bitmap = capture.toBitmap();
         const offset = (8 * capture.getSize().width + 8) * 4;
         assert.deepEqual([...bitmap.subarray(offset, offset + 3)], [56, 34, 12]);
-        await wc.setVirtualCursorEnabled(false);
+        await wc.resetAutomationOptions();
         await delay(150);
         assert.deepEqual((await native('pixel', 408, 58)).rgb, [12, 34, 56]);
       } finally {
         if (!win.isDestroyed()) win.setAlwaysOnTop(wasAlwaysOnTop);
       }
     });
-    await check('five second input baseline and cursor CPU comparison', async () => {
-      for (const enabled of [false, true]) {
-        await wc.setVirtualCursorEnabled(enabled);
-        wc.setVirtualCursorFrameRate(30);
-        const cpu = process.cpuUsage();
-        const start = performance.now();
-        let dispatched = 0;
-        for (let repeat = 0; repeat < 5; repeat++) dispatched += (await completed(moves(1000))).dispatchedCount;
-        const usage = process.cpuUsage(cpu);
-        measurements.push({
-          group: enabled ? 'cursor30' : 'input-only',
-          dispatched,
-          wallMs: performance.now() - start,
-          browserCpuMs: (usage.user + usage.system) / 1000
-        });
-      }
-      await wc.setVirtualCursorEnabled(false);
-    });
+    if (skipPerformance) {
+      skipped.push({
+        name: 'five second input baseline and cursor CPU comparison',
+        reason: 'INPUT_TEST_SKIP_PERFORMANCE=1'
+      });
+    } else
+      await check('five second input baseline and cursor CPU comparison', async () => {
+        for (const enabled of [false, true]) {
+          await wc.setAutomationOptions({ virtualCursor: { enabled: enabled } });
+          wc.setVirtualCursorFrameRate(30);
+          const cpu = process.cpuUsage();
+          const start = performance.now();
+          let dispatched = 0;
+          for (let repeat = 0; repeat < 5; repeat++) dispatched += (await completed(moves(1000))).dispatchedCount;
+          const usage = process.cpuUsage(cpu);
+          measurements.push({
+            group: enabled ? 'cursor30' : 'input-only',
+            dispatched,
+            wallMs: performance.now() - start,
+            browserCpuMs: (usage.user + usage.system) / 1000
+          });
+        }
+        await wc.resetAutomationOptions();
+      });
     await check('physical pointer gate precedes WebContents callbacks and preserves injected input', async () => {
       let physical = 0;
       const listener = () => physical++;
       wc.on('before-mouse-event', listener);
       try {
-        await wc.setVirtualCursorEnabled(true, { blockRealPointer: false, blockRealKeyboard: false });
+        await wc.setAutomationOptions({
+          blockRealPointer: false,
+          blockRealKeyboard: false,
+          virtualCursor: { enabled: true }
+        });
         await native('mouse', 80, 190);
         const open = await inspect('events.length');
         assert.ok(physical > 0, 'Windows messages did not reach native mouse entry');
         physical = 0;
-        await wc.setVirtualCursorEnabled(true, { blockRealPointer: true });
+        await wc.setAutomationOptions({ blockRealPointer: true, virtualCursor: { enabled: true } });
         await native('mouse', 80, 190);
         assert.equal(physical, 0);
         assert.equal(await inspect('events.length'), open);
@@ -452,7 +479,7 @@ app
         assert.ok((await inspect('events.length')) > open);
       } finally {
         wc.removeListener('before-mouse-event', listener);
-        await wc.setVirtualCursorEnabled(false);
+        await wc.resetAutomationOptions();
       }
     });
     await check(
@@ -464,19 +491,23 @@ app
         try {
           const first = await target('First');
           await completed([key('char', 0, { target: first, text: 'I' })]);
-          await wc.setVirtualCursorEnabled(true, { blockRealPointer: true, blockRealKeyboard: false });
+          await wc.setAutomationOptions({
+            blockRealPointer: true,
+            blockRealKeyboard: false,
+            virtualCursor: { enabled: true }
+          });
           callbacks = 0;
           await native('key');
           assert.ok(callbacks > 0, 'Windows messages did not reach keyboard entry');
           callbacks = 0;
           const before = await inspect("document.querySelector('#first').value");
-          await wc.setVirtualCursorEnabled(true, { blockRealKeyboard: true });
+          await wc.setAutomationOptions({ blockRealKeyboard: true, virtualCursor: { enabled: true } });
           await native('key');
           assert.equal(callbacks, 0);
           assert.equal(await inspect("document.querySelector('#first').value"), before);
           await completed([key('char', 0, { target: first, text: 'J' })]);
           assert.equal(await inspect("document.querySelector('#first').value"), before + 'J');
-          await wc.setVirtualCursorEnabled(false);
+          await wc.resetAutomationOptions();
           callbacks = 0;
           await native('key');
           assert.ok(callbacks > 0);
@@ -484,12 +515,12 @@ app
           assert.equal(wc._getVirtualCursorState().blockRealKeyboard, false);
         } finally {
           wc.removeListener('before-input-event', listener);
-          await wc.setVirtualCursorEnabled(false);
+          await wc.resetAutomationOptions();
         }
       }
     );
     await check('hidden cursor does not render or poll and resumes with latest position', async () => {
-      await wc.setVirtualCursorEnabled(true);
+      await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
       win.hide();
       await delay(150);
       const before = wc._getVirtualCursorState();
@@ -501,32 +532,29 @@ app
       win.showInactive();
       await delay(250);
       assert.ok(wc._getVirtualCursorState().draws > hidden.draws);
-      await wc.setVirtualCursorEnabled(false);
+      await wc.resetAutomationOptions();
     });
-    await check(
-      'cursor configuration preserves omitted flags, resets on disable and handles superseding calls',
-      async () => {
-        await wc.setVirtualCursorEnabled(true, { blockRealPointer: true });
-        await wc.setVirtualCursorEnabled(true);
-        assert.equal(wc._getVirtualCursorState().blockRealPointer, true);
-        await wc.setVirtualCursorEnabled(true, { blockRealKeyboard: true });
-        assert.equal(wc._getVirtualCursorState().blockRealPointer, true);
-        assert.equal(wc._getVirtualCursorState().blockRealKeyboard, true);
-        await wc.setVirtualCursorEnabled(true, { blockRealPointer: false });
-        assert.equal(wc._getVirtualCursorState().blockRealKeyboard, true);
-        const changes = await Promise.allSettled([
-          wc.setVirtualCursorEnabled(true, { blockRealPointer: true }),
-          wc.setVirtualCursorEnabled(false)
-        ]);
-        assert.equal(changes[1].status, 'fulfilled');
-        assert.equal(wc._getVirtualCursorState().enabled, false);
-        await wc.setVirtualCursorEnabled(true);
-        assert.equal(wc._getVirtualCursorState().blockRealPointer, false);
-        assert.equal(wc._getVirtualCursorState().blockRealKeyboard, false);
-        wc.setVirtualCursorImage(null);
-        await wc.setVirtualCursorEnabled(false);
-      }
-    );
+    await check('automation configuration preserves omitted flags and resets atomically', async () => {
+      await wc.setAutomationOptions({ blockRealPointer: true, virtualCursor: { enabled: true } });
+      await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
+      assert.equal(wc._getVirtualCursorState().blockRealPointer, true);
+      await wc.setAutomationOptions({ blockRealKeyboard: true, virtualCursor: { enabled: true } });
+      assert.equal(wc._getVirtualCursorState().blockRealPointer, true);
+      assert.equal(wc._getVirtualCursorState().blockRealKeyboard, true);
+      await wc.setAutomationOptions({ blockRealPointer: false, virtualCursor: { enabled: true } });
+      assert.equal(wc._getVirtualCursorState().blockRealKeyboard, true);
+      const changes = await Promise.allSettled([
+        wc.setAutomationOptions({ blockRealPointer: true, virtualCursor: { enabled: true } }),
+        wc.resetAutomationOptions()
+      ]);
+      assert.equal(changes[1].status, 'fulfilled');
+      assert.equal(wc._getVirtualCursorState().enabled, false);
+      await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
+      assert.equal(wc._getVirtualCursorState().blockRealPointer, false);
+      assert.equal(wc._getVirtualCursorState().blockRealKeyboard, false);
+      wc.setVirtualCursorImage(null);
+      await wc.resetAutomationOptions();
+    });
     await check('new APIs leave browser automation markers unchanged', async () => {
       const after = await markerState();
       for (const field of ['window', 'navigator', 'prototype', 'webdriver', 'descriptor']) {
@@ -548,7 +576,7 @@ app
         pixels[i + 3] = 255;
       }
       wc.setVirtualCursorImage(nativeImage.createFromBitmap(pixels, { width: 16, height: 16 }));
-      await wc.setVirtualCursorEnabled(true);
+      await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
       await completed([mouse('mouseMoved', 0, { x: 400, y: 50 })]);
       await delay(120);
       // Only the acceptance test attaches CDP to inspect the existing capture route.
@@ -569,14 +597,14 @@ app
         }
       } finally {
         wc.debugger.detach();
-        await wc.setVirtualCursorEnabled(false);
+        await wc.resetAutomationOptions();
       }
     });
     await check('separate WebContents keep independent cursor state and scheduling', async () => {
       const other = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
       try {
         await other.loadURL(`http://127.0.0.1:${server.address().port}/child`);
-        await other.webContents.setVirtualCursorEnabled(true, { blockRealPointer: true });
+        await other.webContents.setAutomationOptions({ blockRealPointer: true, virtualCursor: { enabled: true } });
         const main = wc.dispatchInputSequence([mouse('mouseMoved', 400, { x: 410, y: 70 })]);
         const second = await other.webContents.dispatchInputSequence([mouse('mouseMoved', 40, { x: 90, y: 50 })]);
         assert.equal(second.status, 'completed');
@@ -617,7 +645,20 @@ app
   .finally(() => {
     fs.writeFileSync(
       process.env.INPUT_TEST_REPORT || path.join(app.getPath('userData'), 'results.json'),
-      JSON.stringify({ results, measurements }, null, 2)
+      JSON.stringify(
+        {
+          suite: {
+            name: 'input-sequence',
+            performanceSkipped: skipPerformance,
+            executedCases: results.length,
+            skipped
+          },
+          results,
+          measurements
+        },
+        null,
+        2
+      )
     );
     if (win && !win.isDestroyed()) win.destroy();
     server.close();

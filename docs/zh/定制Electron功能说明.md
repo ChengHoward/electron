@@ -14,6 +14,8 @@
 
 ---
 
+本文当前输入/点击示例按 Windows `.8` 接口整理，本构建核心 4 组 55 项及公开类型检查通过。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。历史 `.4`–`.7` 的接口与证据保留在各版本记录。统一配置、默认值、状态、破坏性迁移及范围见 [Agent 自动化](./Agent自动化.md#自动化配置输入隔离与持续渲染windows-8)。
+
 ## 1. 概述
 
 本 fork 在上游 Electron 之上增强以下能力，目标是**在不依赖 `webContents.debugger` 的前提下，贴近 Chrome DevTools Protocol（CDP）的实用行为**，并补充指纹 / 网络相关能力：
@@ -21,7 +23,7 @@
 1. **User-Agent / Client Hints 覆盖** — 对齐 CDP `Emulation.setUserAgentOverride`（含请求头、跨域 iframe、`navigator.platform`、`Sec-CH-UA-*`）
 2. **可信输入** — 新增 `dispatchMouseEvent` / `dispatchKeyEvent` / `dispatchTouchEvent` / `cancelDragging`，对齐 CDP `Input.*`（无需 debugger）
 3. **隐藏 `window.chrome`** — 经 `setUserAgent(ua, { hideChrome: true })` 控制网页主世界是否暴露该对象（可运行时切换）
-4. **穿 closed shadow 的 DOM 自动化** — `querySelectorDeep` / `getNodeBoxModel` / `clickSelector`（Blink C++，无 attach）
+4. **穿 closed shadow 的 DOM 自动化** — `querySelectorDeep` / `getNodeBoxModel` / `clickElement`（Blink C++，无 attach）
 5. **`session.fetch` / `net.fetch` 请求头保序** — 绕过 WHATWG `Headers` 字母序；可选 `headerOrder` 强制线上顺序
 6. **`loadURLWithResponse`** — 导航到指定 http(s) URL，主文档返回自定义正文（per-WC，不影响同 Session 其它窗口；不注册 `protocol.handle`）
 
@@ -30,9 +32,9 @@
 | `session` / `webContents.setUserAgent` 改请求头 | 不完整，跨域 iframe 易不一致 | 浏览器侧强制改写 + NavigationEntry 继承 |
 | 跨域 OOPIF 的 `navigator.userAgent` | 常忽略覆盖 | Chromium 补丁修复 |
 | `navigator.platform` / `userAgentData` / `Sec-CH-UA-*` | 不支持经 `setUserAgent` 配置 | 支持 CDP 风格 options；可用 `null` 关闭 CH |
-| 可信输入（`isTrusted === true`）且参数同 CDP | 需 debugger，或用不兼容的 `sendInputEvent` | `dispatchMouseEvent` / `dispatchKeyEvent` / `dispatchTouchEvent`，无需 attach |
+| 可信输入（`isTrusted === true`）并使用明确的 position/offset 坐标 | 需 debugger，或用不兼容的 `sendInputEvent` | `dispatchMouseEvent` / `dispatchKeyEvent` / `dispatchTouchEvent`，无需 attach |
 | 隐藏网页 `window.chrome` | 无 | `setUserAgent(ua, { hideChrome: true })` |
-| 穿 closed shadow 的元素查找 / 盒模型 / 点击 | 需 debugger CDP DOM，或页面 JS（穿不了 closed） | `querySelectorDeep` / `getNodeBoxModel` / `clickSelector`，Blink C++，无 attach |
+| 穿 closed shadow 的元素查找 / 盒模型 / 点击 | 需 debugger CDP DOM，或页面 JS（穿不了 closed） | `querySelectorDeep` / `getNodeBoxModel` / `clickElement`，Blink C++，无 attach |
 | `ses.fetch` / `net.fetch` 自定义请求头顺序 | 经 `Request`→`Headers` 后按名字字节序发出 | 保插入序；可选 `headerOrder` 强制顺序 |
 | 导航指定 URL、主文档自定义正文 | 需自管 `protocol.handle`（Session 级易误伤） | `loadURLWithResponse`：per-WC 短路，子资源仍出网 |
 
@@ -51,7 +53,7 @@
 | 取消页面拖拽 | `contents.cancelDragging()` | **新增 API** |
 | 穿 shadow 查找元素 | `contents.querySelectorDeep(selector[, options])` | **新增 API** |
 | 节点盒模型 | `contents.getNodeBoxModel(backendNodeId[, options])` | **新增 API** |
-| 按选择器可信点击 | `contents.clickSelector(selector[, options])` | **新增 API** |
+| 按选择器可信点击 | `contents.clickElement(options)` | **新增 API** |
 | fetch 请求头保序 / 强制顺序 | `ses.fetch` / `net.fetch` 的 `headerOrder` | **增强既有 API** |
 | 导航到 URL + 自定义主文档响应 | `contents.loadURLWithResponse(url, response)` | **新增 API** |
 | OOPIF 继承 UA | （无新 API，行为修复） | Chromium 补丁 |
@@ -154,15 +156,15 @@ session.defaultSession.setUserAgent(windowsUA, {
 
 ### 3.3 `contents.dispatchMouseEvent(mouseEvent)`
 
-- **返回**：`Promise<void>`
+- **返回**：`Promise<AgentDispatchResult>`（派发结果，页面动作需另行确认）
 - **对齐**：CDP `Input.dispatchMouseEvent`
 - **无需** `webContents.debugger.attach()`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | `string` | `mousePressed` \| `mouseReleased` \| `mouseMoved` \| `mouseWheel` |
-| `x` | `number` | 相对主框视口的 CSS 像素 X |
-| `y` | `number` | 相对主框视口的 CSS 像素 Y |
+| `position` | `{ x, y }` | 无 target 时必需，主视口 CSS 坐标 |
+| `target` / `offset` | `AgentTarget` / `{ x, y }` | 目标定位及可选元素内 CSS 偏移；与 position 互斥 |
 | `modifiers` | `number` | 可选。Alt=1, Ctrl=2, Meta=4, Shift=8，默认 0 |
 | `button` | `string` | 可选。`none` \| `left` \| `middle` \| `right` \| `back` \| `forward` |
 | `buttons` | `number` | 可选。当前按下按钮位域，默认 0 |
@@ -180,15 +182,13 @@ session.defaultSession.setUserAgent(windowsUA, {
 ```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchMouseEvent({
   type: 'mousePressed',
-  x: 100,
-  y: 200,
+  position: { x: 100, y: 200 },
   button: 'left',
   clickCount: 1
 })
 await win.webContents.dispatchMouseEvent({
   type: 'mouseReleased',
-  x: 100,
-  y: 200,
+  position: { x: 100, y: 200 },
   button: 'left',
   clickCount: 1
 })
@@ -201,11 +201,11 @@ await win.webContents.dispatchMouseEvent({
 | 需 attach | 是 | 否 | 否 | 否 |
 | `isTrusted` | true | true | true | false |
 | OOPIF 坐标路由 | 有 | 有 | 弱 | 节点直达 |
-| 参数风格 | CDP | CDP | Electron 自有 | DOM |
+| 参数风格 | CDP | position/offset 坐标 + 其余 CDP 字段 | Electron 自有 | DOM |
 
 ### 3.4 `contents.dispatchKeyEvent(keyEvent)`
 
-- **返回**：`Promise<void>`
+- **返回**：`Promise<AgentDispatchResult>`（派发结果，页面动作需另行确认）
 - **对齐**：CDP `Input.dispatchKeyEvent`
 - **无需** `webContents.debugger.attach()`
 - 投递到**焦点** RenderWidget（`GetFocusedRenderWidgetHost`）
@@ -241,18 +241,18 @@ await win.webContents.dispatchKeyEvent({
 
 ### 3.5 `contents.dispatchTouchEvent(touchEvent)`
 
-- **返回**：`Promise<void>`
+- **返回**：`Promise<AgentDispatchResult>`（派发结果，页面动作需另行确认）
 - **对齐**：CDP `Input.dispatchTouchEvent`（WebTouch + TouchEmulator 注入路径）
 - 序列须以 `touchStart` 开始；`touchStart`/`touchMove` 的 `touchPoints` 非空；`touchCancel` 须为空数组
 
 ```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchTouchEvent({
   type: 'touchStart',
-  touchPoints: [{ x: 100, y: 200 }]
+  touchPoints: [{ id: 0, position: { x: 100, y: 200 } }]
 })
 await win.webContents.dispatchTouchEvent({
   type: 'touchEnd',
-  touchPoints: [{ x: 100, y: 200 }]
+  touchPoints: []
 })
 ```
 
@@ -359,15 +359,13 @@ const el = await win.webContents.querySelectorDeep('my-button >>> #submit')
 if (el) {
   await win.webContents.dispatchMouseEvent({
     type: 'mousePressed',
-    x: el.x + el.width / 2,
-    y: el.y + el.height / 2,
+    position: { x: el.x + el.width / 2, y: el.y + el.height / 2 },
     button: 'left',
     clickCount: 1
   })
   await win.webContents.dispatchMouseEvent({
     type: 'mouseReleased',
-    x: el.x + el.width / 2,
-    y: el.y + el.height / 2,
+    position: { x: el.x + el.width / 2, y: el.y + el.height / 2 },
     button: 'left',
     clickCount: 1
   })
@@ -380,9 +378,9 @@ if (el) {
 - **`backendNodeId`**：来自 `querySelectorDeep` 或 CDP DOM
 - 坐标同样为相对主框视口的 CSS 像素
 
-### 3.11 `contents.clickSelector(selector[, options])`
+### 3.11 `contents.clickElement(options)`
 
-- **返回**：`Promise<void>`
+- **返回**：`Promise<AgentDispatchResult>`（派发结果，页面动作需另行确认）
 - **作用**：按与 `querySelectorDeep` 相同规则查找元素，在中心点派发可信 press+release（同 `dispatchMouseEvent` 管线）
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -394,8 +392,8 @@ if (el) {
 | `modifiers` | `number` | `0` | Alt=1, Ctrl=2, Meta=4, Shift=8 |
 
 ```js @ts-type={win:Electron.BrowserWindow}
-await win.webContents.clickSelector('#login', { pierce: true })
-await win.webContents.clickSelector('x-card >>> button.primary')
+await win.webContents.clickElement({ selector: '#login', pierce: true })
+await win.webContents.clickElement({ selector: 'x-card >>> button.primary' })
 ```
 
 ### 3.12 `contents.loadURLWithResponse(url, response)`
@@ -458,9 +456,9 @@ await win.webContents.loadURLWithResponse('https://example.com/app', {
 
 ### 4.4 `dispatchMouseEvent` 坐标
 
-坐标相对**主框视口** CSS 像素，并按 zoom / page scale 换算；通过 `GetRenderWidgetHostAtPointAsynchronously` 路由到含 OOPIF 在内的正确 widget。
+无 target 时的 `position` 相对**主框视口** CSS 像素，带 target 时使用元素内 `offset`；按 zoom / page scale 换算；通过 `GetRenderWidgetHostAtPointAsynchronously` 路由到含 OOPIF 在内的正确 widget。
 
-### 4.5 `querySelectorDeep` / `clickSelector` 与页面 JS 的差异
+### 4.5 `querySelectorDeep` / `clickElement` 与页面 JS 的差异
 
 | | 页面 `querySelector` | 本定制 API |
 |--|----------------------|------------|
@@ -683,7 +681,7 @@ cd <repo>/mirror
 5. `dispatchMouseEvent` 点击后目标元素事件 `isTrusted === true`，跨域 iframe 内坐标可命中
 6. `dispatchKeyEvent` 可向焦点输入框写入字符；`dispatchTouchEvent` 可完成 touchStart→touchEnd
 7. `setUserAgent(ua, { hideChrome: true })` 后页面 `typeof chrome === 'undefined'`；`hideChrome: false` 恢复；与 platform / metadata 可同传
-8. `querySelectorDeep('host >>> #inner')` 能命中 closed shadow 内节点；`clickSelector` 触发的点击 `isTrusted === true`
+8. `querySelectorDeep('host >>> #inner')` 能命中 closed shadow 内节点；`clickElement` 触发的点击 `isTrusted === true`
 9. `ses.fetch(url, { headers, headerOrder })`：TLS/HTTP 回显（如 peet.ws）中自定义头顺序与 `headerOrder` 一致；对象键故意打乱时仍以 `headerOrder` 为准
 10. `loadURLWithResponse`：`getURL()` / origin 为目标站；页面正文为自定义 HTML；同 Session 另一 WC 真导航不受影响；全程无 `protocol.handle`
 
@@ -703,7 +701,7 @@ cd <repo>/mirror
 | 本文 §7.2 | 业务侧 yarn/npm 配置与 URL 约定 |
 | `mirror/README.md` | 镜像服务完整说明 |
 | `src/electron/docs/api/session.md` | 上游风格 API 文档 |
-| `src/electron/docs/api/web-contents.md` | 含 CDP 输入与 `querySelectorDeep` / `clickSelector` 等 |
+| `src/electron/docs/api/web-contents.md` | 含 CDP 输入与 `querySelectorDeep` / `clickElement` 等 |
 | `src/electron/docs/api/session.md` / `net.md` | 含 `headerOrder` |
 | `src/electron/docs/api/structures/user-agent-*.md` | options / metadata 结构 |
 | `src/electron/docs/api/structures/dom-*.md` 等 | DOM 自动化结构体 |
@@ -733,3 +731,47 @@ NativePanel 在原有入口上增加 `item`、`iconButton`、`button.variant`、
 `showPageInfoDialog` 主面板和安全子页使用原生 Views 与 Chromium 语言资源。证书窗口复用 Chromium 原版 `chrome://view-cert` HTML、CSS、TypeScript、证书树和五种导出格式，单独使用一个隔离的 WebContents，不运行 Node 或宿主 preload。其他原生面板和菜单不增加网页渲染器。网站设置继续通过事件交宿主处理，本轮没有 Cookie 管理或完整站点权限设置页。
 
 下载记录、地址建议、悬浮输入和菜单内容由宿主提供；本轮只提供原生展示与显式动作接口。方法、参数、主题、截图及本地验收范围见 [原生界面定制实现与测试](./原生界面定制实现与测试.md)，原始需求见 [定制规划](./原生界面定制规划.md)。
+
+## 2026-11-04：自动化配置与输入隔离（Windows .8）
+
+本文当前输入/点击示例按 Windows `.8` 接口整理，本构建核心 4 组 55 项及公开类型检查通过。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。历史 `.4`–`.7` 的接口与证据保留在各版本记录。统一配置、默认值、状态、破坏性迁移及范围见 [Agent 自动化](./Agent自动化.md#自动化配置输入隔离与持续渲染windows-8)。
+
+新增 `setAutomationOptions`、`getAutomationState`、`resetAutomationOptions`；`isolateInput`、真实指针/键盘屏蔽、`keepRendering` 与 `virtualCursor` 分别配置。保留 `setVirtualCursorImage` / `setVirtualCursorFrameRate`，移除 `setVirtualCursorEnabled`。点击迁移至单对象 `clickElement`，鼠标与触摸坐标使用 `position` / `offset`，单事件与点击统一返回 `AgentDispatchResult`。本版同时修正“证书查看器”简体中文标题；证书窗口跟随拖动尚未修复。
+
+核心 4 组：automation-options **10/10**；input-sequence **25/25**；agent **11/11**；click **9/9**，合计 **55/55**。公开类型生成及 TypeScript smoke 通过。
+
+上述通过计数仅属于核心四组，独立跨 frame 的五项检查另列，不隐藏其中的失败。没有整套重跑多语言原生菜单截图。输入 suite 显式跳过完整性能矩阵，跳过明细保留在其原始报告中。本次 Windows 结果不扩展到 Linux、macOS、系统输入法或未列出的硬件场景。
+
+核心 automation-options 的独立真实光标采样状态为 `inconclusive_concurrent_system_input`：lastInputTick `291938765` → `291941937`，光标 `{"x": 843, "y": 364}` → `{"x": 857, "y": 413}`。这次采样不能据此判定真实光标未移动；该 case 的焦点、保活和 OOPIF 输入断言通过。核心用例计数与此采样结论分别记录，不能把 55/55 扩写为所有测量均已通过。
+
+从未显示过且已挂载的 WebContentsView：动画计数 `314` → `336`（185ms）；截图前计数 `336` → `381`，之后为 `409`。对应 case 的相邻截图像素差异断言通过，证明这次实际观察到截图调用前动画推进与新像素。
+
+上述核心真实光标采样的未判定结果，与下方独立跨 frame 报告中的通过/失败/无法判定计数分别保留。
+
+核心配置实际报告：`D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/automation-options-results.json`。
+
+发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。
+
+原始运行数据、收据、焦点记录、类型及证书资源核验随附于 `automation-runtime-reports.zip`，包括独立跨 frame 的两个已知失败，核心通过计数不代表全部检查通过。
+
+### 独立跨 frame 连续性实测
+
+独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。该组独立于上面的核心四组计数，保留全部失败或无法判定结果，不把核心通过数写成全部验收通过。
+
+实际进程拓扑：main：OS PID `1640316`，Chromium processId `4`、routingId `1`；same：OS PID `1640316`，Chromium processId `4`、routingId `4`；cross：OS PID `1640768`，Chromium processId `5`、routingId `6`。
+
+- 跨主文档、同进程 iframe、OOPIF 的轨迹及虚拟光标位置：**通过**。
+- iframe 进入/退出事件及 CSS hover 清理：**失败**。
+- 跨边界持键拖动、显式捕获与释放：**失败**。
+- 主/子文档滚动及 125% 缩放后的坐标一致性：**通过**。
+- 可信输入、真实系统光标和前台窗口稳定性：**通过**。
+
+边界事件缺口：cross exit 缺少 `mouseout`、`mouseleave`、`pointerout`、`pointerleave`。
+
+这次报告中的两个 iframe 最终 CSS `:hover` 均已清空；不能把退出事件缺失描述成 CSS hover 残留。
+
+拖动缺口（explicit-OOPIF-capture-drag）：捕获后的移动改投其他文档 9 次；捕获/释放不完整 1 次。原 OOPIF 捕获/释放观察：`{"got": false, "lost": false, "stillActive": false, "receivedMouseup": false}`。按下后/下一步移动的 hasPointerCapture 分别为 `true` / `false`。
+
+实际运行版本：Electron `45.0.0-beta.5`、Chromium `156.0.8078.36`、Node ABI `150`。可执行文件 SHA-256：`6e0844ec5fd9bf77b0010c9c1aacfcfea93fb2b1539de2a4be9b1dd5cddf250d`。
+
+独立报告：`D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/cross-frame-results.json`。同一测试的完整事件、采样及失败明细保留在报告中；真实硬件指针、触摸笔、其他 DPI 或更复杂嵌套结构不由这五项自动外推。

@@ -1,18 +1,32 @@
 declare namespace Electron {
   interface MouseEvent {
     target?: AgentTarget;
+    type: string;
+    x: number;
+    y: number;
+    modifiers?: number;
+    button?: string;
+    buttons?: number;
+    clickCount?: number;
+    deltaX?: number;
+    deltaY?: number;
+    timestamp?: number;
+    pointerType?: string;
+    force?: number;
+    tangentialPressure?: number;
+    tiltX?: number;
+    tiltY?: number;
+    twist?: number;
   }
   interface KeyEvent {
     target?: AgentTarget;
   }
   interface TouchEvent {
     target?: AgentTarget;
-  }
-  interface ClickSelectorOptions {
-    target?: AgentTarget;
-  }
-  interface QuerySelectorDeepOptions {
-    agentInfo?: boolean;
+    type: string;
+    touchPoints: (AutomationTouchPoint & Point)[];
+    modifiers?: number;
+    timestamp?: number;
   }
   interface AgentTarget {
     webContentsId: number;
@@ -20,6 +34,9 @@ declare namespace Electron {
     routingId: number;
     documentId: number;
     backendNodeId: number;
+  }
+  interface AgentDomElementInfo extends DomElementInfo {
+    target: AgentTarget;
   }
   interface AgentElement {
     target: AgentTarget;
@@ -95,18 +112,62 @@ declare namespace Electron {
     deliveryWarning?: string;
     stages: { stage: string; status: 'ok' | 'failed' }[];
   }
-  interface VirtualCursorOptions {
-    blockRealPointer?: boolean;
-    blockRealKeyboard?: boolean;
-  }
   interface VirtualCursorImageOptions {
     hotspot?: Point;
   }
-  interface InputSequenceMouseStep extends Omit<MouseEvent, 'timestamp'> {
+  interface AutomationVirtualCursorOptions {
+    enabled?: boolean;
+    image?: NativeImage | null;
+    hotspot?: Point;
+    frameRate?: number;
+  }
+  interface AutomationOptions {
+    isolateInput?: boolean;
+    blockRealPointer?: boolean;
+    blockRealKeyboard?: boolean;
+    keepRendering?: boolean;
+    virtualCursor?: AutomationVirtualCursorOptions;
+  }
+  interface AutomationState {
+    isolateInput: boolean;
+    blockRealPointer: boolean;
+    blockRealKeyboard: boolean;
+    keepRendering: boolean;
+    virtualCursor: {
+      enabled: boolean;
+      frameRate: number;
+      hotspot: Point;
+      customImage: boolean;
+    };
+    [key: string]: unknown;
+  }
+  type AutomationMouseEvent = Omit<MouseEvent, 'x' | 'y' | 'target'> &
+    ({ target?: never; position: Point; offset?: never } | { target: AgentTarget; offset?: Point; position?: never });
+  interface AutomationTouchPoint {
+    id?: number;
+    radiusX?: number;
+    radiusY?: number;
+    rotationAngle?: number;
+    force?: number;
+    tangentialPressure?: number;
+    tiltX?: number;
+    tiltY?: number;
+    twist?: number;
+  }
+  type AutomationViewportTouchPoint = AutomationTouchPoint & { position: Point; offset?: never };
+  type AutomationTargetTouchPoint = AutomationTouchPoint & { offset: Point; position?: never };
+  type AutomationTouchEvent = Omit<TouchEvent, 'target' | 'touchPoints'> &
+    (
+      | { target?: never; touchPoints: AutomationViewportTouchPoint[] }
+      | { target: AgentTarget; touchPoints: AutomationTargetTouchPoint[] }
+    );
+  type ClickElementOptions = ClickSelectorOptions &
+    ({ selector: string; target?: never } | { target: AgentTarget; selector?: never });
+  type InputSequenceMouseStep = AutomationMouseEvent & {
     kind: 'mouse';
     atMs: number;
     timestamp?: never;
-  }
+  };
   interface InputSequenceKeyStep extends Omit<KeyEvent, 'timestamp'> {
     kind: 'key';
     atMs: number;
@@ -134,7 +195,9 @@ declare namespace Electron {
     cleanup: { dispatched: number; failed: number };
   }
   interface WebContents {
-    setVirtualCursorEnabled(enabled: boolean, options?: VirtualCursorOptions): Promise<void>;
+    setAutomationOptions(options: AutomationOptions): Promise<void>;
+    getAutomationState(): AutomationState;
+    resetAutomationOptions(): Promise<void>;
     setVirtualCursorImage(image: NativeImage | null, options?: VirtualCursorImageOptions): void;
     setVirtualCursorFrameRate(fps: number): void;
     dispatchInputSequence(
@@ -142,30 +205,31 @@ declare namespace Electron {
       options?: InputSequenceOptions
     ): Promise<InputSequenceResult>;
     getAgentSnapshot(options?: AgentSnapshotOptions): Promise<AgentSnapshot>;
-    findAgentElements(query: AgentFindQuery, options?: AgentSnapshotOptions): Promise<AgentSnapshot>;
-    dispatchMouseEvent(
-      event: Omit<MouseEvent, 'x' | 'y'> & { target: AgentTarget; x?: number; y?: number }
-    ): Promise<AgentDispatchResult>;
-    dispatchKeyEvent(event: KeyEvent & { target: AgentTarget }): Promise<AgentDispatchResult>;
-    dispatchTouchEvent(event: TouchEvent & { target: AgentTarget }): Promise<AgentDispatchResult>;
-    clickSelector(
-      selector: string,
-      options: ClickSelectorOptions & { target: AgentTarget }
-    ): Promise<AgentDispatchResult>;
     querySelectorAcrossDocuments(
       selector: string,
-      options: QuerySelectorDeepOptions & { agentInfo: true }
-    ): Promise<AgentSnapshot>;
+      options?: QuerySelectorDeepOptions
+    ): Promise<AgentDomElementInfo | null>;
+    findAgentElements(query: AgentFindQuery, options?: AgentSnapshotOptions): Promise<AgentSnapshot>;
+    dispatchMouseEvent(event: AutomationMouseEvent): Promise<AgentDispatchResult>;
+    dispatchKeyEvent(event: KeyEvent): Promise<AgentDispatchResult>;
+    dispatchTouchEvent(event: AutomationTouchEvent): Promise<AgentDispatchResult>;
+    clickElement(options: ClickElementOptions): Promise<AgentDispatchResult>;
   }
 
   namespace Common {
-    interface VirtualCursorOptions extends Electron.VirtualCursorOptions {}
+    interface AutomationOptions extends Electron.AutomationOptions {}
+    interface AutomationState extends Electron.AutomationState {}
+    interface AutomationVirtualCursorOptions extends Electron.AutomationVirtualCursorOptions {}
+    type AutomationMouseEvent = Electron.AutomationMouseEvent;
+    type AutomationTouchEvent = Electron.AutomationTouchEvent;
+    type ClickElementOptions = Electron.ClickElementOptions;
     interface VirtualCursorImageOptions extends Electron.VirtualCursorImageOptions {}
-    interface InputSequenceMouseStep extends Electron.InputSequenceMouseStep {}
+    type InputSequenceMouseStep = Electron.InputSequenceMouseStep;
     interface InputSequenceKeyStep extends Electron.InputSequenceKeyStep {}
     interface InputSequenceOptions extends Electron.InputSequenceOptions {}
     interface InputSequenceResult extends Electron.InputSequenceResult {}
     interface AgentTarget extends Electron.AgentTarget {}
+    interface AgentDomElementInfo extends Electron.AgentDomElementInfo {}
     interface AgentElement extends Electron.AgentElement {}
     interface AgentSnapshotOptions extends Electron.AgentSnapshotOptions {}
     interface AgentFrameCoverage extends Electron.AgentFrameCoverage {}
@@ -175,13 +239,19 @@ declare namespace Electron {
   }
 
   namespace Main {
-    interface VirtualCursorOptions extends Electron.VirtualCursorOptions {}
+    interface AutomationOptions extends Electron.AutomationOptions {}
+    interface AutomationState extends Electron.AutomationState {}
+    interface AutomationVirtualCursorOptions extends Electron.AutomationVirtualCursorOptions {}
+    type AutomationMouseEvent = Electron.AutomationMouseEvent;
+    type AutomationTouchEvent = Electron.AutomationTouchEvent;
+    type ClickElementOptions = Electron.ClickElementOptions;
     interface VirtualCursorImageOptions extends Electron.VirtualCursorImageOptions {}
-    interface InputSequenceMouseStep extends Electron.InputSequenceMouseStep {}
+    type InputSequenceMouseStep = Electron.InputSequenceMouseStep;
     interface InputSequenceKeyStep extends Electron.InputSequenceKeyStep {}
     interface InputSequenceOptions extends Electron.InputSequenceOptions {}
     interface InputSequenceResult extends Electron.InputSequenceResult {}
     interface AgentTarget extends Electron.AgentTarget {}
+    interface AgentDomElementInfo extends Electron.AgentDomElementInfo {}
     interface AgentElement extends Electron.AgentElement {}
     interface AgentSnapshotOptions extends Electron.AgentSnapshotOptions {}
     interface AgentFrameCoverage extends Electron.AgentFrameCoverage {}
@@ -191,13 +261,19 @@ declare namespace Electron {
   }
 
   namespace CrossProcessExports {
-    interface VirtualCursorOptions extends Electron.VirtualCursorOptions {}
+    interface AutomationOptions extends Electron.AutomationOptions {}
+    interface AutomationState extends Electron.AutomationState {}
+    interface AutomationVirtualCursorOptions extends Electron.AutomationVirtualCursorOptions {}
+    type AutomationMouseEvent = Electron.AutomationMouseEvent;
+    type AutomationTouchEvent = Electron.AutomationTouchEvent;
+    type ClickElementOptions = Electron.ClickElementOptions;
     interface VirtualCursorImageOptions extends Electron.VirtualCursorImageOptions {}
-    interface InputSequenceMouseStep extends Electron.InputSequenceMouseStep {}
+    type InputSequenceMouseStep = Electron.InputSequenceMouseStep;
     interface InputSequenceKeyStep extends Electron.InputSequenceKeyStep {}
     interface InputSequenceOptions extends Electron.InputSequenceOptions {}
     interface InputSequenceResult extends Electron.InputSequenceResult {}
     interface AgentTarget extends Electron.AgentTarget {}
+    interface AgentDomElementInfo extends Electron.AgentDomElementInfo {}
     interface AgentElement extends Electron.AgentElement {}
     interface AgentSnapshotOptions extends Electron.AgentSnapshotOptions {}
     interface AgentFrameCoverage extends Electron.AgentFrameCoverage {}

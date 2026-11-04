@@ -17,6 +17,7 @@
     "typings"
   ],
   "exclude": [
-    "spec/fixtures/type-stripping"
+    "spec/fixtures/type-stripping",
+    "typings/agent-automation.d.ts"
   ]
 }

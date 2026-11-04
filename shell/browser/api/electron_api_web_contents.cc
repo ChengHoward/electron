@@ -1069,6 +1069,7 @@ WebContents::WebContents(v8::Isolate* isolate,
 {
   // Read options.
   options.Get("backgroundThrottling", &background_throttling_);
+  requested_background_throttling_ = background_throttling_;
 
   // Get type
   options.Get("type", &type_);
@@ -2786,6 +2787,9 @@ SkRegion* WebContents::draggable_region() {
 void WebContents::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
   base::AutoReset<bool> resetter(&is_safe_to_delete_, false);
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      !navigation_handle->IsSameDocument())
+    ++automation_input_generation_;
   load_url_promises_.DidStartNavigation(
       navigation_handle->GetURL().possibly_invalid_spec(),
       navigation_handle->IsSameDocument(), navigation_handle->IsInMainFrame());
@@ -3133,6 +3137,9 @@ content::WebContents* WebContents::GetOpenDevToolsWebContents() const {
 void WebContents::WebContentsDestroyed() {
   if (input_sequence_)
     input_sequence_->Cancel("WEBCONTENTS_DESTROYED");
+  automation_keep_rendering_ = false;
+  automation_agent_input_active_ = false;
+  agent_input_capture_.RunAndReset();
 #if BUILDFLAG(IS_WIN)
   virtual_cursor_.reset();
 #endif
@@ -3183,6 +3190,12 @@ bool WebContents::GetBackgroundThrottling() const {
 }
 
 void WebContents::SetBackgroundThrottling(bool allowed) {
+  requested_background_throttling_ = allowed;
+  ApplyBackgroundThrottling(allowed && !automation_keep_rendering_ &&
+                            !automation_agent_input_active_);
+}
+
+void WebContents::ApplyBackgroundThrottling(bool allowed) {
   background_throttling_ = allowed;
 
   if (owner_window_) {
@@ -5465,7 +5478,8 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
   RouteAgentInput(
       web_contents(), params, root_view, point_in_root,
       base::BindOnce(
-          [](base::WeakPtr<WebContents> self, bool require_dispatch,
+          [](base::WeakPtr<WebContents> self, uint64_t generation,
+             content::WeakDocumentPtr document, bool require_dispatch,
              int sequence_id,
              std::shared_ptr<std::unique_ptr<blink::WebMouseEvent>> event,
              std::shared_ptr<gin_helper::Promise<void>> promise,
@@ -5473,6 +5487,11 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
              std::optional<gfx::PointF> point) {
             if (!self || !self->web_contents()) {
               promise->RejectWithErrorMessage("WebContents was destroyed");
+              return;
+            }
+            if (self->automation_input_generation_ != generation ||
+                !document.AsRenderFrameHostIfValid()) {
+              promise->RejectWithErrorMessage("AUTOMATION_INPUT_CANCELLED");
               return;
             }
             if (sequence_id && self->input_sequence_id_ != sequence_id) {
@@ -5538,7 +5557,11 @@ v8::Local<v8::Promise> WebContents::DispatchMouseEventParams(
               self->input_sequence_->MouseRouted(widget_host);
             promise->Resolve();
           },
-          GetWeakPtr(),
+          GetWeakPtr(), automation_input_generation_,
+          (AgentInputFrame(web_contents(), params)
+               ? AgentInputFrame(web_contents(), params)
+               : web_contents()->GetPrimaryMainFrame())
+              ->GetWeakDocumentPtr(),
           AgentInputFrame(web_contents(), params) != nullptr ||
               params.Has("_sequenceId"),
           params.ValueOrDefault<int>("_sequenceId", 0), shared_event,
@@ -5787,13 +5810,22 @@ content::RenderFrameHost* GetLiveMainFrame(content::WebContents* contents,
 }  // namespace
 
 void WebContents::SetAgentInputActive(bool active) {
-  if (!active) {
-    agent_input_capture_.RunAndReset();
-  } else if (!agent_input_capture_) {
+  automation_agent_input_active_ = active;
+  UpdateAutomationRendering();
+}
+
+void WebContents::UpdateAutomationRendering() {
+  const bool active =
+      automation_keep_rendering_ || automation_agent_input_active_;
+  if (active && !agent_input_capture_ && web_contents()) {
     agent_input_capture_ = web_contents()->IncrementCapturerCount(
         gfx::Size(), /*stay_hidden=*/true, /*stay_awake=*/false,
         /*is_activity=*/false);
+  } else if (!active) {
+    agent_input_capture_.RunAndReset();
   }
+  if (web_contents())
+    ApplyBackgroundThrottling(requested_background_throttling_ && !active);
 }
 
 v8::Local<v8::Promise> WebContents::FlushAgentInput(int process, int routing) {
@@ -6697,13 +6729,19 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
   RouteAgentInput(
       web_contents(), params, root_view, point_in_root,
       base::BindOnce(
-          [](base::WeakPtr<WebContents> self,
+          [](base::WeakPtr<WebContents> self, uint64_t generation,
+             content::WeakDocumentPtr document,
              std::shared_ptr<std::vector<blink::WebTouchEvent>> events,
              std::shared_ptr<gin_helper::Promise<void>> promise,
              base::WeakPtr<content::RenderWidgetHostViewBase> target,
              std::optional<gfx::PointF> point) {
             if (!self || !self->web_contents()) {
               promise->RejectWithErrorMessage("WebContents was destroyed");
+              return;
+            }
+            if (self->automation_input_generation_ != generation ||
+                !document.AsRenderFrameHostIfValid()) {
+              promise->RejectWithErrorMessage("AUTOMATION_INPUT_CANCELLED");
               return;
             }
             if (!target || !point.has_value()) {
@@ -6772,7 +6810,12 @@ v8::Local<v8::Promise> WebContents::DispatchTouchEvent(gin::Arguments* args) {
             widget_host->GetWidgetInputHandler()->PingMainThread(
                 base::DoNothing());
           },
-          GetWeakPtr(), shared_events, shared_promise));
+          GetWeakPtr(), automation_input_generation_,
+          (AgentInputFrame(web_contents(), params)
+               ? AgentInputFrame(web_contents(), params)
+               : web_contents()->GetPrimaryMainFrame())
+              ->GetWeakDocumentPtr(),
+          shared_events, shared_promise));
 
   return handle;
 }
@@ -8101,8 +8144,11 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::IsFocused>("isFocused")
       .SetMethod<&WebContents::SendInputEvent>("sendInputEvent")
       .SetMethod<&WebContents::DispatchMouseEvent>("dispatchMouseEvent")
-      .SetMethod<&WebContents::SetVirtualCursorEnabled>(
-          "setVirtualCursorEnabled")
+      .SetMethod<&WebContents::SetAutomationOptions>("_setAutomationOptions")
+      .SetMethod<&WebContents::GetAutomationState>("_getAutomationState")
+      .SetMethod<&WebContents::ResetAutomationOptions>(
+          "_resetAutomationOptions")
+      .SetMethod<&WebContents::BeginAutomationReset>("_beginAutomationReset")
       .SetMethod<&WebContents::SetVirtualCursorImage>("setVirtualCursorImage")
       .SetMethod<&WebContents::SetVirtualCursorFrameRate>(
           "setVirtualCursorFrameRate")
@@ -8117,7 +8163,7 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
       .SetMethod<&WebContents::QuerySelectorAcrossDocuments>(
           "querySelectorAcrossDocuments")
       .SetMethod<&WebContents::GetNodeBoxModel>("getNodeBoxModel")
-      .SetMethod<&WebContents::ClickSelector>("clickSelector")
+      .SetMethod<&WebContents::ClickSelector>("_clickElementSelector")
       .SetMethod<&WebContents::SetFileInputFiles>("setFileInputFiles")
       .SetMethod<&WebContents::DispatchKeyEvent>("dispatchKeyEvent")
       .SetMethod<&WebContents::DispatchTouchEvent>("dispatchTouchEvent")

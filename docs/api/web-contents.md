@@ -2310,48 +2310,18 @@ Sends an input `event` to the page.
 
 #### `contents.dispatchMouseEvent(mouseEvent)`
 
-* `mouseEvent` Object - Compatible with CDP `Input.dispatchMouseEvent`
-  * `type` string - `mousePressed`, `mouseReleased`, `mouseMoved`, or `mouseWheel`
-  * `x` number - X in CSS pixels relative to the main frame viewport
-  * `y` number - Y in CSS pixels relative to the main frame viewport
-  * `modifiers` Integer (optional) - Alt=1, Ctrl=2, Meta=4, Shift=8 (default: 0)
-  * `button` string (optional) - `none`, `left`, `middle`, `right`, `back`, `forward` (default: `none`)
-  * `buttons` Integer (optional) - Bitfield of currently pressed buttons (default: 0)
-  * `clickCount` Integer (optional) - Default: 0
-  * `deltaX` number (optional) - Required for `mouseWheel`
-  * `deltaY` number (optional) - Required for `mouseWheel`
-  * `timestamp` number (optional) - Seconds since Unix epoch (default: now)
-  * `pointerType` string (optional) - `mouse` or `pen` (default: `mouse`)
-  * `force` number (optional) - Normalized pressure in `[0,1]` (default: 0)
-  * `tangentialPressure` number (optional) - Normalized tangential pressure in `[-1,1]` (default: 0)
-  * `tiltX` number (optional) - Pen tilt X in degrees `[-90,90]` (default: 0)
-  * `tiltY` number (optional) - Pen tilt Y in degrees `[-90,90]` (default: 0)
-  * `twist` Integer (optional) - Pen twist in degrees `[0,359]` (default: 0)
+* `mouseEvent` AutomationMouseEvent - Mouse event using `position: { x, y }` in viewport CSS pixels, or `target` with optional element-relative `offset: { x, y }`. Omitted target offsets use the element center. Top-level x/y are rejected.
 
-Returns `Promise<void>` - Resolves when the event has been forwarded to the
-target render widget (including OOPIF routing).
+Returns `Promise<AgentDispatchResult>` - Reports native dispatch or the failure stage; dispatch does not prove a page action succeeded.
 
-Dispatches a mouse event through Chromium's input pipeline, matching CDP
-`Input.dispatchMouseEvent` without requiring `webContents.debugger.attach()`.
-
-Unlike DOM `element.click()`, events are trusted (`isTrusted === true`) and
-go through hit-testing / widget routing like a real user click.
+Uses Chromium input routing without debugger attachment or operating-system activation. Mouse types, button fields, modifiers, wheel deltas and pen properties retain their existing event meanings. `timestamp`, when supplied, is seconds since Unix epoch and does not schedule delivery.
 
 ```js @ts-type={win:Electron.BrowserWindow}
-// Equivalent to debugger.sendCommand('Input.dispatchMouseEvent', ...)
 await win.webContents.dispatchMouseEvent({
-  type: 'mousePressed',
-  x: 100,
-  y: 200,
-  button: 'left',
-  clickCount: 1
+  type: 'mousePressed', position: { x: 100, y: 200 }, button: 'left', clickCount: 1
 })
 await win.webContents.dispatchMouseEvent({
-  type: 'mouseReleased',
-  x: 100,
-  y: 200,
-  button: 'left',
-  clickCount: 1
+  type: 'mouseReleased', position: { x: 100, y: 200 }, button: 'left', clickCount: 1
 })
 ```
 
@@ -2360,13 +2330,14 @@ await win.webContents.dispatchMouseEvent({
 * `selector` string - CSS selector. An `iframe` or `frame` compound followed by a descendant, child, or `>>>` combinator continues inside that frame's document, including cross-origin OOPIFs. Example: `iframe[src*="challenges.cloudflare.com"] input[type="checkbox"]`
 * `options` [QuerySelectorDeepOptions](structures/query-selector-deep-options.md) (optional) - Same as `querySelectorDeep`
 
-Returns `Promise<(DomElementInfo | null)>` - [DomElementInfo](structures/dom-element-info.md)
+Returns `Promise<(AgentDomElementInfo | null)>` - [DomElementInfo](structures/dom-element-info.md)
 when found, otherwise `null`.
 
 Within one document this uses the same closed-shadow rules as `querySelectorDeep`.
 Selectors that do not name a frame still search the current document first, then
 descendant frames. Coordinates are CSS pixels in the main-frame viewport (the
-same space as `dispatchMouseEvent`). `querySelectorDeep` does not enter frames.
+same space as `dispatchMouseEvent.position`). The first match also includes a
+`target` suitable for document-checked input, including explicit frame paths. `querySelectorDeep` does not enter frames.
 
 ```js @ts-type={win:Electron.BrowserWindow}
 const box = await win.webContents.querySelectorAcrossDocuments(
@@ -2377,15 +2348,13 @@ if (box) {
   const y = box.y + box.height / 2
   await win.webContents.dispatchMouseEvent({
     type: 'mousePressed',
-    x,
-    y,
+    position: { x, y },
     button: 'left',
     clickCount: 1
   })
   await win.webContents.dispatchMouseEvent({
     type: 'mouseReleased',
-    x,
-    y,
+    position: { x, y },
     button: 'left',
     clickCount: 1
   })
@@ -2408,8 +2377,7 @@ const el = await win.webContents.querySelectorDeep('my-button >>> #submit')
 if (el) {
   await win.webContents.dispatchMouseEvent({
     type: 'mousePressed',
-    x: el.x + el.width / 2,
-    y: el.y + el.height / 2,
+    position: { x: el.x + el.width / 2, y: el.y + el.height / 2 },
     button: 'left',
     clickCount: 1
   })
@@ -2424,24 +2392,16 @@ if (el) {
 Returns `Promise<(DomBoxModel | null)>` - [DomBoxModel](structures/dom-box-model.md)
 in CSS pixels (same space as `dispatchMouseEvent`), or `null` if the node is gone.
 
-#### `contents.clickSelector(selector[, options])`
+#### `contents.clickElement(options)`
 
-* `selector` string - Same as `querySelectorDeep`
-* `options` [ClickSelectorOptions](structures/click-selector-options.md) (optional)
+* `options` ClickElementOptions - Exactly one of `selector` or `target`, plus optional `pierce`, `scrollIntoView`, `button`, `clickCount` and `modifiers`. Selector lookup supports closed author shadow roots. Resolved targets retain document and frame identity.
 
-Returns `Promise<void>` - Finds the element (piercing closed shadow when enabled) and
-dispatches a trusted press+release at its center via the same pipeline as
-`dispatchMouseEvent`.
+Returns `Promise<AgentDispatchResult>` - Reports native press/release dispatch or failure; a partial click includes a delivery warning.
 
-`clickCount: 2` sends two complete press/release pairs, with event counts 1 and 2.
-Button and modifier options apply to both selector and resolved-target calls.
-Target calls serialize the complete click sequence with other target inputs;
-`pierce` only applies to selector lookup. Invalid button, count, modifier or
-boolean options reject before sending any input.
+The default button is `left`, count is `1`, and scrolling is enabled. Omitted modifiers follow this WebContents virtual key state, or `0` when none are held. `clickCount: 2` sends two full press/release pairs with increasing counts. Invalid options reject before input. The complete click shares the WebContents input queue.
 
 ```js @ts-type={win:Electron.BrowserWindow}
-await win.webContents.clickSelector('#login', { pierce: true })
-await win.webContents.clickSelector('x-card >>> button.primary')
+await win.webContents.clickElement({ selector: '#login', pierce: true })
 ```
 
 #### `contents.dispatchKeyEvent(keyEvent)`
@@ -2462,8 +2422,7 @@ await win.webContents.clickSelector('x-card >>> button.primary')
   * `location` Integer (optional) - 1=Left, 2=Right
   * `commands` string[] (optional) - Editing commands (e.g. `selectAll`)
 
-Returns `Promise<void>` - Resolves when the event has been forwarded to the
-focused render widget.
+Returns `Promise<AgentDispatchResult>` - Reports dispatch to the current virtual focused render widget or failure. An optional `target` selects a page element without activating the system window.
 
 ```js @ts-type={win:Electron.BrowserWindow}
 await win.webContents.dispatchKeyEvent({
@@ -2492,35 +2451,15 @@ await win.webContents.dispatchKeyEvent({
 
 #### `contents.dispatchTouchEvent(touchEvent)`
 
-* `touchEvent` Object - Compatible with CDP `Input.dispatchTouchEvent`
-  * `type` string - `touchStart`, `touchEnd`, `touchMove`, or `touchCancel`
-  * `touchPoints` Object[] - Active points (`touchStart`/`touchMove` non-empty; `touchCancel` empty)
-    * `x` number - X in CSS pixels relative to the main frame viewport
-    * `y` number - Y in CSS pixels relative to the main frame viewport
-    * `id` Integer (optional)
-    * `radiusX` number (optional)
-    * `radiusY` number (optional)
-    * `rotationAngle` number (optional)
-    * `force` number (optional) - Default: 1
-    * `tangentialPressure` number (optional)
-    * `tiltX` number (optional)
-    * `tiltY` number (optional)
-    * `twist` Integer (optional)
-  * `modifiers` Integer (optional) - Alt=1, Ctrl=2, Meta=4, Shift=8 (default: 0)
-  * `timestamp` number (optional) - Seconds since Unix epoch (default: now)
+* `touchEvent` AutomationTouchEvent - `type`, `touchPoints`, optional `modifiers`, `timestamp` and `target`. Each point uses `position: { x, y }` in viewport CSS pixels without a target, or `offset: { x, y }` relative to the target. Legacy x/y are rejected.
 
-Returns `Promise<void>` - Resolves when the event has been injected (including
-OOPIF routing). Must begin a sequence with `touchStart`.
+Returns `Promise<AgentDispatchResult>` - Reports native dispatch or failure, including cross-process frame routing.
+
+Types are `touchStart`, `touchMove`, `touchEnd` and `touchCancel`. Start and move require nonempty point arrays; cancel uses an empty array. A touch sequence must retain the same target. Radius, pressure, tilt, twist, rotation and identifier point properties retain their existing meaning. `timestamp` uses Unix seconds.
 
 ```js @ts-type={win:Electron.BrowserWindow}
-await win.webContents.dispatchTouchEvent({
-  type: 'touchStart',
-  touchPoints: [{ x: 100, y: 200 }]
-})
-await win.webContents.dispatchTouchEvent({
-  type: 'touchEnd',
-  touchPoints: [{ x: 100, y: 200 }]
-})
+await win.webContents.dispatchTouchEvent({ type: 'touchStart', touchPoints: [{ position: { x: 100, y: 200 } }] })
+await win.webContents.dispatchTouchEvent({ type: 'touchEnd', touchPoints: [] })
 ```
 
 #### `contents.cancelDragging()`

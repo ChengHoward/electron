@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Wed, 4 Nov 2026 12:00:00 +0800
+Subject: feat: isolate renderer page focus from native window activation
+
+Allow an embedder-owned input channel to preserve renderer focus while native
+activation changes. Remember native focus and active requests separately and
+restore the current native view focus without activating its platform window.
+The opt-in state is per RenderWidgetHost and does not alter visibility, native
+input capture, focus emulation or global browser preferences.
+
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index 7b5c2d36aa1c1..58bc59a4ec70b 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -1521,7 +1521,28 @@ void RenderWidgetHostImpl::FlushForTesting() {
+   GetRenderInputRouter()->FlushForTesting();
+ }
+ 
++void RenderWidgetHostImpl::SetInputIsolationEnabled(bool enabled) {
++  if (!input_isolation_enabled_ && !enabled) {
++    return;
++  }
++  // Reapply enabled focus when a new renderer/widget binding is ready even if
++  // this browser-side host retained its isolation state across a process exit.
++  input_isolation_enabled_ = enabled;
++  if (!enabled) {
++    // Never call View::Focus(): restoring a renderer channel must not activate
++    // its native window. Native requests may have changed while isolated.
++    native_page_focused_ = view_ && view_->HasFocus();
++  }
++  SetActive(native_page_active_);
++  SetPageFocus(native_page_focused_);
++}
++
+ void RenderWidgetHostImpl::SetPageFocus(bool focused) {
++  native_page_focused_ = focused;
++  if (focused && !input_isolation_enabled_) {
++    native_page_active_ = true;
++  }
++  focused = input_isolation_enabled_ || focused;
+   OPTIONAL_TRACE_EVENT1("content", "RenderWidgetHostImpl::SetPageFocus",
+                         "is_focused", focused);
+   is_focused_ = focused;
+@@ -1591,6 +1612,8 @@ void RenderWidgetHostImpl::LostCapture() {
+ }
+ 
+ void RenderWidgetHostImpl::SetActive(bool active) {
++  native_page_active_ = active;
++  active = input_isolation_enabled_ || active;
+   is_active_ = active;
+   if (blink_frame_widget_) {
+     blink_frame_widget_->SetActive(active);
+diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+index a9ad4bee3b649..2c6fbe160e487 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -565,6 +565,12 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   }
+   bool IsFocusEmulationEnabled() const { return focus_emulation_enabled_; }
+ 
++  // Keeps renderer page focus independent of native window activation. This
++  // does not focus a platform view or grant native input capture. Disabling
++  // synchronizes page focus with the view's current native focus.
++  void SetInputIsolationEnabled(bool enabled);
++  bool IsInputIsolationEnabled() const { return input_isolation_enabled_; }
++
+   // Support for focus tracking on multi-FrameTree cases. This will notify all
+   // descendants (including nested FrameTrees) to distribute a "page focus"
+   // update. Users other than WebContents and RenderWidgetHost should use
+@@ -1632,6 +1638,11 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   // causing HasFocus to return false when is_focused_ is true.
+   bool is_focused_ = false;
+ 
++  // Preserve native requests while isolated renderer focus remains effective.
++  bool native_page_focused_ = false;
++  bool native_page_active_ = false;
++  bool input_isolation_enabled_ = false;
++
+   bool focus_emulation_enabled_ = false;
+ 
+   // Indicates whether what the last focus active state that was sent to the

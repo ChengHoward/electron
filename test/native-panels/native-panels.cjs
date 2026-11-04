@@ -871,8 +871,7 @@ async function main() {
           kind: 'mouse',
           type: 'mouseMoved',
           atMs: index * 35,
-          x: 450 + index,
-          y: 250
+          position: { x: 450 + index, y: 250 }
         }));
         steps.push(
           ...Array.from('AGENT', (text, index) => ({ kind: 'key', type: 'char', atMs: 750 + index * 10, target, text }))
@@ -899,7 +898,11 @@ async function main() {
     }
   );
   await check('native input and dismissal preserve real page-input protection while Agent input succeeds', async () => {
-    await wc.setVirtualCursorEnabled(true, { blockRealPointer: true, blockRealKeyboard: true });
+    await wc.setAutomationOptions({
+      blockRealPointer: true,
+      blockRealKeyboard: true,
+      virtualCursor: { enabled: true }
+    });
     try {
       await usingPanel(async (panel) => {
         await show(panel);
@@ -925,7 +928,7 @@ async function main() {
         assert.equal(await inspect("document.querySelector('#agent').value"), `${before}A`);
       });
     } finally {
-      await wc.setVirtualCursorEnabled(false);
+      await wc.resetAutomationOptions();
     }
   });
   await check('hide/show reuses native resources and destroy is idempotent with one closed event', async () => {

@@ -73,12 +73,11 @@ async function shadowTargets() {
 async function recordedClick(target, options = {}) {
   const frame = target ? frameFor(target) : win.webContents.mainFrame;
   await frame.executeJavaScript('window.events=[];null');
-  const result = await win.webContents.clickSelector(target ? '' : '#host >>> #shadow', {
+  const result = await win.webContents.clickElement({
     ...options,
-    ...(target ? { target } : {})
+    ...(target ? { target } : { selector: target ? '' : '#host >>> #shadow' })
   });
-  if (target) assert.equal(result.status, 'dispatched', JSON.stringify(result));
-  else assert.equal(result, undefined, 'legacy return value changed');
+  assert.equal(result.status, 'dispatched', JSON.stringify(result));
   await win.webContents._flushAgentInput(frame.processId, frame.routingId);
   return frame.executeJavaScript('window.events');
 }
@@ -150,8 +149,8 @@ app
       );
       await wc.mainFrame.executeJavaScript('window.events=[];null');
       const outcomes = await Promise.all([
-        wc.clickSelector('', { target: a.target, clickCount: 2 }),
-        wc.clickSelector('', { target: b.target })
+        wc.clickElement({ target: a.target, clickCount: 2 }),
+        wc.clickElement({ target: b.target })
       ]);
       assert.ok(
         outcomes.every((outcome) => outcome.status === 'dispatched'),
@@ -189,7 +188,7 @@ app
         await frame.executeJavaScript('window.events=[];null');
         for (const options of invalid) {
           await assert.rejects(
-            wc.clickSelector('#host >>> #shadow', { ...options, ...(target ? { target } : {}) }),
+            wc.clickElement({ ...options, ...(target ? { target } : { selector: '#host >>> #shadow' }) }),
             /Invalid|must/
           );
         }
@@ -201,18 +200,20 @@ app
         (item) => item.target.routingId === wc.mainFrame.routingId
       );
       await wc.mainFrame.executeJavaScript('window.scrollTo(0,0);window.events=[];null');
-      const blocked = await wc.clickSelector('', { target: far.target, scrollIntoView: false });
+      const blocked = await wc.clickElement({ target: far.target, scrollIntoView: false });
       assert.equal(blocked.status, 'failed', JSON.stringify(blocked));
       assert.equal(await wc.mainFrame.executeJavaScript('window.scrollY'), 0);
       assert.deepEqual(await wc.mainFrame.executeJavaScript('window.events'), []);
-      const clicked = await wc.clickSelector('', { target: far.target, scrollIntoView: true });
+      const clicked = await wc.clickElement({ target: far.target, scrollIntoView: true });
       assert.equal(clicked.status, 'dispatched', JSON.stringify(clicked));
       assert.ok(await wc.mainFrame.executeJavaScript('window.scrollY>0'));
       assertPressRelease(await wc.mainFrame.executeJavaScript('window.events'), 0, 1);
       await wc.mainFrame.executeJavaScript('window.scrollTo(0,0);null');
     });
     await check('pierce only controls selector lookup, not a previously resolved target', async () => {
-      await assert.rejects(wc.clickSelector('#shadow', { pierce: false }), /No node found/);
+      const missing = await wc.clickElement({ selector: '#shadow', pierce: false });
+      assert.equal(missing.status, 'failed');
+      assert.match(missing.reason, /No node found/);
       assertPressRelease(await recordedClick(targets[0].target, { pierce: false }), 0, 1);
     });
     await check('target clicks remain trusted while hidden and do not activate the window', async () => {
@@ -228,7 +229,7 @@ app
       await wc.mainFrame.executeJavaScript(
         "document.querySelector('#a').outerHTML='<button id=\"a\">Replacement</button>';window.events=[];null"
       );
-      const result = await wc.clickSelector('', { target: a.target });
+      const result = await wc.clickElement({ target: a.target });
       assert.equal(result.status, 'failed');
       assert.deepEqual(await wc.mainFrame.executeJavaScript('window.events'), []);
     });

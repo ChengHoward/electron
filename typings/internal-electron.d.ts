@@ -1,4 +1,3 @@
-/// <reference path="./agent-automation.d.ts" />
 /// <reference path="../electron.d.ts" />
 
 /**
@@ -110,8 +109,13 @@ declare namespace Electron {
     ): Promise<string>;
     _flushAgentInput(process: number, routing: number): Promise<void>;
     _setAgentInputActive(active: boolean): void;
+    _setAutomationOptions(options: Electron.AutomationOptions): Promise<void>;
+    _getAutomationState(): Electron.AutomationState;
+    _resetAutomationOptions(): Promise<void>;
+    _beginAutomationReset(): void;
+    _clickElementSelector(selector: string, options?: Electron.ClickSelectorOptions): Promise<void>;
     _runInputSequence(
-      steps: (Electron.InputSequenceMouseStep | Electron.InputSequenceKeyStep)[],
+      steps: Record<string, unknown>[],
       options: Omit<Electron.InputSequenceOptions, 'signal'>,
       id: number
     ): Promise<Electron.InputSequenceResult>;

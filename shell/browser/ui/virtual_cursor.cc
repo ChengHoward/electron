@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"  // nogncheck
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -60,13 +61,15 @@ VirtualCursor::VirtualCursor(content::WebContents* contents)
     : content::WebContentsObserver(contents), image_(Arrow()) {}
 
 VirtualCursor::~VirtualCursor() {
+  ReleaseWidgets();
   Detach();
 }
 
-std::string VirtualCursor::Configure(bool enabled,
-                                     bool pointer,
-                                     bool keyboard) {
-  if (enabled) {
+std::string VirtualCursor::ValidateConfiguration(bool display,
+                                                 bool pointer,
+                                                 bool keyboard,
+                                                 bool isolate) const {
+  if (display || pointer || keyboard || isolate) {
     auto* native = web_contents() ? web_contents()->GetNativeView() : nullptr;
     if (!native || !web_contents()->GetRenderWidgetHostView())
       return "VIRTUAL_CURSOR_VIEW_UNAVAILABLE";
@@ -80,21 +83,41 @@ std::string VirtualCursor::Configure(bool enabled,
     if (keyboard && view->HasCompositionText())
       return "NATIVE_COMPOSITION_IN_PROGRESS";
   }
-  enabled_ = enabled;
-  block_pointer_ = enabled && pointer;
-  block_keyboard_ = enabled && keyboard;
-  if (!enabled) {
+  return {};
+}
+
+std::string VirtualCursor::Configure(bool display,
+                                     bool pointer,
+                                     bool keyboard,
+                                     bool isolate) {
+  const auto error = ValidateConfiguration(display, pointer, keyboard, isolate);
+  if (!error.empty())
+    return error;
+  RestoreConfiguration(display, pointer, keyboard, isolate);
+  return {};
+}
+
+void VirtualCursor::RestoreConfiguration(bool display,
+                                         bool pointer,
+                                         bool keyboard,
+                                         bool isolate) {
+  enabled_ = display;
+  block_pointer_ = pointer;
+  block_keyboard_ = keyboard;
+  isolate_input_ = isolate;
+  if (!Active()) {
+    ReleaseWidgets();
     Detach();
-    return {};
+    return;
   }
   BindView();
   dirty_ = true;
   Schedule();
-  return {};
 }
 
-std::string VirtualCursor::SetImage(const gfx::ImageSkia& image,
-                                    gfx::PointF hotspot) {
+std::string VirtualCursor::SnapshotImage(const gfx::ImageSkia& image,
+                                         gfx::PointF hotspot,
+                                         gfx::ImageSkia* result) {
   gfx::ImageSkia replacement = image.isNull() ? Arrow() : image;
   if (replacement.width() < 1 || replacement.height() < 1 ||
       replacement.width() > 512 || replacement.height() > 512 ||
@@ -108,11 +131,26 @@ std::string VirtualCursor::SetImage(const gfx::ImageSkia& image,
       !source.readPixels(snapshot.pixmap(), 0, 0))
     return "CURSOR_IMAGE_SNAPSHOT_FAILED";
   snapshot.setImmutable();
-  image_ = gfx::ImageSkia::CreateFrom1xBitmap(snapshot);
+  *result = gfx::ImageSkia::CreateFrom1xBitmap(snapshot);
+  return {};
+}
+
+void VirtualCursor::RestoreImage(const gfx::ImageSkia& snapshot,
+                                 gfx::PointF hotspot) {
+  image_ = snapshot;
   hotspot_ = hotspot;
   image_dirty_ = true;
   dirty_ = true;
   Schedule();
+}
+
+std::string VirtualCursor::SetImage(const gfx::ImageSkia& image,
+                                    gfx::PointF hotspot) {
+  gfx::ImageSkia snapshot;
+  const auto error = SnapshotImage(image, hotspot, &snapshot);
+  if (!error.empty())
+    return error;
+  RestoreImage(snapshot, hotspot);
   return {};
 }
 
@@ -123,8 +161,11 @@ void VirtualCursor::SetFrameRate(int fps) {
 }
 
 void VirtualCursor::BindView() {
-  if (!enabled_ || !web_contents())
+  if (!Active() || !web_contents())
     return;
+  // Isolation must also be released/restored while the root view is absent
+  // during a swap. Visual layers can bind when a native view becomes ready.
+  BindWidgets();
   auto* native = web_contents()->GetNativeView();
   if (native != window_) {
     Detach();
@@ -132,6 +173,10 @@ void VirtualCursor::BindView() {
     if (!window_)
       return;
     window_->AddObserver(this);
+  }
+  if (!window_)
+    return;
+  if (enabled_ && !clip_) {
     clip_ = ui::Layer::Create(ui::LAYER_NOT_DRAWN);
     clip_->SetName("ElectronVirtualCursorClip");
     clip_->SetMasksToBounds(true);
@@ -145,8 +190,11 @@ void VirtualCursor::BindView() {
     clip_->Add(sprite_.get());
     image_dirty_ = true;
   }
-  if (!window_)
-    return;
+  if (!enabled_) {
+    StopFrame();
+    sprite_.reset();
+    clip_.reset();
+  }
   auto* root = window_->GetRootWindow();
   if (root != event_root_) {
     if (event_root_)
@@ -156,27 +204,98 @@ void VirtualCursor::BindView() {
       event_root_->AddPreTargetHandler(this,
                                        ui::EventTarget::Priority::kSystem);
   }
-  auto* view = web_contents()->GetRenderWidgetHostView();
-  if (view) {
-    static_cast<content::RenderWidgetHostViewAura*>(view)->SetNativeInputFilter(
-        base::BindRepeating(
-            [](base::WeakPtr<VirtualCursor> self, bool keyboard) {
-              return self && self->FilterNative(keyboard);
-            },
-            weak_factory_.GetWeakPtr()));
+  if (clip_) {
+    clip_->SetBounds(gfx::Rect(window_->bounds().size()));
+    window_->layer()->StackAtTop(clip_.get());
   }
-  clip_->SetBounds(gfx::Rect(window_->bounds().size()));
-  window_->layer()->StackAtTop(clip_.get());
   dirty_ = true;
   Schedule();
 }
 
+bool VirtualCursor::Active() const {
+  return enabled_ || block_pointer_ || block_keyboard_ || isolate_input_;
+}
+
+void VirtualCursor::BindWidgets() {
+  if (!web_contents())
+    return;
+  std::vector<content::RenderWidgetHostImpl*> current;
+  web_contents()->ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    // Do not bring prerendered or BFCache documents into the virtual channel.
+    if (content::WebContents::FromRenderFrameHost(frame) != web_contents() ||
+        frame->GetLifecycleState() !=
+            content::RenderFrameHost::LifecycleState::kActive ||
+        !frame->IsRenderFrameLive()) {
+      return;
+    }
+    auto* widget =
+        content::RenderWidgetHostImpl::From(frame->GetRenderWidgetHost());
+    if (std::ranges::find(current, widget) == current.end())
+      current.push_back(widget);
+  });
+  std::erase_if(isolated_widgets_, [&](const auto& widget) {
+    if (!widget)
+      return true;
+    if (isolate_input_ &&
+        std::ranges::find(current, widget.get()) != current.end()) {
+      return false;
+    }
+    widget->SetInputIsolationEnabled(false);
+    return true;
+  });
+  if (isolate_input_) {
+    for (auto* widget : current) {
+      widget->SetInputIsolationEnabled(true);
+      if (!std::ranges::any_of(isolated_widgets_,
+                               [widget](const auto& tracked) {
+                                 return tracked.get() == widget;
+                               })) {
+        isolated_widgets_.push_back(widget->GetWeakPtr());
+      }
+    }
+  }
+
+  // Native keyboard/IME input enters through the root Aura view even when an
+  // out-of-process child frame owns the renderer's current element focus.
+  auto* view = static_cast<content::RenderWidgetHostViewAura*>(
+      web_contents()->GetRenderWidgetHostView());
+  std::erase_if(filtered_views_, [view](const auto& filtered) {
+    if (!filtered)
+      return true;
+    if (filtered.get() == view)
+      return false;
+    static_cast<content::RenderWidgetHostViewAura*>(filtered.get())
+        ->SetNativeInputFilter({});
+    return true;
+  });
+  if (view) {
+    view->SetNativeInputFilter(base::BindRepeating(
+        [](base::WeakPtr<VirtualCursor> self, bool keyboard) {
+          return self && self->FilterNative(keyboard);
+        },
+        weak_factory_.GetWeakPtr()));
+    if (filtered_views_.empty())
+      filtered_views_.push_back(view->GetWeakPtr());
+  }
+}
+
+void VirtualCursor::ReleaseWidgets() {
+  for (const auto& widget : isolated_widgets_) {
+    if (widget)
+      widget->SetInputIsolationEnabled(false);
+  }
+  isolated_widgets_.clear();
+  for (const auto& view : filtered_views_) {
+    if (view) {
+      static_cast<content::RenderWidgetHostViewAura*>(view.get())
+          ->SetNativeInputFilter({});
+    }
+  }
+  filtered_views_.clear();
+}
+
 void VirtualCursor::Detach() {
   StopFrame();
-  if (web_contents() && web_contents()->GetRenderWidgetHostView())
-    static_cast<content::RenderWidgetHostViewAura*>(
-        web_contents()->GetRenderWidgetHostView())
-        ->SetNativeInputFilter({});
   if (event_root_)
     event_root_->RemovePreTargetHandler(this);
   event_root_ = nullptr;
@@ -250,7 +369,7 @@ void VirtualCursor::OnCompositingShuttingDown(ui::Compositor* compositor) {
 
 void VirtualCursor::OnInjectedMouse(const blink::WebMouseEvent& event,
                                     content::RenderWidgetHostView* view) {
-  if (!enabled_ || !view || !web_contents())
+  if (!Active() || !view || !web_contents())
     return;
   auto* root_view = web_contents()->GetRenderWidgetHostView();
   if (!root_view)
@@ -344,6 +463,9 @@ void VirtualCursor::OnWindowDestroying(aura::Window*) {
 void VirtualCursor::RenderViewReady() {
   BindView();
 }
+void VirtualCursor::RenderFrameCreated(content::RenderFrameHost*) {
+  BindView();
+}
 void VirtualCursor::RenderViewHostChanged(content::RenderViewHost*,
                                           content::RenderViewHost*) {
   BindView();
@@ -352,8 +474,19 @@ void VirtualCursor::RenderFrameHostChanged(content::RenderFrameHost*,
                                            content::RenderFrameHost*) {
   BindView();
 }
+void VirtualCursor::RenderFrameHostStateChanged(
+    content::RenderFrameHost*,
+    content::RenderFrameHost::LifecycleState,
+    content::RenderFrameHost::LifecycleState) {
+  if (Active())
+    BindWidgets();
+}
 void VirtualCursor::WebContentsDestroyed() {
   enabled_ = false;
+  block_pointer_ = false;
+  block_keyboard_ = false;
+  isolate_input_ = false;
+  ReleaseWidgets();
   Detach();
 }
 
@@ -362,6 +495,7 @@ base::DictValue VirtualCursor::GetState() const {
       .Set("enabled", enabled_)
       .Set("blockRealPointer", block_pointer())
       .Set("blockRealKeyboard", block_keyboard())
+      .Set("isolateInput", isolate_input())
       .Set("frameRate", fps_)
       .Set("refreshRate",
            window_ && window_->layer()->GetCompositor()
@@ -374,6 +508,20 @@ base::DictValue VirtualCursor::GetState() const {
       .Set("paints", paints_)
       .Set("visible", Visible())
       .Set("pending", timer_.IsRunning() || observing_ != nullptr)
+      .Set("compositorVisible",
+           window_ && window_->layer()->GetCompositor() &&
+               window_->layer()->GetCompositor()->IsVisible())
+      .Set("nativeViewVisible", window_ && window_->IsVisible())
+      .Set("nativeParentVisible",
+           window_ && window_->parent() && window_->parent()->IsVisible())
+      .Set("layerVisible", window_ && window_->layer()->visible())
+      .Set("rootLayerVisible", window_ && window_->GetRootWindow() &&
+                                   window_->GetRootWindow()->layer()->visible())
+      .Set("renderWidgetHidden",
+           web_contents() && web_contents()->GetPrimaryMainFrame() &&
+               content::RenderWidgetHostImpl::From(
+                   web_contents()->GetPrimaryMainFrame()->GetRenderWidgetHost())
+                   ->IsHidden())
       .Set("blockedPointer", blocked_pointer_)
       .Set("blockedKeyboard", blocked_keyboard_);
 }

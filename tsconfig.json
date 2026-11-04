@@ -20,6 +20,7 @@
     }
   },
   "exclude": [
-    "electron.d.ts"
+    "electron.d.ts",
+    "typings/agent-automation.d.ts"
   ],
 }

@@ -8,6 +8,7 @@ import {
 } from '@electron/internal/browser/guest-window-manager';
 import { IpcMainImpl } from '@electron/internal/browser/ipc-main-impl';
 import { parseFeatures } from '@electron/internal/browser/parse-features-string';
+import nativeImage from '@electron/internal/common/api/native-image';
 import shell from '@electron/internal/common/api/shell';
 import * as deprecate from '@electron/internal/common/deprecate';
 
@@ -798,32 +799,89 @@ export function getAllWebContents() {
 }
 
 // Native Agent automation: no debugger, executeJavaScript, or OS activation.
-const agentQueues = new WeakMap<Electron.WebContents, { running: boolean; jobs: (() => void)[] }>();
+type AgentJob = { run: () => void; cancel: (reason?: string) => void };
+type AgentQueue = { running: boolean; jobs: AgentJob[]; active?: Promise<unknown> };
+const agentQueues = new WeakMap<Electron.WebContents, AgentQueue>();
+const agentGenerations = new WeakMap<Electron.WebContents, number>();
+const agentGenerationReasons = new WeakMap<Electron.WebContents, string>();
+const agentLifecycleInstalled = new WeakSet<Electron.WebContents>();
+const agentResets = new WeakMap<Electron.WebContents, Promise<void>>();
+const agentConfigurations = new WeakMap<Electron.WebContents, Promise<void>>();
+const automationResetGenerations = new WeakMap<Electron.WebContents, number>();
+const agentSequenceCancels = new WeakMap<Electron.WebContents, Set<() => void>>();
 const agentDispatchUnqueued = Symbol('agentDispatchUnqueued');
 const agentTargetScroll = Symbol('agentTargetScroll');
+function agentGeneration(contents: Electron.WebContents): number {
+  return agentGenerations.get(contents) || 0;
+}
+function checkAgentGeneration(contents: Electron.WebContents, generation: number) {
+  if (generation !== agentGeneration(contents)) {
+    throw new Error(agentGenerationReasons.get(contents) || 'AUTOMATION_RESET');
+  }
+}
+function ensureAgentLifecycle(contents: Electron.WebContents) {
+  if (agentLifecycleInstalled.has(contents)) return;
+  agentLifecycleInstalled.add(contents);
+  contents.on('did-frame-navigate', (_event, _url, _code, _status, mainFrame, processId, routingId) => {
+    const state = agentHeldInputs.get(contents);
+    if (mainFrame) {
+      agentGenerations.set(contents, agentGeneration(contents) + 1);
+      agentGenerationReasons.set(contents, 'DOCUMENT_CHANGED');
+      for (const job of agentQueues.get(contents)?.jobs.splice(0) || []) job.cancel('DOCUMENT_CHANGED');
+      state?.keys.clear();
+      state?.buttons.clear();
+      if (state) state.touch = undefined;
+      releaseAgentInput(contents);
+    } else if (state) {
+      const belongs = (event: AgentNativeEvent) => {
+        const ownerProcess = event._agentOwnerProcessId ?? event._agentProcessId;
+        const ownerRouting = event._agentOwnerRoutingId ?? event._agentRoutingId;
+        return (
+          (ownerProcess === processId && ownerRouting === routingId) ||
+          (ownerProcess !== undefined && !getWebFrame(contents, [ownerProcess, ownerRouting]))
+        );
+      };
+      for (const [key, event] of state.keys) if (belongs(event)) state.keys.delete(key);
+      for (const [button, event] of state.buttons) if (belongs(event)) state.buttons.delete(button);
+      if (state.touch && belongs(state.touch)) state.touch = undefined;
+      if (!hasHeldAgentInput(contents)) releaseAgentInput(contents);
+    }
+  });
+}
 function queueAgentOperation<T>(
   contents: Electron.WebContents,
   operation: () => Promise<T>,
   cancellation?: { remove?: () => void }
 ): Promise<T> {
+  ensureAgentLifecycle(contents);
+  if (agentResets.has(contents)) return Promise.reject(new Error('AUTOMATION_RESET_IN_PROGRESS'));
+  const generation = agentGeneration(contents);
   const queue = agentQueues.get(contents) || { running: false, jobs: [] };
   agentQueues.set(contents, queue);
   const drain = () => {
     if (queue.running) return;
     const next = queue.jobs.shift();
-    if (next) next();
+    if (next) next.run();
     else agentQueues.delete(contents);
   };
   return new Promise<T>((resolve, reject) => {
-    const job = () => {
-      queue.running = true;
-      Promise.resolve()
-        .then(operation)
-        .then(resolve, reject)
-        .finally(() => {
-          queue.running = false;
-          drain();
-        });
+    const job: AgentJob = {
+      cancel: (reason = 'AUTOMATION_RESET') => reject(new Error(reason)),
+      run: () => {
+        queue.running = true;
+        const active = Promise.resolve()
+          .then(() => {
+            checkAgentGeneration(contents, generation);
+            return operation();
+          })
+          .then(resolve, reject)
+          .finally(() => {
+            queue.running = false;
+            queue.active = undefined;
+            drain();
+          });
+        queue.active = active;
+      }
     };
     if (cancellation) {
       cancellation.remove = () => {
@@ -837,6 +895,135 @@ function queueAgentOperation<T>(
     drain();
   });
 }
+function validateAutomationOptions(options: Electron.AutomationOptions) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('Invalid automation options');
+  }
+  const fields = ['isolateInput', 'blockRealPointer', 'blockRealKeyboard', 'keepRendering', 'virtualCursor'];
+  if (Object.keys(options).some((key) => !fields.includes(key))) throw new TypeError('Unknown automation option');
+  for (const name of fields.slice(0, 4) as (keyof Electron.AutomationOptions)[]) {
+    if (options[name] !== undefined && typeof options[name] !== 'boolean') throw new TypeError(`Invalid ${name}`);
+  }
+  if (options.virtualCursor !== undefined) {
+    const cursor = options.virtualCursor;
+    if (
+      !cursor ||
+      typeof cursor !== 'object' ||
+      Array.isArray(cursor) ||
+      Object.keys(cursor).some((key) => !['enabled', 'image', 'hotspot', 'frameRate'].includes(key))
+    ) {
+      throw new TypeError('Invalid virtualCursor options');
+    }
+    if (cursor.enabled !== undefined && typeof cursor.enabled !== 'boolean') {
+      throw new TypeError('Invalid cursor enabled');
+    }
+    if (
+      cursor.frameRate !== undefined &&
+      (!Number.isInteger(cursor.frameRate) || cursor.frameRate < 0 || cursor.frameRate > 1000)
+    ) {
+      throw new RangeError('Cursor frame rate must be an integer from 0 to 1000');
+    }
+    if (cursor.hotspot !== undefined) validateInputPoint(cursor.hotspot, 'hotspot');
+  }
+}
+WebContents.prototype.setAutomationOptions = async function (options: Electron.AutomationOptions) {
+  validateAutomationOptions(options);
+  if (agentResets.has(this)) throw new Error('AUTOMATION_RESET_IN_PROGRESS');
+  const snapshot: Electron.AutomationOptions = { ...options };
+  if (options.virtualCursor) {
+    const cursor = { ...options.virtualCursor };
+    if (cursor.hotspot) cursor.hotspot = { ...cursor.hotspot };
+    if (cursor.image !== undefined && cursor.image !== null) {
+      const size = cursor.image.getSize(1);
+      if (size.width < 1 || size.height < 1 || size.width > 512 || size.height > 512) {
+        throw new RangeError('Invalid cursor image size');
+      }
+      cursor.image = nativeImage.createFromBitmap(cursor.image.toBitmap({ scaleFactor: 1 }), {
+        ...size,
+        scaleFactor: 1
+      });
+    }
+    snapshot.virtualCursor = cursor;
+  }
+  const generation = automationResetGenerations.get(this) || 0;
+  const previous = agentConfigurations.get(this) || Promise.resolve();
+  const configured = previous
+    .catch(() => {})
+    .then(() => {
+      if (generation !== (automationResetGenerations.get(this) || 0)) throw new Error('AUTOMATION_RESET');
+      if (agentResets.has(this)) throw new Error('AUTOMATION_RESET_IN_PROGRESS');
+      return this._setAutomationOptions(snapshot);
+    });
+  agentConfigurations.set(this, configured);
+  try {
+    await configured;
+  } finally {
+    if (agentConfigurations.get(this) === configured) agentConfigurations.delete(this);
+  }
+};
+WebContents.prototype.getAutomationState = function () {
+  return this._getAutomationState();
+};
+WebContents.prototype.resetAutomationOptions = function () {
+  const existing = agentResets.get(this);
+  if (existing) return existing;
+  agentGenerations.set(this, agentGeneration(this) + 1);
+  agentGenerationReasons.set(this, 'AUTOMATION_RESET');
+  automationResetGenerations.set(this, (automationResetGenerations.get(this) || 0) + 1);
+  this._beginAutomationReset();
+  agentConfigurations.delete(this);
+  const queue = agentQueues.get(this);
+  for (const cancel of agentSequenceCancels.get(this) || []) cancel();
+  for (const job of queue?.jobs.splice(0) || []) job.cancel();
+  const reset = (async () => {
+    let failure: unknown;
+    try {
+      if (queue?.active) await agentDeadline(queue.active, 1500);
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      await resetAgentInput(this);
+    } catch (error) {
+      failure ||= error;
+    } finally {
+      releaseAgentInput(this, true);
+    }
+    await this._resetAutomationOptions();
+    if (failure) throw failure;
+  })().finally(() => agentResets.delete(this));
+  agentResets.set(this, reset);
+  return reset;
+};
+function validateInputPoint(point: unknown, name: string): asserts point is Electron.Point {
+  if (
+    !point ||
+    typeof point !== 'object' ||
+    Array.isArray(point) ||
+    Object.keys(point).some((key) => !['x', 'y'].includes(key)) ||
+    !['x', 'y'].every(
+      (key) =>
+        typeof (point as Record<string, unknown>)[key] === 'number' &&
+        Number.isFinite((point as Record<string, unknown>)[key]) &&
+        Math.abs((point as Record<string, number>)[key]) <= 1000000
+    )
+  ) {
+    throw new TypeError(`Invalid ${name}`);
+  }
+}
+function normalizeMouseCoordinates(event: Record<string, unknown>, allowDefault = false): Record<string, unknown> {
+  if ('x' in event || 'y' in event) throw new TypeError('Use position or offset instead of x/y');
+  const name = event.target ? 'offset' : 'position';
+  const other = event.target ? 'position' : 'offset';
+  if (event[other] !== undefined) throw new TypeError(`Cannot use ${other} in this coordinate mode`);
+  const point = event[name];
+  if (point === undefined && event.target && allowDefault) return { ...event };
+  validateInputPoint(point, name);
+  const result: Record<string, unknown> = { ...event, x: point.x, y: point.y };
+  delete result.position;
+  delete result.offset;
+  return result;
+}
 const agentTouchTargets = new WeakMap<Electron.WebContents, string>();
 const inputSequenceBudgets = new WeakMap<Electron.WebContents, { count: number; bytes: number }>();
 type InputSequenceStep = Electron.InputSequenceMouseStep | Electron.InputSequenceKeyStep;
@@ -846,8 +1033,8 @@ const mouseStepFields = new Set([
   'atMs',
   'target',
   'type',
-  'x',
-  'y',
+  'position',
+  'offset',
   'button',
   'buttons',
   'modifiers',
@@ -920,6 +1107,12 @@ function validateInputSteps(steps: InputSequenceStep[]) {
     const step = input as unknown as Record<string, unknown>;
     const fields = step.kind === 'mouse' ? mouseStepFields : step.kind === 'key' ? keyStepFields : null;
     if (!fields || Object.keys(step).some((key) => !fields.has(key))) throw new TypeError('Invalid step kind or field');
+    if (step.kind === 'mouse') {
+      const normalized = normalizeMouseCoordinates(step, true);
+      delete step.position;
+      delete step.offset;
+      Object.assign(step, normalized);
+    }
     previous = sequenceNumber(step.atMs, 'atMs', previous, 60000);
     if (step.target !== undefined) {
       const target = step.target as Record<string, unknown>;
@@ -942,8 +1135,10 @@ function validateInputSteps(steps: InputSequenceStep[]) {
       if (!['mouseMoved', 'mousePressed', 'mouseReleased', 'mouseWheel'].includes(String(step.type))) {
         throw new TypeError('Invalid mouse type');
       }
-      sequenceNumber(step.x, 'x', -1000000, 1000000);
-      sequenceNumber(step.y, 'y', -1000000, 1000000);
+      if (!step.target || step.x !== undefined || step.y !== undefined) {
+        sequenceNumber(step.x, 'x', -1000000, 1000000);
+        sequenceNumber(step.y, 'y', -1000000, 1000000);
+      }
       if (step.button !== undefined && !['none', ...Object.keys(mouseButtonBits)].includes(String(step.button))) {
         throw new TypeError('Invalid mouse button');
       }
@@ -1095,6 +1290,7 @@ WebContents.prototype.dispatchInputSequence = async function (
       cancellation.remove?.();
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
+      agentSequenceCancels.get(this)?.delete(abort);
       budget.count--;
       budget.bytes -= snapshot.bytes;
       snapshot.steps.length = 0;
@@ -1105,6 +1301,9 @@ WebContents.prototype.dispatchInputSequence = async function (
       if (started && !this.isDestroyed()) this._cancelInputSequence(id);
       else finish(unstartedInputResult('cancelled', 'ABORTED', performance.now() - accepted));
     };
+    const cancels = agentSequenceCancels.get(this) || new Set<() => void>();
+    cancels.add(abort);
+    agentSequenceCancels.set(this, cancels);
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(
       () => finish(unstartedInputResult('failed', 'QUEUE_TIMEOUT', performance.now() - accepted)),
@@ -1121,26 +1320,36 @@ WebContents.prototype.dispatchInputSequence = async function (
           finish(unstartedInputResult('failed', 'WEBCONTENTS_DESTROYED', queueMs));
           return;
         }
-        if (agentInputLeases.has(this)) {
+        if (agentInputLeases.has(this) || hasHeldAgentInput(this)) {
           finish(unstartedInputResult('failed', 'INPUT_STATE_BUSY', queueMs));
           return;
         }
         try {
-          const result = await this._runInputSequence(snapshot.steps, limits, id);
+          const result = await this._runInputSequence(
+            snapshot.steps as unknown as Record<string, unknown>[],
+            limits,
+            id
+          );
           finish({ ...result, reason: result.reason.replace(/^Error: /, ''), queueMs, preparationMs: 0 });
         } catch (error) {
           finish(unstartedInputResult('failed', error instanceof Error ? error.message : String(error), queueMs));
         }
       },
       cancellation
-    ).catch((error) => finish(unstartedInputResult('failed', String(error), performance.now() - accepted)));
+    ).catch((error) =>
+      finish(
+        unstartedInputResult(
+          'failed',
+          error instanceof Error ? error.message : String(error),
+          performance.now() - accepted
+        )
+      )
+    );
   });
 };
-const agentInputLeases = new WeakMap<
-  Electron.WebContents,
-  { throttled: boolean; timer: ReturnType<typeof setTimeout> }
->();
-function releaseAgentInput(contents: Electron.WebContents) {
+const agentInputLeases = new WeakMap<Electron.WebContents, { timer: ReturnType<typeof setTimeout> }>();
+function releaseAgentInput(contents: Electron.WebContents, force = false) {
+  if (!force && hasHeldAgentInput(contents)) return;
   const lease = agentInputLeases.get(contents);
   if (!lease) return;
   clearTimeout(lease.timer);
@@ -1148,7 +1357,6 @@ function releaseAgentInput(contents: Electron.WebContents) {
   agentTouchTargets.delete(contents);
   if (!contents.isDestroyed()) {
     contents._setAgentInputActive(false);
-    contents.setBackgroundThrottling(lease.throttled);
   }
 }
 function agentLimit(value: number | undefined, fallback: number, maximum: number) {
@@ -1265,24 +1473,202 @@ WebContents.prototype.findAgentElements = async function (
   );
   return result;
 };
+type AgentNativeEvent = Record<string, any>;
+const agentOriginalDispatch = new Map<string, (this: Electron.WebContents, event: AgentNativeEvent) => Promise<void>>();
+const agentHeldInputs = new WeakMap<
+  Electron.WebContents,
+  {
+    keys: Map<string, AgentNativeEvent>;
+    buttons: Map<string, AgentNativeEvent>;
+    touch?: AgentNativeEvent;
+  }
+>();
+function heldAgentInputs(contents: Electron.WebContents) {
+  ensureAgentLifecycle(contents);
+  let state = agentHeldInputs.get(contents);
+  if (!state) {
+    state = { keys: new Map(), buttons: new Map() };
+    agentHeldInputs.set(contents, state);
+  }
+  return state;
+}
+function acquireAgentInput(contents: Electron.WebContents) {
+  const lease = agentInputLeases.get(contents);
+  if (lease) {
+    clearTimeout(lease.timer);
+    lease.timer = setTimeout(() => releaseAgentInput(contents), 10000);
+  } else {
+    agentInputLeases.set(contents, { timer: setTimeout(() => releaseAgentInput(contents), 10000) });
+  }
+  contents._setAgentInputActive(true);
+}
+function inferAgentInputState(contents: Electron.WebContents, name: string, event: AgentNativeEvent) {
+  const state = heldAgentInputs(contents);
+  let modifiers = 0;
+  for (const key of state.keys.values()) modifiers |= sequenceModifier(key);
+  if (name === 'dispatchKeyEvent') {
+    if (event.type === 'keyDown' || event.type === 'rawKeyDown') modifiers |= sequenceModifier(event);
+    if (event.type === 'keyUp') modifiers &= ~sequenceModifier(event);
+  }
+  if (event.modifiers === undefined) event.modifiers = modifiers;
+  if (name === 'dispatchMouseEvent' && event.buttons === undefined) {
+    let buttons = 0;
+    for (const mouse of state.buttons.values()) buttons |= mouseButtonBits[mouse.button] || 0;
+    if (event.type === 'mousePressed') buttons |= mouseButtonBits[event.button] || 0;
+    if (event.type === 'mouseReleased') buttons &= ~(mouseButtonBits[event.button] || 0);
+    event.buttons = buttons;
+  }
+}
+function hasHeldAgentInput(contents: Electron.WebContents) {
+  const state = agentHeldInputs.get(contents);
+  return !!state && (state.keys.size > 0 || state.buttons.size > 0 || !!state.touch);
+}
+function rememberAgentInput(contents: Electron.WebContents, name: string, event: AgentNativeEvent) {
+  const state = heldAgentInputs(contents);
+  let owner: Electron.WebFrameMain | null = null;
+  try {
+    owner = event._agentProcessId === undefined ? contents.focusedFrame || contents.mainFrame : null;
+  } catch {}
+  const record = {
+    ...event,
+    ...(owner ? { _agentOwnerProcessId: owner.processId, _agentOwnerRoutingId: owner.routingId } : {})
+  };
+  if (name === 'dispatchMouseEvent') {
+    if (event.type === 'mousePressed') state.buttons.set(event.button, record);
+    if (event.type === 'mouseReleased') state.buttons.delete(event.button);
+  } else if (name === 'dispatchKeyEvent') {
+    if (event.type === 'keyDown' || event.type === 'rawKeyDown') state.keys.set(sequenceKey(event), record);
+    if (event.type === 'keyUp') state.keys.delete(sequenceKey(event));
+  } else if (name === 'dispatchTouchEvent') {
+    state.touch = event.type === 'touchEnd' || event.type === 'touchCancel' ? undefined : record;
+  }
+}
+async function resetAgentInput(contents: Electron.WebContents) {
+  const state = agentHeldInputs.get(contents);
+  if (!state || contents.isDestroyed()) return;
+  const events: { name: string; event: AgentNativeEvent }[] = [];
+  let buttons = 0;
+  for (const event of state.buttons.values()) buttons |= mouseButtonBits[event.button] || 0;
+  for (const event of state.buttons.values()) {
+    buttons &= ~(mouseButtonBits[event.button] || 0);
+    events.push({ name: 'dispatchMouseEvent', event: { ...event, type: 'mouseReleased', buttons } });
+  }
+  let modifiers = 0;
+  for (const event of state.keys.values()) modifiers |= sequenceModifier(event);
+  const keys = [...state.keys.values()].sort((a, b) => Number(!!sequenceModifier(a)) - Number(!!sequenceModifier(b)));
+  for (const event of keys) {
+    modifiers &= ~sequenceModifier(event);
+    const release: AgentNativeEvent = {
+      ...event,
+      type: 'keyUp',
+      autoRepeat: false,
+      text: '',
+      unmodifiedText: '',
+      commands: [],
+      modifiers
+    };
+    // Key releases follow the current virtual focus after Tab/default focus navigation.
+    delete release._agentProcessId;
+    delete release._agentRoutingId;
+    delete release._agentDocumentToken;
+    events.push({ name: 'dispatchKeyEvent', event: release });
+  }
+  if (state.touch) {
+    events.push({ name: 'dispatchTouchEvent', event: { ...state.touch, type: 'touchCancel', touchPoints: [] } });
+  }
+  let stopped = false;
+  const cleanup = async () => {
+    let failed = false;
+    for (const { name, event } of events) {
+      if (stopped) return;
+      try {
+        await agentOriginalDispatch.get(name)!.call(contents, event);
+      } catch {
+        failed = true;
+      }
+    }
+    if (stopped) return;
+    state.buttons.clear();
+    state.keys.clear();
+    state.touch = undefined;
+    if (failed) throw new Error('AUTOMATION_INPUT_CLEANUP_FAILED');
+  };
+  try {
+    await agentDeadline(cleanup(), 1500);
+  } finally {
+    stopped = true;
+  }
+}
 for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEvent'] as const) {
-  const original = WebContents.prototype[name] as (this: Electron.WebContents, event: unknown) => Promise<void>;
+  const original = WebContents.prototype[name] as unknown as (
+    this: Electron.WebContents,
+    event: AgentNativeEvent
+  ) => Promise<void>;
+  agentOriginalDispatch.set(name, original);
   Object.defineProperty(WebContents.prototype, name, {
     configurable: true,
     writable: true,
     value: function (
       this: Electron.WebContents,
-      event: Electron.MouseEvent &
-        Electron.KeyEvent &
-        Electron.TouchEvent & {
-          [agentDispatchUnqueued]?: boolean;
-          [agentTargetScroll]?: boolean;
-        }
+      event: AgentNativeEvent & {
+        [agentDispatchUnqueued]?: boolean;
+        [agentTargetScroll]?: boolean;
+      }
     ) {
-      if (!event?.target) {
-        return event?.[agentDispatchUnqueued]
-          ? original.call(this, event)
-          : queueAgentOperation(this, () => original.call(this, event));
+      if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        return Promise.reject(new TypeError('Invalid input event'));
+      }
+      const generation = agentGeneration(this);
+      event = { ...event, ...(event.target ? { target: { ...event.target } } : {}) };
+      if (Array.isArray(event.commands)) event.commands = [...event.commands];
+      try {
+        if (name === 'dispatchMouseEvent') event = normalizeMouseCoordinates(event, true);
+        if (name === 'dispatchTouchEvent') {
+          if (!Array.isArray(event.touchPoints)) throw new TypeError('Invalid touchPoints');
+          event = {
+            ...event,
+            touchPoints: event.touchPoints.map((point: AgentNativeEvent) =>
+              normalizeMouseCoordinates({ ...point, target: event.target })
+            )
+          };
+          for (const point of event.touchPoints) delete point.target;
+        }
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (!event.target) {
+        const run = async (): Promise<Electron.AgentDispatchResult> => {
+          checkAgentGeneration(this, generation);
+          const hadLease = agentInputLeases.has(this);
+          const starts = ['mousePressed', 'touchStart', 'keyDown', 'rawKeyDown'].includes(event.type);
+          const ends = ['mouseReleased', 'touchEnd', 'touchCancel', 'keyUp'].includes(event.type);
+          let dispatched = false;
+          try {
+            acquireAgentInput(this);
+            inferAgentInputState(this, name, event);
+            if (!['mouseReleased', 'keyUp', 'touchEnd', 'touchCancel'].includes(event.type)) {
+              rememberAgentInput(this, name, event);
+            }
+            await original.call(this, event);
+            dispatched = true;
+            rememberAgentInput(this, name, event);
+            return {
+              status: 'dispatched',
+              stage: 'event-dispatch',
+              stages: [{ stage: 'event-dispatch', status: 'ok' }]
+            };
+          } catch (error) {
+            return {
+              status: 'failed',
+              stage: 'event-dispatch',
+              reason: error instanceof Error ? error.message : String(error),
+              stages: [{ stage: 'event-dispatch', status: 'failed' }]
+            };
+          } finally {
+            if ((!dispatched || ends || (!hadLease && !starts)) && !hasHeldAgentInput(this)) releaseAgentInput(this);
+          }
+        };
+        return event[agentDispatchUnqueued] ? run() : queueAgentOperation(this, run);
       }
       const run = async (): Promise<Electron.AgentDispatchResult> => {
         const target = event.target!;
@@ -1301,6 +1687,7 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
           event.type === 'keyUp';
         const hadLease = agentInputLeases.has(this);
         try {
+          checkAgentGeneration(this, generation);
           if (this.isDestroyed()) throw new Error('WEBCONTENTS_DESTROYED');
           if (hadLease) {
             const lease = agentInputLeases.get(this)!;
@@ -1308,8 +1695,7 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
             lease.timer = setTimeout(() => releaseAgentInput(this), 10000);
           }
           if (!hadLease) {
-            const throttled = this.getBackgroundThrottling();
-            agentInputLeases.set(this, { throttled, timer: setTimeout(() => releaseAgentInput(this), 10000) });
+            agentInputLeases.set(this, { timer: setTimeout(() => releaseAgentInput(this), 10000) });
           }
           if (
             target.webContentsId !== this.id ||
@@ -1317,15 +1703,15 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
           ) {
             throw new Error('INVALID_TARGET');
           }
-          this.setBackgroundThrottling(false);
           this._setAgentInputActive(true);
+          inferAgentInputState(this, name, event);
           const info = await agentDeadline(
             this._prepareAgentTarget(
               target.processId,
               target.routingId,
               target.documentId,
               target.backendNodeId,
-              name === 'dispatchKeyEvent',
+              name === 'dispatchKeyEvent' && event.type !== 'keyUp',
               event[agentTargetScroll] !== false
             ),
             5000
@@ -1337,6 +1723,7 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
           ) {
             throw new Error('SELECT_KEY_UNSUPPORTED');
           }
+          checkAgentGeneration(this, generation);
           stages.push({ stage, status: 'ok' });
           stage = 'frame-routing';
           if (!getWebFrame(this, [target.processId, target.routingId])) throw new Error('FRAME_UNAVAILABLE');
@@ -1357,7 +1744,7 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
           const scale = info.width ? info.bounds.width / info.width / deviceScale : 1;
           const x = info.bounds.x / deviceScale + (pointer.x ?? info.width / 2) * scale;
           const y = info.bounds.y / deviceScale + (pointer.y ?? info.height / 2) * scale;
-          const params = {
+          const params: AgentNativeEvent = {
             ...event,
             _agentProcessId: target.processId,
             _agentDocumentToken: info.documentToken,
@@ -1375,8 +1762,18 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
           ) {
             throw new Error('TOUCH_POINTS_REQUIRED');
           }
+          if (name === 'dispatchKeyEvent' && event.type === 'keyUp') {
+            delete (params as AgentNativeEvent)._agentProcessId;
+            delete (params as AgentNativeEvent)._agentRoutingId;
+            delete (params as AgentNativeEvent)._agentDocumentToken;
+          }
+          checkAgentGeneration(this, generation);
+          if (!['mouseReleased', 'keyUp', 'touchEnd', 'touchCancel'].includes(params.type)) {
+            rememberAgentInput(this, name, params);
+          }
           try {
             await agentDeadline(original.call(this, params), 5000);
+            rememberAgentInput(this, name, params);
           } catch (error) {
             if (!(error instanceof Error) || error.message !== 'FRAME_TIMEOUT') throw error;
             dispatched = true;
@@ -1416,7 +1813,9 @@ for (const name of ['dispatchMouseEvent', 'dispatchKeyEvent', 'dispatchTouchEven
             reason: error instanceof Error ? error.message : String(error)
           };
         } finally {
-          if (!dispatched || endsSequence || (!hadLease && !startsSequence)) releaseAgentInput(this);
+          if ((!dispatched || endsSequence || (!hadLease && !startsSequence)) && !hasHeldAgentInput(this)) {
+            releaseAgentInput(this);
+          }
         }
       };
       return event[agentDispatchUnqueued] ? run() : queueAgentOperation(this, run);
@@ -1436,73 +1835,101 @@ Object.defineProperty(WebContents.prototype, 'querySelectorAcrossDocuments', {
     selector: string,
     options: Electron.QuerySelectorDeepOptions = {}
   ) {
-    if (options.agentInfo) {
-      const match = (await originalAgentQuery.call(this, selector, options)) as
-        | (Electron.DomElementInfo & { documentId: number; frameProcessId: number; frameRoutingId: number })
-        | null;
-      const snapshot = await this.getAgentSnapshot({ pierce: options.pierce });
-      snapshot.elements = snapshot.elements.filter(
-        (e) =>
-          match &&
-          e.target.processId === match.frameProcessId &&
-          e.target.routingId === match.frameRoutingId &&
-          e.target.documentId === match.documentId &&
-          e.backendNodeId === match.backendNodeId
-      );
-      return snapshot;
+    if (
+      !options ||
+      typeof options !== 'object' ||
+      Array.isArray(options) ||
+      Object.keys(options).some((key) => !['pierce', 'scrollIntoView'].includes(key))
+    ) {
+      throw new TypeError('Invalid query options');
     }
-    return originalAgentQuery.call(this, selector, options);
+    const match = (await originalAgentQuery.call(this, selector, options)) as
+      | (Electron.DomElementInfo & { documentId: number; frameProcessId: number; frameRoutingId: number })
+      | null;
+    return (
+      match && {
+        ...match,
+        target: {
+          webContentsId: this.id,
+          processId: match.frameProcessId,
+          routingId: match.frameRoutingId,
+          documentId: match.documentId,
+          backendNodeId: match.backendNodeId
+        }
+      }
+    );
   }
 });
-const originalAgentClick = WebContents.prototype.clickSelector as (
-  this: Electron.WebContents,
-  selector: string,
-  options?: Electron.ClickSelectorOptions
-) => Promise<void>;
-Object.defineProperty(WebContents.prototype, 'clickSelector', {
+Object.defineProperty(WebContents.prototype, 'clickElement', {
   configurable: true,
   writable: true,
-  value: async function (this: Electron.WebContents, selector: string, options: Electron.ClickSelectorOptions = {}) {
-    if (!options || typeof options !== 'object') throw new TypeError('Invalid clickSelector options');
+  value: async function (this: Electron.WebContents, options: Electron.ClickElementOptions) {
+    if (!options || typeof options !== 'object') throw new TypeError('Invalid clickElement options');
+    if (
+      Object.keys(options).some(
+        (key) => !['selector', 'target', 'pierce', 'scrollIntoView', 'button', 'clickCount', 'modifiers'].includes(key)
+      ) ||
+      (typeof options.selector === 'string') === (options.target !== undefined)
+    ) {
+      throw new TypeError('Specify exactly one of selector or target');
+    }
+    const generation = agentGeneration(this);
     const button = options.button ?? 'left';
     const clickCount = options.clickCount ?? 1;
-    const modifiers = options.modifiers ?? 0;
+    const modifiers = options.modifiers;
     const buttonMask = { left: 1, right: 2, middle: 4, back: 8, forward: 16 };
     if (typeof button !== 'string' || !Object.hasOwn(buttonMask, button)) {
-      throw new TypeError('Invalid clickSelector button');
+      throw new TypeError('Invalid clickElement button');
     }
     if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) {
-      throw new RangeError('clickSelector clickCount must be an integer from 1 to 3');
+      throw new RangeError('clickElement clickCount must be an integer from 1 to 3');
     }
-    if (!Number.isInteger(modifiers) || modifiers < 0 || modifiers > 15) {
-      throw new RangeError('Invalid clickSelector modifiers');
+    if (modifiers !== undefined && (!Number.isInteger(modifiers) || modifiers < 0 || modifiers > 15)) {
+      throw new RangeError('Invalid clickElement modifiers');
     }
     for (const name of ['pierce', 'scrollIntoView'] as const) {
       if (options[name] !== undefined && typeof options[name] !== 'boolean') {
-        throw new TypeError(`Invalid clickSelector ${name}`);
+        throw new TypeError(`Invalid clickElement ${name}`);
       }
     }
-    if (!options.target) {
-      return queueAgentOperation(this, () =>
-        originalAgentClick.call(this, selector, { ...options, button, clickCount, modifiers })
-      );
-    }
-    const target = { ...options.target };
-    const base = {
-      target,
-      button,
-      modifiers,
-      [agentDispatchUnqueued]: true,
-      [agentTargetScroll]: options.scrollIntoView !== false
-    };
+    const requestedTarget = options.target ? { ...options.target } : undefined;
+    const selector = options.selector;
+    const scrollIntoView = options.scrollIntoView !== false;
+    const lookup = { pierce: options.pierce, scrollIntoView };
     // Queue the entire click, so another target operation cannot interleave
     // between a press and its release, or between the two clicks of a double click.
     return queueAgentOperation(this, async () => {
+      checkAgentGeneration(this, generation);
+      let target = requestedTarget;
+      if (!target) {
+        try {
+          const match = await this.querySelectorAcrossDocuments(selector!, lookup);
+          checkAgentGeneration(this, generation);
+          if (!match) throw new Error('No node found');
+          target = match.target;
+        } catch (error) {
+          return {
+            status: 'failed' as const,
+            stage: 'target-resolution' as const,
+            reason: error instanceof Error ? error.message : String(error),
+            stages: [{ stage: 'target-resolution', status: 'failed' as const }]
+          };
+        }
+      }
+      const base = {
+        target,
+        button,
+        modifiers,
+        [agentDispatchUnqueued]: true,
+        [agentTargetScroll]: scrollIntoView
+      };
       let result: Electron.AgentDispatchResult;
       const warnings = new Set<string>();
       let sent = false;
       for (let count = 1; count <= clickCount; ++count) {
+        checkAgentGeneration(this, generation);
         for (const type of ['mousePressed', 'mouseReleased'] as const) {
+          checkAgentGeneration(this, generation);
           result = await this.dispatchMouseEvent({
             ...base,
             type,

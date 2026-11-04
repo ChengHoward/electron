@@ -7,3 +7,5 @@
 * `y` number - CSS pixels relative to the main frame viewport.
 * `width` number - CSS pixel width.
 * `height` number - CSS pixel height.
+
+* `target` AgentTarget (optional) - Current document/frame/node input reference, returned by `querySelectorAcrossDocuments`.

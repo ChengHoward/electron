@@ -84,7 +84,6 @@ class InputSequence final : public content::WebContentsObserver,
   int modifiers_ = 0;
   int cleanup_sent_ = 0;
   int cleanup_failed_ = 0;
-  bool previous_throttled_ = true;
   bool finishing_ = false;
   bool settled_ = false;
   bool dependency_ = false;

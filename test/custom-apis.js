@@ -124,7 +124,7 @@ async function testDomApis() {
     const implicit = await wc.querySelectorAcrossDocuments('input[type="checkbox"]');
     assert(implicit && implicit.tagName.toLowerCase() === 'input', '未写 iframe 时没有搜到子文档');
 
-    await wc.clickSelector('#inner');
+    await wc.clickElement({ selector: '#inner' });
     const trusted = await waitFor(() => wc.executeJavaScript('window.__clicked === true'));
     assert(trusted, 'clickSelector 没有产生可信点击');
     assert(wc.debugger.isAttached() === false, '点击时附加了 debugger');
@@ -144,8 +144,8 @@ async function testMouseAndKey() {
   const win = await openWindow(html);
   const wc = win.webContents;
   try {
-    await wc.dispatchMouseEvent({ type: 'mousePressed', x: 100, y: 60, button: 'left', clickCount: 1 });
-    await wc.dispatchMouseEvent({ type: 'mouseReleased', x: 100, y: 60, button: 'left', clickCount: 1 });
+    await wc.dispatchMouseEvent({ type: 'mousePressed', button: 'left', clickCount: 1, position: { x: 100, y: 60 } });
+    await wc.dispatchMouseEvent({ type: 'mouseReleased', button: 'left', clickCount: 1, position: { x: 100, y: 60 } });
     const clicked = await waitFor(() => wc.executeJavaScript('window.__mouse === true'));
     assert(clicked, 'dispatchMouseEvent 没有产生可信点击');
 
@@ -168,7 +168,15 @@ async function testMouseAndKey() {
       const value = await wc.executeJavaScript('window.__text || ""');
       return value ? value : null;
     });
-    assert(typed, 'dispatchKeyEvent 没有把字符送进输入框，当前值 ' + JSON.stringify(await wc.executeJavaScript('({ text: window.__text, active: document.activeElement && document.activeElement.id })')));
+    assert(
+      typed,
+      'dispatchKeyEvent 没有把字符送进输入框，当前值 ' +
+        JSON.stringify(
+          await wc.executeJavaScript(
+            '({ text: window.__text, active: document.activeElement && document.activeElement.id })'
+          )
+        )
+    );
     assert(typeof wc.dispatchTouchEvent === 'function', '缺少 dispatchTouchEvent');
     assert(typeof wc.cancelDragging === 'function', '缺少 cancelDragging');
   } finally {
@@ -185,7 +193,9 @@ async function testUserAgentAndDialogs() {
     await wc.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<!DOCTYPE html><title>ua</title>'));
     let hidden;
     try {
-      hidden = await wc.executeJavaScript('({ chrome: typeof chrome, platform: navigator.platform, ua: navigator.userAgent })');
+      hidden = await wc.executeJavaScript(
+        '({ chrome: typeof chrome, platform: navigator.platform, ua: navigator.userAgent })'
+      );
     } catch (error) {
       const alive = await wc.executeJavaScript('1+1').catch((err) => 'dead:' + err.message);
       throw new Error('读取 UA 状态失败: ' + error.message + '；页面 ' + alive);
@@ -231,9 +241,7 @@ async function testUserAgentAndDialogs() {
     assert(restored.startE === 'number', 'csi().startE 不是 number');
     assert(restored.pageT === 'number', 'csi().pageT 不是 number');
     assert(restored.tran === 'number', 'csi().tran 不是 number');
-    const installState = await wc.executeJavaScript(
-      'new Promise((resolve) => chrome.app.installState(resolve))'
-    );
+    const installState = await wc.executeJavaScript('new Promise((resolve) => chrome.app.installState(resolve))');
     assert(installState === 'not_installed', 'installState = ' + installState);
 
     await wc.setUserAgent(ua, {
@@ -245,7 +253,9 @@ async function testUserAgentAndDialogs() {
     const languages = await wc.executeJavaScript('navigator.languages.join(",")');
     assert(languages === 'en-US,en,fr', 'navigator.languages = ' + languages);
 
-    await wc.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`<!DOCTYPE html>
+    await wc.loadURL(
+      'data:text/html;charset=utf-8,' +
+        encodeURIComponent(`<!DOCTYPE html>
 <button id="ask" style="position:absolute;left:40px;top:40px;width:120px;height:40px">ask</button>
 <script>
   document.getElementById('ask').addEventListener('click', () => {
@@ -256,21 +266,30 @@ async function testUserAgentAndDialogs() {
       window.__promptError = String(e);
     }
   });
-</script>`));
+</script>`)
+    );
     let seen = [];
     wc.setJsDialogHandler((details) => {
       seen.push({ type: details.type, message: details.message });
       return { accept: true, promptText: 'typed-by-handler' };
     });
-    await wc.dispatchMouseEvent({ type: 'mousePressed', x: 100, y: 60, button: 'left', clickCount: 1 });
-    await wc.dispatchMouseEvent({ type: 'mouseReleased', x: 100, y: 60, button: 'left', clickCount: 1 });
+    await wc.dispatchMouseEvent({ type: 'mousePressed', button: 'left', clickCount: 1, position: { x: 100, y: 60 } });
+    await wc.dispatchMouseEvent({ type: 'mouseReleased', button: 'left', clickCount: 1, position: { x: 100, y: 60 } });
     const prompted = await waitFor(async () => {
-      const state = await wc.executeJavaScript('({ confirm: window.__confirm, prompt: window.__prompt, error: window.__promptError })');
+      const state = await wc.executeJavaScript(
+        '({ confirm: window.__confirm, prompt: window.__prompt, error: window.__promptError })'
+      );
       if (seen.length >= 2 || state.error) return state;
       return null;
     });
-    assert(seen.length === 2 && seen[0].type === 'confirm' && seen[1].type === 'prompt', '对话框序列 = ' + JSON.stringify(seen) + ' page=' + JSON.stringify(prompted));
-    assert(prompted && prompted.confirm === true && prompted.prompt === 'typed-by-handler', '对话框结果 = ' + JSON.stringify(prompted));
+    assert(
+      seen.length === 2 && seen[0].type === 'confirm' && seen[1].type === 'prompt',
+      '对话框序列 = ' + JSON.stringify(seen) + ' page=' + JSON.stringify(prompted)
+    );
+    assert(
+      prompted && prompted.confirm === true && prompted.prompt === 'typed-by-handler',
+      '对话框结果 = ' + JSON.stringify(prompted)
+    );
     assert(wc.debugger.isAttached() === false, '对话框处理附加了 debugger');
   } finally {
     win.destroy();
@@ -304,7 +323,9 @@ async function testFileInput() {
     assert(typeof wc.setFileInputFiles === 'function', 'webContents.setFileInputFiles 未注册');
     await wc.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<input id="f" type="file">'));
     await wc.setFileInputFiles('input[type="file"]', [file]);
-    const name = await wc.executeJavaScript('document.querySelector("input").files[0] && document.querySelector("input").files[0].name');
+    const name = await wc.executeJavaScript(
+      'document.querySelector("input").files[0] && document.querySelector("input").files[0].name'
+    );
     assert(name === path.basename(file), '选中的文件名 = ' + name);
   } finally {
     win.destroy();
@@ -448,7 +469,10 @@ async function testSocks5ProxyAuth() {
       password
     });
     const resolved = await ses.resolveProxy('http://example.com/');
-    assert(!resolved.toLowerCase().includes(password) && !resolved.includes(username), 'resolveProxy 泄露了 SOCKS 凭据: ' + resolved);
+    assert(
+      !resolved.toLowerCase().includes(password) && !resolved.includes(username),
+      'resolveProxy 泄露了 SOCKS 凭据: ' + resolved
+    );
     await ses.closeAllConnections();
     const response = await ses.fetch('http://example.com/custom-socks', { signal: AbortSignal.timeout(8000) });
     const text = await response.text();
@@ -462,20 +486,23 @@ async function testSocks5ProxyAuth() {
 
 app.on('window-all-closed', () => {});
 
-app.whenReady().then(async () => {
-  await check('querySelectorDeep / getNodeBoxModel / clickSelector / querySelectorAcrossDocuments', testDomApis);
-  await check('dispatchMouseEvent / dispatchKeyEvent', testMouseAndKey);
-  await check('setUserAgent hideChrome 与 setJsDialogHandler', testUserAgentAndDialogs);
-  await check('loadURLWithResponse', testLoadURLWithResponse);
-  await check('setFileInputFiles', testFileInput);
-  await check('session.fetch headerOrder', testHeaderOrder);
-  await check('HTTP 代理 username/password', testHttpProxyAuth);
-  await check('SOCKS5 代理 username/password', testSocks5ProxyAuth);
+app
+  .whenReady()
+  .then(async () => {
+    await check('querySelectorDeep / getNodeBoxModel / clickSelector / querySelectorAcrossDocuments', testDomApis);
+    await check('dispatchMouseEvent / dispatchKeyEvent', testMouseAndKey);
+    await check('setUserAgent hideChrome 与 setJsDialogHandler', testUserAgentAndDialogs);
+    await check('loadURLWithResponse', testLoadURLWithResponse);
+    await check('setFileInputFiles', testFileInput);
+    await check('session.fetch headerOrder', testHeaderOrder);
+    await check('HTTP 代理 username/password', testHttpProxyAuth);
+    await check('SOCKS5 代理 username/password', testSocks5ProxyAuth);
 
-  const failed = results.filter((item) => !item.ok);
-  console.log(`[custom] 结果 ${results.length - failed.length}/${results.length}`);
-  app.exit(failed.length ? 1 : 0);
-}).catch((error) => {
-  console.error(error);
-  app.exit(1);
-});
+    const failed = results.filter((item) => !item.ok);
+    console.log(`[custom] 结果 ${results.length - failed.length}/${results.length}`);
+    app.exit(failed.length ? 1 : 0);
+  })
+  .catch((error) => {
+    console.error(error);
+    app.exit(1);
+  });

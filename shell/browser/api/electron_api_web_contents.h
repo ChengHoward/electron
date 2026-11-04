@@ -365,7 +365,10 @@ class WebContents final : public ExclusiveAccessContext,
       gin_helper::Dictionary params);
   v8::Local<v8::Promise> DispatchKeyEventParams(v8::Isolate* isolate,
                                                 gin_helper::Dictionary params);
-  v8::Local<v8::Promise> SetVirtualCursorEnabled(gin::Arguments* args);
+  v8::Local<v8::Promise> SetAutomationOptions(gin::Arguments* args);
+  base::DictValue GetAutomationState();
+  v8::Local<v8::Promise> ResetAutomationOptions(gin::Arguments* args);
+  void BeginAutomationReset();
   void SetVirtualCursorImage(gin::Arguments* args);
   void SetVirtualCursorFrameRate(gin::Arguments* args);
   base::DictValue GetVirtualCursorState();
@@ -380,6 +383,8 @@ class WebContents final : public ExclusiveAccessContext,
   v8::Local<v8::Promise> PrepareAgentTarget(gin::Arguments* args);
   v8::Local<v8::Promise> FlushAgentInput(int process, int routing);
   void SetAgentInputActive(bool active);
+  void UpdateAutomationRendering();
+  void ApplyBackgroundThrottling(bool allowed);
 
   // Blink C++ querySelector that can pierce closed author shadow roots.
   // Returns null when not found.
@@ -986,12 +991,19 @@ class WebContents final : public ExclusiveAccessContext,
 
   // Whether background throttling is disabled.
   bool background_throttling_ = true;
+  bool requested_background_throttling_ = true;
+  bool automation_keep_rendering_ = false;
+  bool automation_agent_input_active_ = false;
   friend class InputSequence;
   std::unique_ptr<InputSequence> input_sequence_;
   int input_sequence_id_ = 0;
+  uint64_t automation_input_generation_ = 0;
 #if BUILDFLAG(IS_WIN)
   std::unique_ptr<VirtualCursor> virtual_cursor_;
   uint64_t virtual_cursor_epoch_ = 0;
+  uint64_t automation_cursor_image_epoch_ = 0;
+  uint64_t automation_cursor_frame_rate_epoch_ = 0;
+  bool automation_cursor_custom_image_ = false;
 #endif
 
   bool ignore_menu_shortcuts_ = false;

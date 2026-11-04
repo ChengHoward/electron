@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Wed, 4 Nov 2026 12:00:00 +0800
+Subject: fix: correct the Simplified Chinese certificate viewer title
+
+Use the name for a viewer tool in the Simplified Chinese title while
+preserving the certificate name placeholder and shared localized resource.
+
+diff --git a/chrome/app/resources/generated_resources_zh-CN.xtb b/chrome/app/resources/generated_resources_zh-CN.xtb
+--- a/chrome/app/resources/generated_resources_zh-CN.xtb
++++ b/chrome/app/resources/generated_resources_zh-CN.xtb
+@@ -1481,7 +1481,7 @@
+ <translation id="2143765403545170146">在全屏模式下始终显示工具栏</translation>
+ <translation id="2143778271340628265">手动配置代理</translation>
+ <translation id="2143915448548023856">显示设备设置</translation>
+-<translation id="2144536955299248197">证书查看者：<ph name="CERTIFICATE_NAME" /></translation>
++<translation id="2144536955299248197">证书查看器：<ph name="CERTIFICATE_NAME" /></translation>
+ <translation id="2144557304298909478">Linux Android 应用开发</translation>
+ <translation id="2145468727756963476">Gemini 正在刷新…</translation>
+ <translation id="2145688286532368277">此网站已关闭 JavaScript 优化功能。</translation>

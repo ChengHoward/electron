@@ -1,5 +1,7 @@
 # 无需 CDP 的 Agent 自动化
 
+当前 `.8` 接口与破坏性迁移见文末“自动化配置、输入隔离与持续渲染”节；本构建核心 4 组 55 项及公开类型检查通过。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。以下 `.4`、`.5` 内容保留为历史版本记录。
+
 本说明对应 Windows x64 定制分发版本 `45.0.0-cloudbypass.4`，包含原生 Agent、clickSelector 修复、批量输入和虚拟光标。二进制内部上游版本仍为 `45.0.0-beta.5`；此前发布版本不据此认定支持，Linux 本次未编译验证。
 
 2026-11-04 继承回归记录：Windows x64 [`45.0.0-cloudbypass.5`](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.5) 继承本文 `.4` 能力，Agent **11/11**、输入 **26/26**、clickSelector **9/9**，共 **46/46** 通过。输入像素测试补充 HWND/PID 前置验证，未因此改动业务内核。下文 `.4` 的历史日期、测量值和验收环境保持原记录；本次结果不扩展到 Linux。
@@ -401,3 +403,171 @@ Windows 增量构建及类型检查通过。`test/input-sequence.cjs` 共 26/26 
 真实输入运行测试通过 Windows 原生消息入口，覆盖鼠标移动/点击、按键/字符以及 WebContents 输入回调拦截；不使用 DOM 合成事件代替原生输入。触摸/笔物理设备、触控板惯性、真实中文 IME 组合及硬件拖放、系统睡眠恢复、其他 DPI 比例及多屏迁移和 GPU 独立开销未在本机自动验收中完整实测。对应入口已接入原生门禁或生命周期处理，但不把代码检查写成全部硬件通道验收通过。Linux/macOS 虚拟光标明确不支持。
 
 复现：使用本版本 electron.exe 启动 `test/input-sequence.cjs`、`test/click-selector.cjs`、`test/agent-automation.cjs`；INPUT_TEST_REPORT 指定结构化结果文件，AGENT_PYTHON 指定 Python 解释器。完整 JSON 结果与构建 manifest 随分发 Release 提供。
+
+## 自动化配置、输入隔离与持续渲染（Windows .8）
+
+更新日期：2026-11-05。本文对应 Windows x64 定制版本 `45.0.0-cloudbypass.8`，首期范围为普通窗口及 WebContentsView。**本构建核心 4 组 55 项通过，公开类型生成及 TypeScript smoke 通过**。其中 1 次核心真实光标采样受并发系统输入影响未能判定，未记为该采样通过。独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。前文 `.4`、`.5` 的接口与计数仍按各自历史版本理解。
+
+### 统一配置与独立开关
+
+```js
+await wc.setAutomationOptions({
+  isolateInput: true,
+  blockRealPointer: true,
+  blockRealKeyboard: true,
+  keepRendering: true,
+  virtualCursor: {
+    enabled: false,
+    image: null,
+    hotspot: { x: 0, y: 0 },
+    frameRate: 30
+  }
+});
+
+const state = wc.getAutomationState();
+
+// 只调整光标显示，不关闭输入隔离或渲染保活。
+await wc.setAutomationOptions({ virtualCursor: { enabled: true } });
+
+// 取消本通道任务、清理自动化持有状态并恢复默认配置。
+await wc.resetAutomationOptions();
+```
+
+- `setAutomationOptions(options): Promise<void>` 增量更新本 WebContents 的长期配置。省略字段保留当前值，`virtualCursor` 内也按字段更新；空对象不改变配置，显式 `false` 关闭对应功能。
+- `getAutomationState(): AutomationState` 同步读取配置及当前生效状态，不进入输入任务队列，也不向网页提供桥接对象。
+- `resetAutomationOptions(): Promise<void>` 取消当前及排队的本通道任务，清理本通道的自动化持键、拖拽等状态，释放本组长期需求，并恢复默认配置。仅取消一个序列仍使用该序列的 `AbortSignal`。
+
+`isolateInput` 管理各 WebContents 的虚拟焦点与自动化输入状态；`blockRealPointer` 和 `blockRealKeyboard` 分别阻断进入该 WebContents 的真实指针与键盘输入。需要完整后台输入隔离时，同时开启这三项。仅开启 `isolateInput` 而允许真实输入时，同一网页中的真实操作仍可能改变 DOM、页面元素焦点或业务状态，不能宣称完全互不干扰。屏蔽作用于目标 WebContents，不锁定系统或其他软件的输入。
+
+`keepRendering` 持有持续的后台渲染需求；`virtualCursor.enabled` 只控制光标显示。隔离输入与渲染保活均可以在不显示光标时独立开启。`frameRate` 仅限制光标图层更新，不限制输入频率，也不设置网页帧率。
+
+新建 WebContents 时，四个顶层开关与光标显示均为 `false`，默认图片为系统样式箭头，热点为 `{ x: 0, y: 0 }`，帧率为 `0`（自动）。`image` 接受非空 `NativeImage` 或 `null`；`null` 恢复默认箭头与默认热点。图片在调用时复制，后续修改原图不改变已提交的光标。图片与热点沿用原有边界，`frameRate` 必须为 `0–1000` 的整数。
+
+未知字段、错误类型、非法组合或不支持的能力明确报错。先校验整个配置及资源，再提交更新；切换隔离或真实输入策略时如存在未结束的持键、拖拽或序列，应先完成、取消任务或重置，不能插入半次点击。配置 Promise 完成表示配置切换与必要的输入屏障完成，不表示画面已经显示在显示器上，也不表示页面业务动作完成。
+
+### 状态、焦点与渲染
+
+状态顶层包含 `isolateInput`、`blockRealPointer`、`blockRealKeyboard`、`keepRendering`；`virtualCursor` 包含 `enabled`、`hotspot`、`frameRate`、`customImage` 和诊断信息。另有 `rendering` 的 `viewAvailable`、`keepAlive`、`requestedBackgroundThrottling`、`effectiveBackgroundThrottling`，以及当前 `inputActive`。配置开启与视图可用分别读取，不能仅凭一个开关推断后台正在持续出帧。
+
+后台输入的目标是在用户操作其他软件时，向指定 WebContents 派发输入，不激活系统窗口、不移动真实光标。每个 WebContents 使用自己的虚拟位置、按钮、修饰键和焦点状态。同一网页仍只有自身的一套元素焦点、选区与 Tab 顺序。
+
+宿主的后台节流基础设置、`keepRendering` 的长期需求和单事件/序列等临时需求分别持有。一个任务结束只释放自身的需求；关闭长期保活或完整重置时恢复宿主当前所需状态，不能用旧快照覆盖宿主中途更新的节流设置。
+
+本次本地实现修复从未显示过、已挂载且尺寸有效的 WebContentsView 在保活下停帧的问题；内部维持栅格与帧元数据更新，不依赖视频帧读回来驱动后台渲染。是否持续更新须同时检查截图调用前的动画计数和实际像素变化，不能仅以截图非空判定。
+
+隐藏、遮挡、最小化和移出显示器属于不同验收场景。页面要有有效尺寸和渲染承载；需要截图或像素时应确认新帧生成。输入处理屏障不等待显示器真正呈现。隐藏时可以停止光标图层刷新，页面持续渲染需求单独保持。
+
+不保证零尺寸、未挂载或失去承载的 View、显式 `offscreen: true`、系统休眠、渲染进程或 GPU 故障期间持续正常出帧。网页自行根据可见性暂停业务动画时，原生保活不会自动重启其业务逻辑。共享宿主合成器的其他 WebContents 可能受到资源消耗影响，不能承诺完全隔离 CPU/GPU 开销。系统输入法、系统对话框、共享剪贴板及硬件触摸/笔还需按具体场景验证。
+
+长期配置跨刷新、导航和 frame 重建保留；旧文档的目标、焦点和输入任务随文档失效，不重放到新页面。`AbortSignal` 只取消所属任务；完整重置阻止旧代次继续派发，并清理本通道资源。销毁 WebContents 时取消任务并释放资源；崩溃或承载不可用时，通过状态反映实际不可用，不能把配置保留描述成渲染已经恢复。
+
+### 保留光标图片和帧率方法
+
+以下独立方法继续保留，与统一配置共享同一状态：
+
+```js
+wc.setVirtualCursorImage(image, { hotspot: { x: 0, y: 0 } });
+wc.setVirtualCursorImage(null);
+wc.setVirtualCursorFrameRate(60);
+
+// 等价的配置入口，可在一次更新中同时设置其他选项。
+await wc.setAutomationOptions({
+  virtualCursor: { image, hotspot: { x: 0, y: 0 }, frameRate: 60 }
+});
+```
+
+`.8` 仅移除旧 `setVirtualCursorEnabled(enabled, options)` 配置入口，不保留别名。迁移时，旧调用的布尔值放入 `virtualCursor.enabled`，两项真实输入阻断放在顶层。
+
+```js
+// 旧：await wc.setVirtualCursorEnabled(true, {
+//   blockRealPointer: true, blockRealKeyboard: true
+// });
+await wc.setAutomationOptions({
+  virtualCursor: { enabled: true },
+  blockRealPointer: true,
+  blockRealKeyboard: true
+});
+
+// 旧：await wc.setVirtualCursorEnabled(false);
+await wc.resetAutomationOptions();
+```
+
+迁移差异：`virtualCursor.enabled: false` 只关闭显示；它不会自动解除阻断、关闭隔离或停止长期渲染。要完整退出使用 `resetAutomationOptions()`。
+
+### 点击、目标查询与坐标
+
+`.8` 移除 `clickSelector`，统一为 `clickElement(options)`。单对象中 `selector` 与 `target` 恰好提供一项；选择器调用不再分成两个参数，target 调用不再传空字符串占位。
+
+```js
+await wc.clickElement({ selector: 'button[type="submit"]', pierce: true });
+await wc.clickElement({ target: element.target, button: 'left', clickCount: 1 });
+```
+
+`getAgentSnapshot`、`findAgentElements` 保留快照和语义目标职责，返回可供输入使用的 `AgentTarget`。`querySelectorDeep`、`querySelectorAcrossDocuments`、`getNodeBoxModel` 保留几何查询；`querySelectorAcrossDocuments` 常规返回 `AgentDomElementInfo | null`，匹配结果包含几何数据与必填 `target`。移除 `querySelectorAcrossDocuments(selector, { agentInfo: true })` 这种按参数切换返回类型的模式。扫描不完整、截断或框架失败仍应通过快照覆盖状态判断。
+
+鼠标和触摸输入改用明确坐标对象：无 target 时，`position: { x, y }` 表示主视口 CSS 坐标；带 target 时，`offset: { x, y }` 表示目标元素内的 CSS 偏移。鼠标 target 调用省略 offset 时使用元素中心，触摸点各自提供坐标。禁止同时提供 position 与 offset，也不再接受这些新接口的顶层 x/y。几何查询结果原有的 x/y 不因输入参数更新而改名。
+
+```js
+await wc.dispatchMouseEvent({ type: 'mouseMoved', position: { x: 100, y: 200 } });
+await wc.dispatchMouseEvent({ type: 'mouseMoved', target: element.target, offset: { x: 4, y: 6 } });
+
+await wc.dispatchTouchEvent({
+  type: 'touchStart',
+  touchPoints: [{ id: 0, position: { x: 100, y: 200 } }]
+});
+await wc.dispatchTouchEvent({ type: 'touchEnd', touchPoints: [] });
+
+await wc.dispatchInputSequence([
+  { kind: 'mouse', type: 'mouseMoved', atMs: 0, position: { x: 100, y: 200 } }
+]);
+```
+
+单事件 `timestamp` 与序列 `atMs` 保持不同含义；前者沿用既有时间戳，后者是序列统一起点后的毫秒偏移。序列仍只接受鼠标和键盘步骤，不新增触摸步骤。原有 `sendInputEvent` 不改坐标格式，也不由此获得全部 target、后台隔离或结构化结果能力。
+
+### 结果与边界
+
+`dispatchMouseEvent`、`dispatchKeyEvent`、`dispatchTouchEvent`、`clickElement` 都返回 `Promise<AgentDispatchResult>`，无 target 与带 target 的调用形态一致；包含 `status`、`stage`、`stages` 和可选的 `target`、`reason`、`deliveryWarning`。`status: 'dispatched'` 表示输入派发结果，页面是否提交表单、改变状态等应另外确认。批序列继续使用 `InputSequenceResult` 的完成/取消/失败、派发计数、时序、停止位置与清理结果，不强行改成单事件格式。
+
+实现不向页面新增 DOM、window、navigator 标记、脚本桥接或自动化启动标识。页面仍能观察输入、焦点和时序；`isTrusted` 与无法识别自动化分别表述，不承诺 View 内绝对无法检测。
+
+本版同时修正简体中文证书窗口标题为“证书查看器”。证书窗口随来源窗口拖动而移动的问题没有纳入本次修复。
+
+### 本版本验收与发布记录
+
+核心 4 组：automation-options **10/10**；input-sequence **25/25**；agent **11/11**；click **9/9**，合计 **55/55**。公开类型生成及 TypeScript smoke 通过。
+
+上述通过计数仅属于核心四组，独立跨 frame 的五项检查另列，不隐藏其中的失败。没有整套重跑多语言原生菜单截图。输入 suite 显式跳过完整性能矩阵，跳过明细保留在其原始报告中。本次 Windows 结果不扩展到 Linux、macOS、系统输入法或未列出的硬件场景。
+
+核心 automation-options 的独立真实光标采样状态为 `inconclusive_concurrent_system_input`：lastInputTick `291938765` → `291941937`，光标 `{"x": 843, "y": 364}` → `{"x": 857, "y": 413}`。这次采样不能据此判定真实光标未移动；该 case 的焦点、保活和 OOPIF 输入断言通过。核心用例计数与此采样结论分别记录，不能把 55/55 扩写为所有测量均已通过。
+
+从未显示过且已挂载的 WebContentsView：动画计数 `314` → `336`（185ms）；截图前计数 `336` → `381`，之后为 `409`。对应 case 的相邻截图像素差异断言通过，证明这次实际观察到截图调用前动画推进与新像素。
+
+上述核心真实光标采样的未判定结果，与下方独立跨 frame 报告中的通过/失败/无法判定计数分别保留。
+
+核心配置实际报告：`D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/automation-options-results.json`。
+
+发行包与安装记录见 [Windows x64 `.8` 发行页](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-cloudbypass.8)、随附 `automation-build-manifest.json` 及安装/公开下载验证报告；安装与下载结果按各自报告单独记录。
+
+原始运行数据、收据、焦点记录、类型及证书资源核验随附于 `automation-runtime-reports.zip`，包括独立跨 frame 的两个已知失败，核心通过计数不代表全部检查通过。
+
+### 独立跨 frame 连续性实测
+
+独立跨 frame 5 项为 3 通过、2 失败、0 无法判定，**尚未达到完整跨 frame 连续性**。该组独立于上面的核心四组计数，保留全部失败或无法判定结果，不把核心通过数写成全部验收通过。
+
+实际进程拓扑：main：OS PID `1640316`，Chromium processId `4`、routingId `1`；same：OS PID `1640316`，Chromium processId `4`、routingId `4`；cross：OS PID `1640768`，Chromium processId `5`、routingId `6`。
+
+- 跨主文档、同进程 iframe、OOPIF 的轨迹及虚拟光标位置：**通过**。
+- iframe 进入/退出事件及 CSS hover 清理：**失败**。
+- 跨边界持键拖动、显式捕获与释放：**失败**。
+- 主/子文档滚动及 125% 缩放后的坐标一致性：**通过**。
+- 可信输入、真实系统光标和前台窗口稳定性：**通过**。
+
+边界事件缺口：cross exit 缺少 `mouseout`、`mouseleave`、`pointerout`、`pointerleave`。
+
+这次报告中的两个 iframe 最终 CSS `:hover` 均已清空；不能把退出事件缺失描述成 CSS hover 残留。
+
+拖动缺口（explicit-OOPIF-capture-drag）：捕获后的移动改投其他文档 9 次；捕获/释放不完整 1 次。原 OOPIF 捕获/释放观察：`{"got": false, "lost": false, "stillActive": false, "receivedMouseup": false}`。按下后/下一步移动的 hasPointerCapture 分别为 `true` / `false`。
+
+实际运行版本：Electron `45.0.0-beta.5`、Chromium `156.0.8078.36`、Node ABI `150`。可执行文件 SHA-256：`6e0844ec5fd9bf77b0010c9c1aacfcfea93fb2b1539de2a4be9b1dd5cddf250d`。
+
+独立报告：`D:/electron/edist-publish/automation-release-45.0.0-cloudbypass.8/cross-frame-results.json`。同一测试的完整事件、采样及失败明细保留在报告中；真实硬件指针、触摸笔、其他 DPI 或更复杂嵌套结构不由这五项自动外推。

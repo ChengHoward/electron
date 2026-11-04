@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron contributors <electron@github.com>
+Date: Thu, 5 Nov 2026 00:00:00 +0800
+Subject: fix: keep unpainted frame sinks running without background throttling
+
+A WebContentsView in a never-shown host can produce frames without its
+ancestor compositor drawing the surface. Viz then throttles it after the
+undrawn-frame limit even though its page scheduler is kept active.
+
+Carry the existing per-WebView scheduler policy to each controlled frame
+widget and suppress undrawn-frame throttling while that policy is disabled.
+Keep the Picture-in-Picture request independent, so restoring one reason
+cannot discard the other. Initialize new local-root widgets from the current
+WebView policy before their first frame, including navigation replacements.
+
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -4343,6 +4343,12 @@
+ void WebViewImpl::SetSchedulerThrottling(bool allowed) {
+   DCHECK(GetPage());
+   scheduler_throttling_allowed_ = allowed;
++  // A hidden host may never draw this view's surface. Keep its frame widgets
++  // producing updates while the embedder has disabled background throttling.
++  ForEachFrameWidgetControlledByView(*this,
++                                     [allowed](WebFrameWidgetImpl* widget) {
++                                       widget->SetSchedulerThrottling(allowed);
++                                     });
+   // Re-apply the visibility the browser last reported: forced to kVisible
+   // while throttling is disallowed, back to the real state once it is allowed
+   // again. Without this, toggling the setting on a page that is already
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.h b/third_party/blink/renderer/core/exported/web_view_impl.h
+--- a/third_party/blink/renderer/core/exported/web_view_impl.h
++++ b/third_party/blink/renderer/core/exported/web_view_impl.h
+@@ -446,6 +446,9 @@
+ 
+   PageScheduler* Scheduler() const override;
+   void SetSchedulerThrottling(bool allowed) override;
++  bool IsSchedulerThrottlingAllowed() const {
++    return scheduler_throttling_allowed_;
++  }
+   void SetVisibilityState(mojom::blink::PageVisibilityState visibility_state,
+                           bool is_initial_state) override;
+   mojom::blink::PageVisibilityState GetVisibilityState() override;
+diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+--- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
++++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+@@ -2754,6 +2754,10 @@
+                             ->widget_base_.get()
+                       : nullptr);
+ 
++  // A local root can be created after the browser changed this view's policy.
++  // Apply it before the first frame, including widgets restored after a swap.
++  SetSchedulerThrottling(View()->IsSchedulerThrottlingAllowed());
++
+   probe::DidInitializeFrameWidget(local_root_->GetFrame());
+   local_root_->GetFrame()->NotifyFrameWidgetCreated();
+ 
+@@ -5803,10 +5807,25 @@
+ 
+ void WebFrameWidgetImpl::SetMayThrottleIfUndrawnFrames(
+     bool may_throttle_if_undrawn_frames) {
+-  if (!View()->does_composite())
+-    return;
++  // Document Picture-in-Picture owns this request independently of the
++  // embedder's background policy. Restore either reason without losing the
++  // other when the modes are toggled in either order.
++  requested_undrawn_frame_throttling_ = may_throttle_if_undrawn_frames;
++  ApplyUndrawnFrameThrottling();
++}
++
++void WebFrameWidgetImpl::SetSchedulerThrottling(bool allowed) {
++  scheduler_throttling_allowed_ = allowed;
++  ApplyUndrawnFrameThrottling();
++}
++
++void WebFrameWidgetImpl::ApplyUndrawnFrameThrottling() {
++  if (!widget_base_ || !local_root_ || !View()->does_composite() ||
++      !widget_base_->LayerTreeHost()) {
++    return;
++  }
+   widget_base_->LayerTreeHost()->SetMayThrottleIfUndrawnFrames(
+-      may_throttle_if_undrawn_frames);
++      requested_undrawn_frame_throttling_ && scheduler_throttling_allowed_);
+ }
+ 
+ std::unique_ptr<cc::ScopedRequestHighFramerate>
+diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
+--- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
++++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
+@@ -364,6 +364,8 @@
+   void SetLayerTreeDebugState(const cc::LayerTreeDebugState& state) override;
+   void SetMayThrottleIfUndrawnFrames(
+       bool may_throttle_if_undrawn_frames) override;
++  // Embedder policy, independent of Document Picture-in-Picture's request.
++  void SetSchedulerThrottling(bool allowed);
+   std::unique_ptr<cc::ScopedRequestHighFramerate> RequestHighFramerate()
+       override;
+   int GetVirtualKeyboardResizeHeight() const override;
+@@ -1221,6 +1223,13 @@
+   // session, this info is sent to the browser along with other drag/drop info.
+   mojom::blink::DragEventSourceInfo possible_drag_event_info_;
+ 
++  void ApplyUndrawnFrameThrottling();
++
++  // Both the embedder and Picture-in-Picture must permit throttling before
++  // Viz may stop updates for surfaces not drawn by an ancestor compositor.
++  bool requested_undrawn_frame_throttling_ = true;
++  bool scheduler_throttling_allowed_ = true;
++
+   // Base functionality all widgets have. This is a member as to avoid
+   // complicated inheritance structures.
+   std::unique_ptr<WidgetBase> widget_base_;

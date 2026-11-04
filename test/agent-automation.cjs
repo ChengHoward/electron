@@ -120,11 +120,20 @@ app
       assert.equal(wc.debugger.isAttached(), false);
     });
     await check('existing cross-document selector returns Agent semantics and target identity', async () => {
-      const found = await wc.querySelectorAcrossDocuments('iframe[src*="localhost"] >>> #name', { agentInfo: true });
-      assert.equal(found.complete, true);
-      assert.equal(found.elements.length, 1);
-      assert.equal(found.elements[0].name, 'Customer name');
-      assert.equal(found.elements[0].target.processId, target.processId);
+      const found = await wc.querySelectorAcrossDocuments('iframe[src*="localhost"] >>> #name');
+      assert.ok(found);
+      assert.equal(found.target.processId, target.processId);
+      const semantic = await wc.findAgentElements({ name: 'Customer name' });
+      assert.equal(semantic.complete, true);
+      assert.ok(
+        semantic.elements.some(
+          (element) =>
+            element.target.processId === found.target.processId &&
+            element.target.routingId === found.target.routingId &&
+            element.target.documentId === found.target.documentId &&
+            element.target.backendNodeId === found.target.backendNodeId
+        )
+      );
     });
     await check('keyboard targets main document, same-process iframe and open shadow independently', async () => {
       const snap = await snapshot();
@@ -164,7 +173,7 @@ app
         const button = (await wc.findAgentElements({ name: 'Submit form' })).elements.find(
           (e) => e.target.processId === target.processId
         );
-        const clicked = await wc.clickSelector('', { target: button.target });
+        const clicked = await wc.clickElement({ target: button.target });
         assert.equal(clicked.status, 'dispatched', JSON.stringify(clicked));
         await delay(100);
         const frame = wc.mainFrame.framesInSubtree.find((f) => f.processId === target.processId);
@@ -180,7 +189,7 @@ app
         const checkbox = (await wc.findAgentElements({ name: 'Accept terms' })).elements.find(
           (e) => e.target.processId === target.processId && e.tagName === 'input'
         );
-        const toggled = await wc.clickSelector('', { target: checkbox.target });
+        const toggled = await wc.clickElement({ target: checkbox.target });
         assert.equal(toggled.status, 'dispatched', JSON.stringify(toggled));
         const checkedAfter = (await wc.findAgentElements({ name: 'Accept terms' })).elements.find(
           (e) => e.target.backendNodeId === checkbox.backendNodeId && e.target.processId === target.processId
@@ -204,7 +213,7 @@ app
       );
       assert.equal(after.value, 'Basic');
       assert.ok(after.options.some((option) => option.selected && option.value === 'Basic'));
-      const popup = await wc.clickSelector('', { target: select.target });
+      const popup = await wc.clickElement({ target: select.target });
       assert.equal(popup.status, 'failed');
       assert.equal(popup.reason, 'TARGET_NATIVE_POPUP_UNSUPPORTED');
       assertNoActivation();
@@ -217,7 +226,7 @@ app
       const start = await wc.dispatchTouchEvent({
         target: button.target,
         type: 'touchStart',
-        touchPoints: [{ x: 10, y: 10, id: 0 }]
+        touchPoints: [{ id: 0, offset: { x: 10, y: 10 } }]
       });
       assert.equal(start.status, 'dispatched', JSON.stringify(start));
       const end = await wc.dispatchTouchEvent({ target: button.target, type: 'touchEnd', touchPoints: [] });

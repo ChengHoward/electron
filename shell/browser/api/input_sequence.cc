@@ -98,8 +98,6 @@ InputSequence::~InputSequence() {
 
 void InputSequence::Start() {
   owner_->input_sequence_id_ = id_;
-  previous_throttled_ = owner_->GetBackgroundThrottling();
-  owner_->SetBackgroundThrottling(false);
   owner_->SetAgentInputActive(true);
   main_document_ = web_contents()->GetPrimaryMainFrame()->GetWeakDocumentPtr();
   start_ = base::TimeTicks::Now();
@@ -542,7 +540,6 @@ void InputSequence::Settle() {
   owner_->input_sequence_id_ = 0;
   if (web_contents()) {
     owner_->SetAgentInputActive(false);
-    owner_->SetBackgroundThrottling(previous_throttled_);
   }
   std::sort(lateness_.begin(), lateness_.end());
   auto percentile = [&](double p) {

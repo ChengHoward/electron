@@ -5,11 +5,13 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/aura/window_observer.h"
 #include "ui/compositor/compositor_animation_observer.h"
@@ -27,6 +29,10 @@ class Layer;
 namespace blink {
 class WebMouseEvent;
 }
+namespace content {
+class RenderWidgetHostImpl;
+class RenderWidgetHostViewBase;
+}  // namespace content
 namespace electron {
 
 // Browser UI layers, never part of the renderer's captured Surface.
@@ -38,18 +44,42 @@ class VirtualCursor final : public content::WebContentsObserver,
  public:
   explicit VirtualCursor(content::WebContents* contents);
   ~VirtualCursor() override;
-  std::string Configure(bool enabled, bool pointer, bool keyboard);
+  std::string ValidateConfiguration(bool display,
+                                    bool pointer,
+                                    bool keyboard,
+                                    bool isolate) const;
+  std::string Configure(bool display,
+                        bool pointer,
+                        bool keyboard,
+                        bool isolate);
+  // Restore an already validated state even if native input/view availability
+  // changed while its asynchronous configuration barrier was pending.
+  void RestoreConfiguration(bool display,
+                            bool pointer,
+                            bool keyboard,
+                            bool isolate);
+  static std::string SnapshotImage(const gfx::ImageSkia& image,
+                                   gfx::PointF hotspot,
+                                   gfx::ImageSkia* snapshot);
+  void RestoreImage(const gfx::ImageSkia& snapshot, gfx::PointF hotspot);
   std::string SetImage(const gfx::ImageSkia& image, gfx::PointF hotspot);
   void SetFrameRate(int fps);
   void OnInjectedMouse(const blink::WebMouseEvent& event,
                        content::RenderWidgetHostView* view);
   bool enabled() const { return enabled_; }
-  bool block_pointer() const { return enabled_ && block_pointer_; }
-  bool block_keyboard() const { return enabled_ && block_keyboard_; }
+  bool block_pointer() const { return block_pointer_; }
+  bool block_keyboard() const { return block_keyboard_; }
+  bool isolate_input() const { return isolate_input_; }
+  const gfx::ImageSkia& image() const { return image_; }
+  gfx::PointF hotspot() const { return hotspot_; }
+  int frame_rate() const { return fps_; }
   base::DictValue GetState() const;
 
  private:
   void BindView();
+  void BindWidgets();
+  void ReleaseWidgets();
+  bool Active() const;
   void Detach();
   void Schedule();
   void RequestFrame();
@@ -71,10 +101,15 @@ class VirtualCursor final : public content::WebContentsObserver,
   void OnWindowAddedToRootWindow(aura::Window*) override;
   void OnWindowDestroying(aura::Window*) override;
   void RenderViewReady() override;
+  void RenderFrameCreated(content::RenderFrameHost*) override;
   void RenderViewHostChanged(content::RenderViewHost*,
                              content::RenderViewHost*) override;
   void RenderFrameHostChanged(content::RenderFrameHost*,
                               content::RenderFrameHost*) override;
+  void RenderFrameHostStateChanged(
+      content::RenderFrameHost*,
+      content::RenderFrameHost::LifecycleState,
+      content::RenderFrameHost::LifecycleState) override;
   void WebContentsDestroyed() override;
   void OnVisibilityChanged(content::Visibility) override;
   raw_ptr<aura::Window> window_ = nullptr;
@@ -82,12 +117,15 @@ class VirtualCursor final : public content::WebContentsObserver,
   raw_ptr<ui::Compositor> observing_ = nullptr;
   std::unique_ptr<ui::Layer> clip_;
   std::unique_ptr<ui::Layer> sprite_;
+  std::vector<base::WeakPtr<content::RenderWidgetHostImpl>> isolated_widgets_;
+  std::vector<base::WeakPtr<content::RenderWidgetHostViewBase>> filtered_views_;
   gfx::ImageSkia image_;
   gfx::PointF hotspot_;
   gfx::PointF position_;
   bool enabled_ = false;
   bool block_pointer_ = false;
   bool block_keyboard_ = false;
+  bool isolate_input_ = false;
   bool dirty_ = false;
   bool image_dirty_ = true;
   int fps_ = 0;

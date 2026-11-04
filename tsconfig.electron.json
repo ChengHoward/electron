@@ -4,6 +4,7 @@
     "noEmit": true,
     "rootDir": ".."
   },
+  "exclude": ["electron.d.ts", "typings/agent-automation.d.ts"],
   "include": [
     "lib",
     "typings"
