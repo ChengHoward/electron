@@ -171,6 +171,8 @@ CertificateViewerHandle ShowCertificateViewer(content::WebContents* source,
       new CertificateDialog(source, certificate, std::move(closed));
   auto* view = new views::WebDialogView(source->GetBrowserContext(), delegate,
                                         std::make_unique<DialogNavigation>());
+  // Dialog frames only expose a native draggable caption when opted in.
+  view->set_draggable(true);
   auto* web_view = static_cast<views::WebView*>(view->children().front().get());
   web_view->GetWebContents()->SetUserData(
       kCertificateViewerData, std::make_unique<base::SupportsUserData::Data>());

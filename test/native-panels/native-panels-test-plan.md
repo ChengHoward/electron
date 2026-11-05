@@ -65,3 +65,25 @@ The internal `_getState` diagnostic is used to inspect actual native control
 state and determine OS input targets; it is not a published interface. Test
 actions still enter through Win32 input, and the driver independently checks
 HWND ownership, visibility, bounds, styles, hit testing, and pixels.
+
+## Certificate window movement
+
+Run `certificate-window-movement.cjs` with the intended Electron executable on
+an interactive Windows desktop. Set `CERT_WINDOW_TEST_REPORT` to the output JSON
+path and, when necessary, `NATIVE_PANELS_PYTHON` to a Python executable. The suite
+uses its own temporary profile and local HTTPS certificate fixture. It opens the
+viewer through real clicks in `showPageInfoDialog()` and records the executable
+hash, runtime versions, displays, native window coordinates and hit-test results.
+
+The cases cover a framed BrowserWindow, a frameless BrowserWindow, and a
+frameless BaseWindow containing a WebContentsView. Each checks retained native
+ownership and renderer isolation, source movement and resizing, source and viewer
+caption dragging, minimize/restore and stacking, and closure after source
+navigation or destruction. Programmatic movement also covers maximize/restore
+and transfers between available displays. Missing multi-display configurations
+are recorded as coverage limits.
+
+Compare the same frozen suite against the previous binary and the candidate.
+Distinguish source-following from a viewer that cannot itself be dragged: the
+source must actually move while the viewer remains at its screen coordinates,
+and the viewer's own title must return `HTCAPTION` and respond to a real drag.
