@@ -1178,8 +1178,10 @@ void ElectronApiServiceImpl::GetAgentFrameData(
       const auto visibility =
           element.GetComputedValue(blink::WebString::FromUtf8("visibility"))
               .Utf8();
-      item.Set("visible", !bounds.IsEmpty() && visibility != "hidden" &&
-                              visibility != "collapse");
+      // Missing computed style (e.g. an unassigned shadow host light child)
+      // must not make an element eligible for native interaction.
+      item.Set("visible", element.IsConnected() && !bounds.IsEmpty() &&
+                              visibility == "visible");
       base::DictValue box;
       box.Set("x", bounds.x());
       box.Set("y", bounds.y());
@@ -1243,8 +1245,7 @@ void ElectronApiServiceImpl::PrepareAgentTarget(
     element.ScrollIntoViewIfNeeded();
   const auto visibility =
       element.GetComputedValue(blink::WebString::FromUtf8("visibility")).Utf8();
-  if (element.BoundsInWidget().IsEmpty() || visibility == "hidden" ||
-      visibility == "collapse") {
+  if (element.BoundsInWidget().IsEmpty() || visibility != "visible") {
     std::move(callback).Run(nullptr, "TARGET_NOT_VISIBLE");
     return;
   }

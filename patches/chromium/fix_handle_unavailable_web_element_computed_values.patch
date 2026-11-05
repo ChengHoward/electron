@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: chuanchuan <example@gmail.com>
+Date: Fri, 6 Nov 2026 09:00:00 +0800
+Subject: fix: handle unavailable WebElement computed values
+
+Upstream WebElement::GetComputedValue dereferences a nullable CSSValue.
+Connected light children excluded from a shadow host's flat tree and
+detached elements may lack a computed style. Return a null WebString,
+consistent with invalid properties and null WebElements, in that case.
+
+Electron's native Agent DOM scanner encounters these elements while
+walking author DOM and closed shadow roots. Keep this patch until the
+upstream WebElement implementation checks GetPropertyCSSValue for null;
+the ComputedStyleUnavailable unit test covers the removal criterion.
+
+diff --git a/third_party/blink/renderer/core/exported/web_element.cc b/third_party/blink/renderer/core/exported/web_element.cc
+index 1d885fc9cccb1..c3a1b6cbb2010 100644
+--- a/third_party/blink/renderer/core/exported/web_element.cc
++++ b/third_party/blink/renderer/core/exported/web_element.cc
+@@ -719,7 +719,11 @@ WebString WebElement::GetComputedValue(const WebString& property_name) {
+   element->GetDocument().UpdateStyleAndLayoutTree();
+   auto* computed_style =
+       MakeGarbageCollected<CSSComputedStyleDeclaration>(element);
+-  return computed_style->GetPropertyCSSValue(property_id)->CssText();
++  const CSSValue* value = computed_style->GetPropertyCSSValue(property_id);
++  // Elements outside the flat tree may have no computed style.
++  if (!value)
++    return WebString();
++  return value->CssText();
+ }
+ 
+ WebElement::WebElement(Element* elem) : WebNode(elem) {}
+diff --git a/third_party/blink/renderer/core/exported/web_element_test.cc b/third_party/blink/renderer/core/exported/web_element_test.cc
+index 88b3a63ba2d9f..f61e1adfe32b0 100644
+--- a/third_party/blink/renderer/core/exported/web_element_test.cc
++++ b/third_party/blink/renderer/core/exported/web_element_test.cc
+@@ -617,6 +617,25 @@ TEST_F(WebElementTest, ComputedStyleProperties) {
+   }
+ }
+ 
++TEST_F(WebElementTest, ComputedStyleUnavailable) {
++  EXPECT_TRUE(WebElement().GetComputedValue("visibility").IsNull());
++
++  InsertHTML("<div id=host><button id=testElement>Download</button></div>");
++  WebElement element = TestElement();
++  EXPECT_EQ(element.GetComputedValue("visibility"), "visible");
++  EXPECT_TRUE(element.GetComputedValue("not-a-property").IsNull());
++
++  auto* host = GetDocument().getElementById(AtomicString("host"));
++  host->AttachShadowRootForTesting(ShadowRootMode::kClosed);
++  // The connected light child is absent from the flat tree (no matching slot).
++  EXPECT_TRUE(element.IsConnected());
++  EXPECT_TRUE(element.GetComputedValue("visibility").IsNull());
++
++  host->SetInnerHTMLWithoutTrustedTypes("");
++  EXPECT_FALSE(element.IsConnected());
++  EXPECT_TRUE(element.GetComputedValue("visibility").IsNull());
++}
++
+ TEST_F(WebElementTest, Labels) {
+   auto ExpectLabelIdsEqual = [&](const std::vector<WebString>& expected_ids) {
+     std::vector<WebString> label_ids;

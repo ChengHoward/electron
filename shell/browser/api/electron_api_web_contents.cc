@@ -6155,10 +6155,31 @@ v8::Local<v8::Promise> WebContents::GetAgentFrameData(gin::Arguments* args) {
   auto* raw = remote.get();
   (*raw)->GetAgentFrameData(
       std::clamp(limit, 1, 5000), pierce, selector,
-      base::BindOnce([](gin_helper::Promise<std::string> promise,
-                        std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
-                        const std::string& json) { promise.Resolve(json); },
-                     std::move(promise), std::move(remote)));
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(
+              [](gin_helper::Promise<std::string> promise,
+                 std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
+                 int process, const std::string& json) {
+                if (json.empty()) {
+                  auto* host = content::RenderProcessHost::FromID(process);
+                  bool process_gone = !host || !host->IsInitializedAndNotDead();
+#if BUILDFLAG(IS_WIN)
+                  // Pipe closure can precede RenderProcessHost's exit event.
+                  // Check the retained OS handle without blocking or reaping.
+                  if (!process_gone) {
+                    process_gone = !host->GetProcess().IsValid() ||
+                                   !host->GetProcess().IsRunning();
+                  }
+#endif
+                  promise.RejectWithErrorMessage(process_gone
+                                                     ? "RENDER_PROCESS_GONE"
+                                                     : "FRAME_DISCONNECTED");
+                  return;
+                }
+                promise.Resolve(json);
+              },
+              std::move(promise), std::move(remote), process),
+          std::string()));
   return handle;
 }
 

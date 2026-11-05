@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Agent computed style regression</title>
+<button id="visible" onclick="this.textContent = 'clicked'">下载 visible</button>
+<button id="hidden" style="visibility: hidden">下载 hidden</button>
+<button id="collapsed" style="visibility: collapse">下载 collapsed</button>
+<div style="display: none"><button id="display-none">下载 display none</button></div>
+<div id="host"><button id="unassigned">下载 unassigned</button></div>
+<script>
+  document.querySelector('#host').attachShadow({ mode: 'closed' }).innerHTML =
+    '<button>下载 shadow</button>';
+</script>

@@ -1,5 +1,11 @@
 # 无需 CDP 的 Agent 自动化
 
+<!-- cloudbypass.10-current-start -->
+当前 Windows x64 分发目标为 `45.0.0-cloudbypass.10`，公开接口保持兼容。修复原生快照与元素查找读取不可用计算样式时的渲染进程崩溃；空样式元素判为不可见，原生目标准备也拒绝操作。原生读取连接因进程退出而断开时返回 `RENDER_PROCESS_GONE`，其他连接断开返回 `FRAME_DISCONNECTED`，无需等到 `FRAME_TIMEOUT`。本次构建的实际验收、安装与发布证据随发行附件提供。
+<!-- cloudbypass.10-current-end -->
+
+以下为历史 `.9` 构建记录。
+
 <!-- cloudbypass.9-current-start -->
 当前 Windows x64 分发目标为 `45.0.0-cloudbypass.9`；保持 `.8` 定制接口兼容。同版本补充启用证书查看器自身标题栏拖动，当前构建证书窗口测试 **18/18**。首次 `.9` 构建的核心 **55/55**、独立跨 frame **7/7** 及类型检查保留为历史证据，未冒充本次二进制重测结果；具体摘要与范围见文末两节。打包、安装与发布结果按对应报告另外记录。
 <!-- cloudbypass.9-current-end -->
@@ -16,6 +22,10 @@
 读取通过浏览器进程枚举当前页面的框架，再经原生 Mojo 接口进入每个框架的 Blink DOM 和可访问性对象。支持主文档、同源 iframe、跨域 OOPIF，以及开放和封闭的作者 Shadow DOM。不连接 debugger、不执行页面 JavaScript 来实现自动化，不要求远程调试端口。
 
 ## 页面快照
+
+遍历作者 DOM 时可能遇到未分配到 Shadow DOM 插槽的 light DOM 元素；它们仍连接文档，但 Blink 可以没有计算样式。`.10` 对 `WebElement::GetComputedValue` 的空 CSS 值作检查，并在扫描和原生目标准备中要求 `visibility` 明确为 `visible`。最小离线页面位于 `spec/fixtures/pages/agent-unavailable-style.html`，回归入口为 `test/agent-style-regression.cjs`。
+
+本次崩溃中的空指针解引用来自当前 Chromium 上游基线的 `WebElement::GetComputedValue`；定制 Agent DOM 扫描触发该路径。定制扫描的空样式可见性判断和读取断连等待也同时修复。不能据此推断普通 Chrome 浏览页面必然触发相同崩溃。
 
 ```js @ts-type={win:Electron.BrowserWindow}
 const snapshot = await win.webContents.getAgentSnapshot({
