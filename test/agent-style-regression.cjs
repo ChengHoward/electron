@@ -128,6 +128,10 @@ app
           const result = await pending;
           const elapsed = Date.now() - started;
           await gone;
+          console.log(
+            'Process-exit observation:',
+            JSON.stringify({ elapsed, goneAfterMs: Date.now() - started, frames: result.frames })
+          );
           assert.equal(result.complete, false);
           assert.ok(
             result.frames.some((frame) => frame.reason === 'RENDER_PROCESS_GONE'),

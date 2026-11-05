@@ -6161,19 +6161,31 @@ v8::Local<v8::Promise> WebContents::GetAgentFrameData(gin::Arguments* args) {
                  std::unique_ptr<mojo::Remote<mojom::ElectronRenderer>>,
                  int process, const std::string& json) {
                 if (json.empty()) {
-                  auto* host = content::RenderProcessHost::FromID(process);
-                  bool process_gone = !host || !host->IsInitializedAndNotDead();
+                  // A dying renderer closes its pipe before its OS handle is
+                  // signaled or RenderProcessHost receives the exit event.
+                  // Allow a short asynchronous grace period to classify it;
+                  // never block the UI thread waiting for process teardown.
+                  content::GetUIThreadTaskRunner({})->PostDelayedTask(
+                      FROM_HERE,
+                      base::BindOnce(
+                          [](gin_helper::Promise<std::string> promise,
+                             int process) {
+                            auto* host =
+                                content::RenderProcessHost::FromID(process);
+                            bool process_gone =
+                                !host || !host->IsInitializedAndNotDead();
 #if BUILDFLAG(IS_WIN)
-                  // Pipe closure can precede RenderProcessHost's exit event.
-                  // Check the retained OS handle without blocking or reaping.
-                  if (!process_gone) {
-                    process_gone = !host->GetProcess().IsValid() ||
-                                   !host->GetProcess().IsRunning();
-                  }
+                            if (!process_gone) {
+                              process_gone = !host->GetProcess().IsValid() ||
+                                             !host->GetProcess().IsRunning();
+                            }
 #endif
-                  promise.RejectWithErrorMessage(process_gone
-                                                     ? "RENDER_PROCESS_GONE"
-                                                     : "FRAME_DISCONNECTED");
+                            promise.RejectWithErrorMessage(
+                                process_gone ? "RENDER_PROCESS_GONE"
+                                             : "FRAME_DISCONNECTED");
+                          },
+                          std::move(promise), process),
+                      base::Milliseconds(50));
                   return;
                 }
                 promise.Resolve(json);
