@@ -134,7 +134,7 @@ class VirtualCursor final : public content::WebContentsObserver,
   int paints_ = 0;
   int blocked_pointer_ = 0;
   int blocked_keyboard_ = 0;
-  base::TimeTicks last_draw_;
+  base::TimeTicks next_draw_;
   base::OneShotTimer timer_;
   base::WeakPtrFactory<VirtualCursor> weak_factory_{this};
 };

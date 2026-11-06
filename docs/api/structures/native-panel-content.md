@@ -23,24 +23,40 @@ and preserve interaction state across `update()` calls.
   adjacent auxiliary URL. Layout flex can further constrain the available width.
 * `flex` number (optional) - Non-negative layout flex weight.
 * `tooltip` string (optional) - Native tooltip text.
-* `style` Object (optional) - Per-control appearance. Colors accept `#RRGGBB` or
-  `#AARRGGBB`; measurements are DIP. Omitted fields follow the native theme.
-  * `background` string (optional) - Normal background.
-  * `hoverBackground` string (optional) - Hover background for interactive rows and icon buttons.
-  * `pressedBackground` string (optional) - Pressed background.
-  * `selectedBackground` string (optional) - Selected row background.
-  * `disabledBackground` string (optional) - Disabled background.
-  * `color` string (optional) - Text color.
-  * `borderColor` string (optional) - Border color.
-  * `borderWidth` number (optional) - Border width, from `0` through `1000`.
-  * `radius` number (optional) - Control corner radius, from `0` through `1000`.
-  * `paddingTop` number (optional) - Top padding, from `0` through `1000`.
-  * `paddingRight` number (optional) - Right padding, from `0` through `1000`.
-  * `paddingBottom` number (optional) - Bottom padding, from `0` through `1000`.
-  * `paddingLeft` number (optional) - Left padding, from `0` through `1000`.
-  * `fontWeight` string (optional) - `normal`, `medium`, or `bold`.
-  * `align` string (optional) - `start`, `center`, or `end`. Aligns text or the cross axis of a layout container.
-  * `borderless` boolean (optional) - Remove the native border and background of an `input` or `textarea`.
+* `style` [NativePanelStyle](native-panel-style.md) (optional) - Native appearance.
+* `styleName` (string | string[]) (optional) - Names from theme.styles, merged before the explicit style.
+* `minWidth` number (optional) - Minimum preferred width in DIP.
+* `minHeight` number (optional) - Minimum preferred height in DIP.
+* `maxHeight` number (optional) - Maximum preferred height in DIP; zero is unconstrained.
+* `contextMenu` boolean (optional) - Handle context requests here. Defaults true for item.
+  False stops ancestor lookup. Native editors retain their editing menu unless true.
+* `accessibleDescription` string (optional) - Supplemental screen-reader description.
+* `role` string (optional) - listbox, option, menu, menuitem, group, or status.
+* `expanded` boolean (optional) - Accessible expanded or collapsed state.
+* `busy` boolean (optional) - Disable interaction while an operation is pending.
+* `justify` string (optional) - Container main-axis start, center, or end alignment.
+* `wrap` boolean (optional) - Natural-width children wrap inside a row; no flex distribution.
+* `virtual` Object (optional) - Fixed-height virtualization on list.
+  * `itemHeight` number - Integer row height from 1 through 1000 DIP.
+  * `overscan` number (optional) - Extra rows before and after the viewport, 0 through 32; default 3.
+* `selectable` boolean (optional) - Enable native text selection and copying; incompatible with links.
+* `maxLines` number (optional) - Maximum text lines, 0 through 1000; zero is unlimited.
+* `links` Object[] (optional) - Sorted nonoverlapping inline links, at most 256.
+  Cannot combine with linkRange, singleLine, highlights, or selectable.
+  * `id` string - Unique ID within the text node.
+  * `start` number - Inclusive integer UTF-16 offset.
+  * `end` number - Exclusive integer UTF-16 offset.
+* `readOnly` boolean (optional) - Native input or textarea is read-only.
+* `password` boolean (optional) - Obscure input text and redact diagnostic values.
+  Editing actions still carry actual text to the host.
+* `invalid` boolean (optional) - Native editor validation state; supply an accessible description.
+* `autoGrow` boolean (optional) - Textarea grows with text within minHeight and maxHeight.
+  Supply width for predictable wrapping.
+* `navigationTarget` string (optional) - Input's target list for active-item navigation.
+  Up/Down, Home/End, PageUp/PageDown retain input focus; Enter executes the active item.
+* `hoverOnly` boolean (optional) - Icon button paints when its row is hovered or contains focus.
+  Its layout space stays reserved.
+* `iconSize` number (optional) - Icon button image size from 1 through 256 DIP.
 * `accessibleName` string (optional) - Accessible name for `item` and required
   nonempty name for `iconButton`.
 * `selected` boolean (optional) - Selected appearance of an `item`. Changing it
@@ -99,14 +115,20 @@ Long lists and constrained panel content use native scrolling.
 multiline editor: by default Enter emits `submit` with its current text and
 Shift+Enter inserts a line break. Set `submitOnEnter: false` to make Enter insert
 a line break too. Editing emits `change`. Text wraps to the available width; a constrained `height`
-keeps the editor's size fixed and excess text scrolls inside it. It does not
-grow automatically or add a Ctrl+Enter submission shortcut. Use `width`, `height`,
+keeps the editor's size fixed and excess text scrolls inside it. Set autoGrow for automatic growth with a bounded maximum. Ctrl+Enter does not
+submit automatically. Use `width`, `height`,
 and the common `style` fields to size and decorate it. There is no
 `input.multiline` mode; changing an `input` to a `textarea` replaces the control.
 The `textarea` node and `submitOnEnter` are unreleased source additions; the
 published `45.0.0-cloudbypass.6` package does not provide them.
 
-Trees contain at most 2,000 nodes and have a maximum nesting depth of 32. IDs
+Ordinary trees contain at most 2,000 nodes. Virtual lists allow 100,000 total data
+nodes and 50,000 rows per list. Maximum depth is 32. Virtual lists require direct
+item children, fixed row heights, and zero list padding/gap. Space belongs inside
+the row. Virtual rows may contain item, row, column, text, icon, button,
+iconButton, and separator controls. Use ordinary lists for stateful form controls.
+Only viewport rows plus overscan create native controls. IDs beginning with
+`__native_panel_virtual__:` are reserved. IDs
 contain at most 256 characters. Properties specific to another node type,
 unknown fields, invalid numbers, and duplicate IDs are rejected. Trees are data,
 not executable markup. A panel does

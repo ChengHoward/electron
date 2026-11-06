@@ -2,6 +2,9 @@
 
 * `content` [NativePanelContent](native-panel-content.md) (optional) - Replacement
   native control tree. Preserve IDs and types to retain native interaction state.
+* `revision` number (optional) - Strictly increasing safe integer content revision.
+* `expectedRevision` number (optional) - Required current content revision.
+  Stale revisions return false before native state changes.
 * `anchorBounds` [Rectangle](rectangle.md) (optional) - Updated anchor in screen
   DIP coordinates. All values must be finite and dimensions non-negative.
 * `theme` (string | [NativePanelTheme](native-panel-theme.md)) (optional) -

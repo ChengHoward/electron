@@ -2,6 +2,9 @@
 
 * `parent` [BaseWindow](../base-window.md) - Required live owner. `BrowserWindow`
   is also accepted.
+* `parentPanel` [NativePanel](../native-panel.md) (optional) - Parent panel with the
+  same owner window. Show the parent first. Related panels form one outside-click
+  group; hiding or destroying an ancestor hides or destroys its children.
 * `sourceWebContents` [WebContents](../web-contents.md) (optional) - Source page
   attached to `parent`. A new main-frame document, destruction, or host transfer
   invalidates the panel and prevents stale actions.

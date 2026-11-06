@@ -48,6 +48,11 @@ user.MapVirtualKeyW.restype = wintypes.UINT
 user.PostMessageW.argtypes = [HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 gdi.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
 gdi.GetPixel.restype = wintypes.DWORD
+gdi.CreateRectRgn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+gdi.CreateRectRgn.restype = wintypes.HRGN
+gdi.GetRgnBox.argtypes = [wintypes.HRGN, ctypes.POINTER(wintypes.RECT)]
+gdi.DeleteObject.argtypes = [wintypes.HANDLE]
+user.GetWindowRgn.argtypes = [HWND, wintypes.HRGN]
 imm.ImmGetContext.argtypes = [HWND]
 imm.ImmGetContext.restype = wintypes.HANDLE
 imm.ImmGetOpenStatus.argtypes = [wintypes.HANDLE]
@@ -130,7 +135,8 @@ def activate(hwnd, pid):
             raise RuntimeError('Activation padding is not in the test panel')
         cursor = wintypes.POINT()
         user.GetCursorPos(ctypes.byref(cursor))
-        user.SetCursorPos(x, y)
+        if not user.SetCursorPos(x, y):
+            raise ctypes.WinError(ctypes.get_last_error())
         packets = (INPUT * 2)(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)),
                               INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)))
         if user.SendInput(2, packets, ctypes.sizeof(INPUT)) != 2:
@@ -283,7 +289,14 @@ elif action == 'material':
             transparency = bool(winreg.QueryValueEx(settings, 'EnableTransparency')[0])
     except FileNotFoundError:
         pass
-    answer = {'attribute': 38, 'hresult': hr, 'backdrop': backdrop.value,
+    region = gdi.CreateRectRgn(0, 0, 0, 0)
+    region_type = user.GetWindowRgn(HWND(hwnd), region)
+    region_box = wintypes.RECT()
+    gdi.GetRgnBox(region, ctypes.byref(region_box))
+    gdi.DeleteObject(region)
+    answer = {'regionType': region_type,
+              'regionBounds': [region_box.left, region_box.top, region_box.right, region_box.bottom],
+              'attribute': 38, 'hresult': hr, 'backdrop': backdrop.value,
               'composition': bool(composition), 'windowsBuild': sys.getwindowsversion().build,
               'transparencyEnabled': transparency,
               'highContrast': bool(contrast.dwFlags & 1) if contrast_ok else None,
@@ -370,10 +383,22 @@ else:
         allowed(hit, pid)
         cursor = wintypes.POINT()
         user.GetCursorPos(ctypes.byref(cursor))
-        user.SetCursorPos(x, y)
+        if not user.SetCursorPos(x, y):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if action == 'move':
+            actual = wintypes.POINT()
+            user.GetCursorPos(ctypes.byref(actual))
+            if actual.x != x or actual.y != y:
+                raise RuntimeError('Desktop pointer did not reach the requested probe position')
+            answer = {'cursor': {'x': actual.x, 'y': actual.y},
+                      'root': int(user.GetAncestor(user.WindowFromPoint(actual), 2) or 0)}
         if action == 'click':
-            send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)), pid)
-            send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)), pid)
+            button = request.get('button', 'left')
+            if button not in ('left', 'right'):
+                raise ValueError('Unsupported mouse button')
+            down, up = (8, 16) if button == 'right' else (2, 4)
+            send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=down)), pid)
+            send(INPUT(type=0, mi=MOUSEINPUT(dwFlags=up)), pid)
             # Let the target dispatch both events before moving the cursor away;
             # native menus also consult the current pointer during activation.
             time.sleep(0.06)

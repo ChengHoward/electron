@@ -39,6 +39,7 @@ class NativePanel final : public gin_helper::EventEmitter<NativePanel> {
   void Destroy();
   bool IsDestroyed() const;
   base::DictValue GetState() const;
+  base::DictValue Command(const base::DictValue& command);
   void OnAction(base::DictValue details);
   void OnDismissed(const std::string& reason);
   void OnClosed();

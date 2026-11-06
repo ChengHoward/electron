@@ -102,3 +102,40 @@ view.webContents.on('page-info-open-site-settings', (event, details) =>
 );
 const browserPanel = new NativePanel({ parent: new BrowserWindow(), content, theme: 'system' });
 console.log(supported, requested, browserPanel);
+
+const capabilities: Electron.NativePanelCapabilities = NativePanel.getCapabilities();
+const element: Electron.NativePanelContent = NativePanel.createElement('text', { id: 'native-jsx', text: 'Native' });
+const revision: number = panel.revision;
+const applied: boolean = panel.applyPatch([{ op: 'set', id: 'title', properties: { text: 'Updated' } }], {
+  expectedRevision: revision
+});
+const bounds: Electron.Rectangle | null = panel.getBounds('title');
+const diagnostics: Electron.NativePanelDiagnostics = panel.getDiagnostics();
+panel.focus('query');
+panel.setActiveItem('result');
+panel.setActiveItem(null);
+panel.scrollTo('result');
+panel.scrollListTo('list', 64);
+panel.announce('Three results');
+const extended: Electron.NativePanelContent = {
+  type: 'list',
+  id: 'virtual-results',
+  height: 240,
+  virtual: { itemHeight: 40, overscan: 3 },
+  role: 'listbox',
+  styleName: ['results'],
+  minWidth: 200,
+  maxHeight: 400,
+  children: [
+    {
+      type: 'item',
+      id: 'virtual-row',
+      role: 'option',
+      contextMenu: true,
+      style: { active: { background: '$accent' }, hoverColor: '#FFFFFF', fontFamily: 'Segoe UI', fontSize: 14 },
+      children: [{ type: 'text', id: 'virtual-title', text: 'Result', maxLines: 2 }]
+    }
+  ]
+};
+panel.on('context-menu', (action) => console.log(action.anchor, action.sourceType, action.revision));
+console.log(capabilities, element, applied, bounds, diagnostics, extended);

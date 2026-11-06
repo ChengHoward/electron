@@ -4,9 +4,13 @@
 
 #include "shell/browser/ui/views/native_panel.h"
 
+#include <DispatcherQueue.h>
 #include <dwmapi.h>
 #include <windows.h>
+#include <windows.ui.composition.desktop.h>
+#include <windows.ui.composition.interop.h>
 #include <windowsx.h>
+#include <wrl/client.h>
 
 // winuser.h aliases these names to IsIconic/IsZoomed. Keep Views declarations
 // and calls independent of the Windows SDK's function-like macros.
@@ -16,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <utility>
@@ -26,16 +31,21 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/win/core_winrt_util.h"
 #include "base/win/windows_version.h"
 #include "cc/paint/paint_flags.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/class_property.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/base/models/combobox_model_observer.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
@@ -79,6 +89,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/layout_manager.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/view_class_properties.h"
@@ -242,6 +253,8 @@ class PanelTheme final : public ui::ColorProviderKey::ThemeInitializerSupplier {
 
   void AddColorMixers(ui::ColorProvider* provider,
                       const ui::ColorProviderKey& key) const override {
+    if (key.forced_colors != ui::ColorProviderKey::ForcedColors::kNone)
+      return;
     auto& mixer = provider->AddMixer();
     for (const auto& [id, color] : colors_)
       mixer[id] = {color};
@@ -358,11 +371,11 @@ class PanelButton final : public views::MdTextButton {
   }
   void UpdateBackground() {
     SkColor background = Color(style_, "background", SK_ColorTRANSPARENT);
-    if (GetState() == STATE_HOVERED)
+    if (GetState() == STATE_HOVERED && !style_.contains("background"))
       background =
           Color(style_, "hoverBackground",
                 plain_ ? SkColorSetARGB(20, 128, 128, 128) : background);
-    if (GetState() == STATE_PRESSED)
+    if (GetState() == STATE_PRESSED && !style_.contains("background"))
       background =
           Color(style_, "pressedBackground",
                 plain_ ? SkColorSetARGB(35, 128, 128, 128) : background);
@@ -395,6 +408,16 @@ class PanelButton final : public views::MdTextButton {
 template <typename BaseView>
 class DimensionedView final : public BaseView {
  public:
+  void SetLimits(int min_width, int min_height, int max_height) {
+    min_width_ = min_width;
+    min_height_ = min_height;
+    max_height_ = max_height;
+  }
+  gfx::Size GetMinimumSize() const override {
+    gfx::Size minimum = BaseView::GetMinimumSize();
+    minimum.SetToMax(gfx::Size(min_width_, min_height_));
+    return minimum;
+  }
   void SetDimensions(int width, int height, int max_width = 0) {
     width_ = width;
     height_ = height;
@@ -425,10 +448,16 @@ class DimensionedView final : public BaseView {
       size.set_height(height_);
     if (max_width_ > 0)
       size.set_width(std::min(size.width(), max_width_));
+    size.SetToMax(gfx::Size(min_width_, min_height_));
+    if (max_height_ > 0)
+      size.set_height(std::min(size.height(), max_height_));
     return size;
   }
 
  private:
+  int min_width_ = 0;
+  int min_height_ = 0;
+  int max_height_ = 0;
   int width_ = 0;
   int height_ = 0;
   int max_width_ = 0;
@@ -437,6 +466,70 @@ class DimensionedView final : public BaseView {
 using PanelLabel = DimensionedView<views::Label>;
 using PanelLinkedLabel = DimensionedView<views::StyledLabel>;
 using PanelContainer = DimensionedView<views::View>;
+
+// A native flow layout: items retain their natural width and wrap onto a new
+// line. Measurements use the same placement algorithm as the actual layout.
+class PanelWrapLayout final : public views::LayoutManager {
+ public:
+  PanelWrapLayout(int gap, gfx::Insets padding)
+      : gap_(gap), padding_(padding) {}
+  void Layout(views::View* host) override {
+    Measure(host, host->width(), true);
+  }
+  gfx::Size GetPreferredSize(const views::View* host) const override {
+    return Measure(host, 100000, false);
+  }
+  gfx::Size GetPreferredSize(const views::View* host,
+                             const views::SizeBounds& bounds) const override {
+    return Measure(
+        host, bounds.width().is_bounded() ? bounds.width().value() : 100000,
+        false);
+  }
+  int GetPreferredHeightForWidth(const views::View* host,
+                                 int width) const override {
+    return Measure(host, width, false).height();
+  }
+
+ private:
+  gfx::Size Measure(const views::View* host, int width, bool apply) const {
+    int x = 0, y = 0, line = 0, used = 0;
+    const int available = std::max(0, width - padding_.width());
+    for (views::View* child : host->children()) {
+      if (!child->GetVisible())
+        continue;
+      gfx::Size size =
+          child->GetPreferredSize(views::SizeBounds(available, {}));
+      size.set_width(std::min(size.width(), available));
+      if (x && x + gap_ + size.width() > available) {
+        x = 0;
+        y += line + gap_;
+        line = 0;
+      }
+      if (x)
+        x += gap_;
+      if (apply)
+        child->SetBounds(x + padding_.left(), y + padding_.top(), size.width(),
+                         size.height());
+      x += size.width();
+      line = std::max(line, size.height());
+      used = std::max(used, x);
+    }
+    return gfx::Size(used + padding_.width(), y + line + padding_.height());
+  }
+  const int gap_;
+  const gfx::Insets padding_;
+};
+
+NativePanelNode CopyNode(const NativePanelNode& node) {
+  NativePanelNode copy;
+  copy.id = node.id;
+  copy.type = node.type;
+  copy.properties = node.properties.Clone();
+  copy.image = node.image;
+  for (const auto& child : node.children)
+    copy.children.push_back(CopyNode(child));
+  return copy;
+}
 
 class PanelScrollBar;
 
@@ -451,6 +544,16 @@ class PanelTextarea final : public views::Textarea,
   void SetAppearance(const base::DictValue& style);
   void SetScrollbarPlacement(const std::string& placement);
   void SyncScrollbar();
+  int MeasureHeight(int width) const {
+    auto render = gfx::RenderText::CreateRenderText();
+    render->SetMultiline(true);
+    render->SetFontList(GetFontList());
+    render->SetText(GetText());
+    render->SetDisplayRect(gfx::Rect(std::max(1, width - 12), 100000));
+    return std::max(GetFontList().GetHeight(),
+                    render->GetStringSize().height()) +
+           12;
+  }
   bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
 
   // RenderText normally scrolls the caret into view when fonts or bounds are
@@ -512,12 +615,15 @@ class PanelTextarea final : public views::Textarea,
   base::WeakPtrFactory<PanelTextarea> weak_factory_{this};
 };
 
+DEFINE_UI_CLASS_PROPERTY_KEY(bool, kPanelItemRow, false)
+
 // A real native Button with arbitrary native child views. Child buttons remain
 // independent event targets; there is no DOM-style bubbling to this row.
 class PanelAction final : public views::Button {
  public:
   explicit PanelAction(PressedCallback callback) : Button(std::move(callback)) {
     SetFocusBehavior(FocusBehavior::ALWAYS);
+    SetNotifyEnterExitOnChild(true);
     // Rows can fill a clipped ScrollView. Keep the native focus outline inside
     // the action instead of allowing its default outset to lose both sides.
     auto* ring = views::FocusRing::Get(this);
@@ -531,7 +637,34 @@ class PanelAction final : public views::Button {
       RequestFocus();
     return Button::OnMousePressed(event);
   }
-  void SetRow(bool row) { row_ = row; }
+  void SetRow(bool row) {
+    row_ = row;
+    SetProperty(kPanelItemRow, row);
+  }
+  void SetHoverOnly(bool value) { hover_only_ = value; }
+  void SetInteraction(bool hovered, bool active) {
+    hovered_ = hovered;
+    active_ = active;
+    SchedulePaint();
+  }
+  bool ShouldPaintAction() const {
+    if (!hover_only_ || HasFocus())
+      return true;
+    for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
+      if (ancestor->GetProperty(kPanelItemRow)) {
+        auto* focused = GetWidget()
+                            ? GetWidget()->GetFocusManager()->GetFocusedView()
+                            : nullptr;
+        return ancestor->IsMouseHovered() ||
+               (focused && ancestor->Contains(focused));
+      }
+    }
+    return true;
+  }
+  void PaintChildren(const views::PaintInfo& info) override {
+    if (ShouldPaintAction())
+      Button::PaintChildren(info);
+  }
   void SetAppearance(const base::DictValue& style,
                      bool selected,
                      SkColor hover) {
@@ -549,6 +682,14 @@ class PanelAction final : public views::Button {
   }
 
  private:
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    Button::OnMouseEntered(event);
+    SchedulePaint();
+  }
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    Button::OnMouseExited(event);
+    SchedulePaint();
+  }
   void StateChanged(ButtonState old_state) override {
     Button::StateChanged(old_state);
     SchedulePaint();
@@ -562,15 +703,13 @@ class PanelAction final : public views::Button {
     SchedulePaint();
   }
   void OnPaintBackground(gfx::Canvas* canvas) override {
-    SkColor background = Color(style_, "background", SK_ColorTRANSPARENT);
-    if (selected_ || HasFocus())
-      background = Color(style_, "selectedBackground", hover_);
-    if (GetState() == STATE_HOVERED)
-      background = Color(style_, "hoverBackground", hover_);
-    if (GetState() == STATE_PRESSED)
-      background = Color(style_, "pressedBackground", hover_);
-    if (!GetEnabled())
-      background = Color(style_, "disabledBackground", SK_ColorTRANSPARENT);
+    if (!ShouldPaintAction())
+      return;
+    const SkColor background =
+        Color(style_, "background",
+              GetEnabled() && (selected_ || active_ || hovered_)
+                  ? hover_
+                  : SK_ColorTRANSPARENT);
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
     flags.setColor(background);
@@ -588,6 +727,9 @@ class PanelAction final : public views::Button {
   }
   base::DictValue style_;
   bool selected_ = false;
+  bool hovered_ = false;
+  bool active_ = false;
+  bool hover_only_ = false;
   bool row_ = false;
   SkColor hover_ = SK_ColorTRANSPARENT;
   int focus_radius_ = -1;
@@ -946,6 +1088,149 @@ void PanelTextarea::AppendState(base::DictValue* state) {
 
 }  // namespace
 
+// A window-wide DWM system backdrop ignores the custom window region on some
+// Windows builds, painting blur over rounded corners and the shadow gutter.
+// Host a geometrically clipped backdrop visual in an input-transparent HWND
+// instead. Its lifetime, position and z-order follow the native panel.
+class NativePanelBackdrop {
+ public:
+  ~NativePanelBackdrop() {
+    if (target_) {
+      target_->put_Root(nullptr);
+      Microsoft::WRL::ComPtr<ABI::Windows::Foundation::IClosable> closable;
+      if (SUCCEEDED(target_.As(&closable)))
+        closable->Close();
+    }
+    if (window_)
+      ::DestroyWindow(window_);
+  }
+
+  bool Initialize(HWND owner) {
+    namespace comp = ABI::Windows::UI::Composition;
+    using Microsoft::WRL::ComPtr;
+    // Composition requires one DispatcherQueue per UI thread. Reuse an
+    // existing queue, or retain our process-wide queue for subsequent panels.
+    struct Context {
+      Context() {
+        ComPtr<ABI::Windows::System::IDispatcherQueueStatics> statics;
+        ComPtr<ABI::Windows::System::IDispatcherQueue> queue;
+        if (SUCCEEDED((base::win::GetActivationFactory<
+                       ABI::Windows::System::IDispatcherQueueStatics,
+                       RuntimeClass_Windows_System_DispatcherQueue>(&statics))))
+          statics->GetForCurrentThread(&queue);
+        if (!queue) {
+          HMODULE library = ::LoadLibraryExW(L"CoreMessaging.dll", nullptr,
+                                             LOAD_LIBRARY_SEARCH_SYSTEM32);
+          auto create =
+              library ? reinterpret_cast<
+                            decltype(&::CreateDispatcherQueueController)>(
+                            ::GetProcAddress(library,
+                                             "CreateDispatcherQueueController"))
+                      : nullptr;
+          const DispatcherQueueOptions options{sizeof(DispatcherQueueOptions),
+                                               DQTYPE_THREAD_CURRENT,
+                                               DQTAT_COM_NONE};
+          if (!create || FAILED(create(options, &controller)))
+            return;
+        }
+        auto name = base::win::ScopedHString::Create(
+            RuntimeClass_Windows_UI_Composition_Compositor);
+        ComPtr<IInspectable> instance;
+        if (SUCCEEDED(base::win::RoActivateInstance(name.get(), &instance)))
+          instance.As(&compositor);
+      }
+      ComPtr<ABI::Windows::System::IDispatcherQueueController> controller;
+      ComPtr<comp::ICompositor> compositor;
+    };
+    static base::NoDestructor<Context> context;
+    if (!context->compositor)
+      return false;
+    window_ = ::CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TRANSPARENT |
+                                    WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                                L"STATIC", L"ElectronNativePanelBackdrop",
+                                WS_POPUP, 0, 0, 1, 1, owner, nullptr,
+                                ::GetModuleHandle(nullptr), nullptr);
+    if (!window_)
+      return false;
+    const BOOL enabled = TRUE;
+    if (FAILED(::DwmSetWindowAttribute(window_, DWMWA_USE_HOSTBACKDROPBRUSH,
+                                       &enabled, sizeof(enabled))))
+      return false;
+    ComPtr<comp::Desktop::ICompositorDesktopInterop> interop;
+    ComPtr<comp::Desktop::IDesktopWindowTarget> desktop;
+    ComPtr<comp::ICompositor3> compositor3;
+    ComPtr<comp::ICompositor5> compositor5;
+    ComPtr<comp::ICompositor6> compositor6;
+    ComPtr<comp::ICompositionBackdropBrush> backdrop;
+    ComPtr<comp::ICompositionBrush> brush;
+    ComPtr<comp::ISpriteVisual> sprite;
+    ComPtr<comp::ICompositionGeometry> geometry;
+    ComPtr<comp::ICompositionGeometricClip> geometric_clip;
+    ComPtr<comp::ICompositionClip> clip;
+    auto* compositor = context->compositor.Get();
+    return SUCCEEDED(context->compositor.As(&interop)) &&
+           SUCCEEDED(
+               interop->CreateDesktopWindowTarget(window_, FALSE, &desktop)) &&
+           SUCCEEDED(desktop.As(&target_)) &&
+           SUCCEEDED(context->compositor.As(&compositor3)) &&
+           SUCCEEDED(context->compositor.As(&compositor5)) &&
+           SUCCEEDED(context->compositor.As(&compositor6)) &&
+           SUCCEEDED(compositor3->CreateHostBackdropBrush(&backdrop)) &&
+           SUCCEEDED(backdrop.As(&brush)) &&
+           SUCCEEDED(compositor->CreateSpriteVisual(&sprite)) &&
+           SUCCEEDED(sprite->put_Brush(brush.Get())) &&
+           SUCCEEDED(sprite.As(&visual_)) &&
+           SUCCEEDED(compositor5->CreateRoundedRectangleGeometry(&round_)) &&
+           SUCCEEDED(round_.As(&geometry)) &&
+           SUCCEEDED(compositor6->CreateGeometricClipWithGeometry(
+               geometry.Get(), &geometric_clip)) &&
+           SUCCEEDED(geometric_clip.As(&clip)) &&
+           SUCCEEDED(visual_->put_Clip(clip.Get())) &&
+           SUCCEEDED(
+               visual_->put_BorderMode(comp::CompositionBorderMode_Soft)) &&
+           SUCCEEDED(target_->put_Root(visual_.Get()));
+  }
+
+  void SetBounds(HWND panel, HWND shadow, int inset, int radius, bool visible) {
+    RECT rect;
+    ::GetWindowRect(panel, &rect);
+    const int width = std::max(1L, rect.right - rect.left - 2 * inset);
+    const int height = std::max(1L, rect.bottom - rect.top - 2 * inset);
+    const float curve =
+        std::min({static_cast<float>(radius), width / 2.f, height / 2.f});
+    const ABI::Windows::Foundation::Numerics::Vector2 size{
+        static_cast<float>(width), static_cast<float>(height)};
+    visual_->put_Size(size);
+    round_->put_Size(size);
+    round_->put_CornerRadius({curve, curve});
+    HRGN region = curve > 0 ? ::CreateRoundRectRgn(0, 0, width + 1, height + 1,
+                                                   std::round(2 * curve),
+                                                   std::round(2 * curve))
+                            : ::CreateRectRgn(0, 0, width, height);
+    if (!::SetWindowRgn(window_, region, FALSE))
+      ::DeleteObject(region);
+    ::SetWindowPos(window_, panel, rect.left + inset, rect.top + inset, width,
+                   height,
+                   SWP_NOACTIVATE | SWP_NOOWNERZORDER |
+                       (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+    if (shadow)
+      ::SetWindowPos(
+          shadow, window_, 0, 0, 0, 0,
+          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+  }
+  void Hide() { ::ShowWindow(window_, SW_HIDE); }
+  HWND window() const { return window_; }
+
+ private:
+  HWND window_ = nullptr;
+  Microsoft::WRL::ComPtr<ABI::Windows::UI::Composition::ICompositionTarget>
+      target_;
+  Microsoft::WRL::ComPtr<ABI::Windows::UI::Composition::IVisual> visual_;
+  Microsoft::WRL::ComPtr<
+      ABI::Windows::UI::Composition::ICompositionRoundedRectangleGeometry>
+      round_;
+};
+
 class NativePanelSurface final : public views::View {
  public:
   explicit NativePanelSurface(bool shadow_only = false)
@@ -997,10 +1282,17 @@ class NativePanelSurface final : public views::View {
     SkColor background =
         Color(theme_, "background",
               GetColorProvider()->GetColor(ui::kColorMenuBackground));
+    const bool forced_colors =
+        ui::NativeTheme::GetInstanceForNativeUi()->forced_colors() !=
+        ui::ColorProviderKey::ForcedColors::kNone;
+    if (forced_colors)
+      background = GetColorProvider()->GetColor(ui::kColorMenuBackground);
     if (opaque_material_fallback_)
       background = SkColorSetA(background, SK_AlphaOPAQUE);
     const SkColor border =
-        Color(theme_, "border", dark ? 0xff555555 : 0xffdadce0);
+        forced_colors
+            ? GetColorProvider()->GetColor(ui::kColorFocusableBorderFocused)
+            : Color(theme_, "border", dark ? 0xff555555 : 0xffdadce0);
     cc::PaintFlags fill;
     fill.setAntiAlias(true);
     fill.setColor(background);
@@ -1019,6 +1311,14 @@ class NativePanelSurface final : public views::View {
     }
     if (!acrylic_applied_)
       canvas->DrawRoundRect(BodyBounds(), radius_, fill);
+    else {
+      // DWM's transient backdrop is intentionally bright. A neutral foreground
+      // tint keeps text readable over saturated content while preserving blur.
+      // This tint is independent of the system-controlled Acrylic opacity.
+      fill.setColor(
+          Color(theme_, "materialTint", dark ? 0xB3202020 : 0xCCFAFAFA));
+      canvas->DrawRoundRect(BodyBounds(), radius_, fill);
+    }
     cc::PaintFlags stroke;
     stroke.setAntiAlias(true);
     stroke.setColor(border);
@@ -1058,6 +1358,12 @@ struct NativePanelHost::Entry {
   raw_ptr<views::ImageView> image = nullptr;
   std::unique_ptr<OptionModel> model;
   std::optional<std::u16string> pending_input;
+  base::CallbackListSubscription scroll_subscription;
+  bool hovered = false;
+  bool pressed = false;
+  bool focused = false;
+  int virtual_start = -1;
+  int virtual_end = -1;
 };
 
 NativePanelNode::NativePanelNode() = default;
@@ -1087,7 +1393,6 @@ NativePanelHost::NativePanelHost(views::Widget* parent,
   delegate_->set_use_desktop_widget_override(true);
   auto surface = std::make_unique<NativePanelSurface>();
   surface_ = surface.get();
-  surface_->AddPreTargetHandler(this);
   auto scroll = std::make_unique<views::ScrollView>();
   outer_scroll_ = scroll.get();
   auto scrollbar = std::make_unique<PanelScrollBar>();
@@ -1128,6 +1433,8 @@ NativePanelHost::NativePanelHost(views::Widget* parent,
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
   params.remove_standard_frame = true;
   widget_->Init(std::move(params));
+  widget_->GetRootView()->AddPreTargetHandler(
+      this, ui::EventTarget::Priority::kSystem);
   widget_->AddObserver(this);
   parent_->AddObserver(this);
   parent_bounds_ = parent_->GetWindowBoundsInScreen();
@@ -1269,6 +1576,12 @@ LRESULT CALLBACK NativePanelHost::WindowProcedure(HWND window,
   }
   auto weak_self = self->weak_factory_.GetWeakPtr();
   LRESULT result = ::CallWindowProc(previous, window, message, wparam, lparam);
+  // The first native mouse message can precede Aura's application monitor
+  // notification. Observe the panel HWND too; the posted refresh coalesces
+  // both paths and samples the final OS cursor position after dispatch.
+  if (weak_self && (message == WM_MOUSEMOVE || message == WM_MOUSELEAVE ||
+                    message == WM_NCMOUSEMOVE || message == WM_CAPTURECHANGED))
+    weak_self->ScheduleInteractionUpdate();
   // HWNDMessageHandler can reset native regions after its WM_SIZE work. Apply
   // our body region after that pass as well as after each requested layout.
   if (weak_self && (message == WM_SIZE || message == WM_DPICHANGED ||
@@ -1281,7 +1594,7 @@ LRESULT CALLBACK NativePanelHost::WindowProcedure(HWND window,
         FROM_HERE, base::BindOnce(
                        [](base::WeakPtr<NativePanelHost> host) {
                          if (host && !host->destroying_ && host->widget_) {
-                           host->material_system_configuration_.clear();
+                           host->backdrop_.reset();
                            host->ApplyTheme();
                          }
                        },
@@ -1316,7 +1629,8 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
           : "change");
   std::unique_ptr<views::View> result;
   if (node.type == "text") {
-    if (node.properties.contains("linkRange")) {
+    if (node.properties.contains("linkRange") ||
+        node.properties.contains("links")) {
       auto label = std::make_unique<PanelLinkedLabel>();
       label->SetAutoColorReadabilityEnabled(false);
       label->SetSubpixelRenderingEnabled(false);
@@ -1391,6 +1705,9 @@ std::unique_ptr<views::View> NativePanelHost::CreateControl(
     scroll->SetHorizontalScrollBarMode(
         views::ScrollView::ScrollBarMode::kDisabled);
     entry->scroll = scroll.get();
+    entry->scroll_subscription = scroll->AddContentsScrolledCallback(
+        base::BindRepeating(&NativePanelHost::OnListScrolled,
+                            weak_factory_.GetWeakPtr(), node.id));
     auto contents = std::make_unique<views::View>();
     contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
@@ -1424,7 +1741,49 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
   if (!style)
     style = &empty_style;
   views::View* view = entry->view;
-  view->SetEnabled(!properties.FindBool("disabled").value_or(false));
+  view->SetEnabled(!properties.FindBool("disabled").value_or(false) &&
+                   !properties.FindBool("busy").value_or(false));
+  const bool native_editor = IsTextControl(node.type);
+  view->set_context_menu_controller(
+      !native_editor || properties.FindBool("contextMenu").value_or(false)
+          ? static_cast<views::ContextMenuController*>(this)
+          : static_cast<views::ContextMenuController*>(
+                static_cast<views::Textfield*>(view)));
+  if (node.type == "icon" || (node.type == "text" && !entry->linked_label))
+    view->SetCanProcessEventsWithinSubtree(
+        properties.FindBool("selectable").value_or(false) ||
+        properties.FindBool("contextMenu").value_or(false));
+  auto& accessibility = view->GetViewAccessibility();
+  if (const auto* name = properties.FindString("accessibleName"))
+    accessibility.SetName(*name);
+  if (const auto* description = properties.FindString("accessibleDescription"))
+    accessibility.SetDescription(*description);
+  else
+    accessibility.RemoveDescription();
+  const auto role = String(properties, "role");
+  if (role == "listbox")
+    accessibility.SetRole(ax::mojom::Role::kListBox);
+  else if (role == "option")
+    accessibility.SetRole(ax::mojom::Role::kListBoxOption);
+  else if (role == "menu")
+    accessibility.SetRole(ax::mojom::Role::kMenu);
+  else if (role == "menuitem")
+    accessibility.SetRole(ax::mojom::Role::kMenuItem);
+  else if (role == "group")
+    accessibility.SetRole(ax::mojom::Role::kGroup);
+  else if (role == "status")
+    accessibility.SetRole(ax::mojom::Role::kStatus);
+  else if (entry->properties.contains("role"))
+    accessibility.SetRole(node.type == "item" || node.type == "button"
+                              ? ax::mojom::Role::kButton
+                              : ax::mojom::Role::kGenericContainer);
+  if (auto expanded = properties.FindBool("expanded")) {
+    if (*expanded)
+      accessibility.SetIsExpanded();
+    else
+      accessibility.SetIsCollapsed();
+  } else
+    accessibility.RemoveExpandCollapseState();
   view->SetVisible(properties.FindBool("visible").value_or(true));
   view->SetTooltipText(base::UTF8ToUTF16(String(properties, "tooltip")));
   std::u16string text = base::UTF8ToUTF16(String(properties, "text"));
@@ -1432,10 +1791,24 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     entry->label->SetText(text);
   if (entry->linked_label)
     entry->linked_label->SetText(text);
-  if (entry->children) {
+  if (entry->children && properties.FindBool("wrap").value_or(false)) {
+    entry->children->SetLayoutManager(std::make_unique<PanelWrapLayout>(
+        Integer(properties, "gap", 6),
+        ControlInsets(*style, Integer(properties, "padding", 0))));
+  } else if (entry->children) {
+    if (entry->properties.FindBool("wrap").value_or(false))
+      entry->children->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          node.type == "column" || node.type == "list"
+              ? views::BoxLayout::Orientation::kVertical
+              : views::BoxLayout::Orientation::kHorizontal));
     auto* layout =
         static_cast<views::BoxLayout*>(entry->children->GetLayoutManager());
     layout->set_between_child_spacing(Integer(properties, "gap", 6));
+    const auto justify = String(properties, "justify", "start");
+    layout->set_main_axis_alignment(
+        justify == "center" ? views::BoxLayout::MainAxisAlignment::kCenter
+        : justify == "end"  ? views::BoxLayout::MainAxisAlignment::kEnd
+                            : views::BoxLayout::MainAxisAlignment::kStart);
     layout->set_inside_border_insets(
         ControlInsets(*style, Integer(properties, "padding", 0)));
     layout->set_cross_axis_alignment(
@@ -1468,6 +1841,9 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
           !properties.FindBool("singleLine").value_or(false));
       entry->label->SetElideBehavior(gfx::ELIDE_TAIL);
       entry->label->SetAllowCharacterBreak(true);
+      entry->label->SetMaxLines(Integer(properties, "maxLines", 0));
+      entry->label->SetSelectable(
+          properties.FindBool("selectable").value_or(false));
     }
   } else if (node.type == "icon" || node.type == "iconButton") {
     auto* icon = node.type == "iconButton"
@@ -1475,7 +1851,8 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
                      : static_cast<views::ImageView*>(view);
     icon->SetImage(ui::ImageModel::FromImageSkia(node.image));
     icon->SetImageSize(node.type == "iconButton"
-                           ? gfx::Size(20, 20)
+                           ? gfx::Size(Integer(properties, "iconSize", 20),
+                                       Integer(properties, "iconSize", 20))
                            : gfx::Size(Integer(properties, "width", 20),
                                        Integer(properties, "height", 20)));
     if (node.type == "iconButton")
@@ -1489,6 +1866,12 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
     control->GetViewAccessibility().SetName(text);
   } else if (IsTextControl(node.type)) {
     auto* input = static_cast<views::Textfield*>(view);
+    input->SetReadOnly(properties.FindBool("readOnly").value_or(false));
+    input->SetInvalid(properties.FindBool("invalid").value_or(false));
+    if (node.type == "input")
+      input->SetTextInputType(properties.FindBool("password").value_or(false)
+                                  ? ui::TEXT_INPUT_TYPE_PASSWORD
+                                  : ui::TEXT_INPUT_TYPE_TEXT);
     const std::string* value = properties.FindString("value");
     const std::string* old_value = entry->properties.FindString("value");
     if (value && (!old_value || *value != *old_value)) {
@@ -1520,8 +1903,10 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
       input->SetBackgroundColor(std::nullopt);
       input->SetBackgroundEnabled(true);
     }
-    input->GetViewAccessibility().SetName(base::UTF8ToUTF16(String(
-        properties, "tooltip", String(properties, "placeholder", node.id))));
+    input->GetViewAccessibility().SetName(base::UTF8ToUTF16(
+        String(properties, "accessibleName",
+               String(properties, "tooltip",
+                      String(properties, "placeholder", node.id)))));
   } else if (node.type == "option") {
     auto* option = static_cast<views::Combobox*>(view);
     std::string selected;
@@ -1550,6 +1935,8 @@ void NativePanelHost::ApplyProperties(const NativePanelNode& node,
         ->SetPlacement(String(properties, "scrollbarPlacement", "gutter"));
   }
   if (node.type == "item" || node.type == "iconButton") {
+    static_cast<PanelAction*>(view)->SetHoverOnly(
+        properties.FindBool("hoverOnly").value_or(false));
     view->GetViewAccessibility().SetName(base::UTF8ToUTF16(String(
         properties, "accessibleName", String(properties, "tooltip", node.id))));
     view->GetViewAccessibility().SetIsSelected(
@@ -1568,7 +1955,8 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
   if (found != entries_.end() &&
       (found->second->type != node.type ||
        (node.type == "text" && static_cast<bool>(found->second->linked_label) !=
-                                   node.properties.contains("linkRange")))) {
+                                   (node.properties.contains("linkRange") ||
+                                    node.properties.contains("links"))))) {
     RemoveSubtree(found->second->view);
     found = entries_.end();
   }
@@ -1601,10 +1989,11 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
       Entry& child =
           Reconcile(node.children[child_index], entry.children, child_index);
       child.parent_id = node.id;
-      static_cast<views::BoxLayout*>(entry.children->GetLayoutManager())
-          ->SetFlexForView(
-              child.view,
-              Integer(node.children[child_index].properties, "flex", 0));
+      if (!node.properties.FindBool("wrap").value_or(false))
+        static_cast<views::BoxLayout*>(entry.children->GetLayoutManager())
+            ->SetFlexForView(
+                child.view,
+                Integer(node.children[child_index].properties, "flex", 0));
     }
   }
   int width = Integer(node.properties, "width", 0);
@@ -1613,6 +2002,10 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
   if (node.type == "row" || node.type == "column") {
     static_cast<PanelContainer*>(entry.view.get())
         ->SetDimensions(width, height, max_width);
+    static_cast<PanelContainer*>(entry.view.get())
+        ->SetLimits(Integer(node.properties, "minWidth", 0),
+                    Integer(node.properties, "minHeight", 0),
+                    Integer(node.properties, "maxHeight", 0));
   } else if (node.type == "text") {
     if (entry.linked_label)
       static_cast<PanelLinkedLabel*>(entry.view.get())
@@ -1620,7 +2013,21 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
     else
       static_cast<PanelLabel*>(entry.view.get())
           ->SetDimensions(width, height, max_width);
-  } else if (width > 0 || height > 0 || max_width > 0) {
+    if (entry.linked_label)
+      static_cast<PanelLinkedLabel*>(entry.view.get())
+          ->SetLimits(Integer(node.properties, "minWidth", 0),
+                      Integer(node.properties, "minHeight", 0),
+                      Integer(node.properties, "maxHeight", 0));
+    else
+      static_cast<PanelLabel*>(entry.view.get())
+          ->SetLimits(Integer(node.properties, "minWidth", 0),
+                      Integer(node.properties, "minHeight", 0),
+                      Integer(node.properties, "maxHeight", 0));
+  } else if (width > 0 || height > 0 || max_width > 0 ||
+             node.properties.contains("minWidth") ||
+             node.properties.contains("minHeight") ||
+             node.properties.contains("maxHeight") ||
+             node.properties.contains("autoGrow")) {
     gfx::Size size = entry.view->GetPreferredSize({});
     if (width > 0)
       size.set_width(width);
@@ -1628,6 +2035,17 @@ NativePanelHost::Entry& NativePanelHost::Reconcile(const NativePanelNode& node,
       size.set_height(height);
     if (max_width > 0)
       size.set_width(std::min(size.width(), max_width));
+    if (node.type == "textarea" &&
+        node.properties.FindBool("autoGrow").value_or(false)) {
+      auto* editor = static_cast<views::Textfield*>(entry.view.get());
+      size.set_height(static_cast<PanelTextarea*>(editor)->MeasureHeight(
+          std::max(1, width > 0 ? width : 280)));
+    }
+    size.SetToMax(gfx::Size(Integer(node.properties, "minWidth", 0),
+                            Integer(node.properties, "minHeight", 0)));
+    const int max_height = Integer(node.properties, "maxHeight", 0);
+    if (max_height)
+      size.set_height(std::min(size.height(), max_height));
     entry.view->SetPreferredSize(size);
   }
   return entry;
@@ -1651,6 +2069,41 @@ void NativePanelHost::RemoveSubtree(views::View* root) {
 void NativePanelHost::UpdateContent(NativePanelNode content) {
   auto textarea_viewports = PreserveTextareaViewports();
   base::AutoReset<bool> applying(&applying_, true);
+  struct ScrollAnchor {
+    std::string id;
+    int relative_y;
+  };
+  std::map<std::string, ScrollAnchor> anchors;
+  for (const auto& [list_id, list] : entries_) {
+    if (!list->scroll)
+      continue;
+    const int offset = ScrollPosition(list->scroll);
+    int first_y = std::numeric_limits<int>::max();
+    for (const auto& [id, row] : entries_) {
+      if (row->parent_id != list_id || row->type != "item" ||
+          !row->view->IsDrawn() || row->view->GetVisibleBounds().IsEmpty())
+        continue;
+      if (row->view->y() < first_y) {
+        first_y = row->view->y();
+        anchors[list_id] = {id, row->view->y() - offset};
+      }
+    }
+  }
+  auto prepare_virtual = [&](auto&& self, const NativePanelNode& node) -> void {
+    auto anchor = anchors.find(node.id);
+    if (anchor != anchors.end() && !virtual_offsets_.contains(node.id)) {
+      if (const auto* config = node.properties.FindDict("virtual")) {
+        for (size_t i = 0; i < node.children.size(); ++i)
+          if (node.children[i].id == anchor->second.id)
+            virtual_offsets_[node.id] = std::max(
+                0, static_cast<int>(i) * Integer(*config, "itemHeight", 32) -
+                       anchor->second.relative_y);
+      }
+    }
+    for (const auto& child : node.children)
+      self(self, child);
+  };
+  prepare_virtual(prepare_virtual, content);
   const int outer_scroll_position = ScrollPosition(outer_scroll_);
   struct Desired {
     std::string type;
@@ -1663,7 +2116,8 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
     for (const auto& child : node.children)
       self(self, child, node.id);
   };
-  collect(collect, content, {});
+  NativePanelNode rendered = Materialize(content);
+  collect(collect, rendered, {});
   // Unchanged nodes remain attached throughout ordinary updates. Only controls
   // actually moved to a different container are temporarily detached.
   std::string focused;
@@ -1706,7 +2160,7 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
       break;
     RemoveSubtree(obsolete->second->view);
   }
-  Reconcile(content, content_container_, 0).parent_id.clear();
+  Reconcile(rendered, content_container_, 0).parent_id.clear();
   options_.content = std::move(content);
   ApplyTheme();
   LayoutAtAnchor();
@@ -1716,9 +2170,17 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
     auto entry = entries_.find(id);
     if (entry != entries_.end() && entry->second->scroll) {
       auto* scroll = entry->second->scroll.get();
-      scroll->ScrollToPosition(scroll->vertical_scroll_bar(), position);
+      int target =
+          virtual_offsets_.contains(id) ? virtual_offsets_[id] : position;
+      if (!virtual_offsets_.contains(id) && anchors.contains(id)) {
+        auto row = entries_.find(anchors[id].id);
+        if (row != entries_.end() && row->second->parent_id == id)
+          target = row->second->view->y() - anchors[id].relative_y;
+      }
+      scroll->ScrollToPosition(scroll->vertical_scroll_bar(), target);
     }
   }
+  virtual_offsets_.clear();
   if (!focused.empty()) {
     auto entry = entries_.find(focused);
     if (entry != entries_.end() && visible_ &&
@@ -1727,6 +2189,22 @@ void NativePanelHost::UpdateContent(NativePanelNode content) {
       entry->second->FocusTarget()->RequestFocus();
     }
   }
+  if (!active_id_.empty() && !desired.contains(active_id_))
+    active_id_.clear();
+  if (!focused.empty() && !entries_.contains(focused) && visible_)
+    widget_->GetFocusManager()->AdvanceFocus(false);
+  if (menu_open_ && !menu_target_.empty() && !desired.contains(menu_target_)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<NativePanelHost> self) {
+              if (self)
+                self->action_.Run(
+                    base::DictValue().Set("id", "").Set("type", "_close-menu"));
+            },
+            weak_factory_.GetWeakPtr()));
+  }
+  ScheduleInteractionUpdate();
   if (!reveal_selection_.empty()) {
     auto selected = entries_.find(reveal_selection_);
     if (selected != entries_.end())
@@ -1764,51 +2242,35 @@ void NativePanelHost::UpdateBackgroundMaterial() {
     enable = material_fallback_reason_.empty();
   }
 
-  // Leave an ordinary panel's native frame untouched. Reconfigure DWM only
-  // for material transitions, theme/policy changes or composition recovery.
-  const std::string mode = String(options_.theme, "mode", "system");
-  const BOOL dark =
-      mode == "dark" ||
-      (mode == "system" && native_theme->preferred_color_scheme() ==
-                               ui::NativeTheme::PreferredColorScheme::kDark);
-  const std::string configuration =
-      std::string(enable ? "acrylic:" : "none:") + (dark ? "dark" : "light");
-  if (supported && configuration != material_system_configuration_ &&
-      (options_.background_material == "acrylic" || acrylic_applied_ ||
-       !material_system_configuration_.empty())) {
-    ::DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
-                            sizeof(dark));
-    const MARGINS margins =
-        enable ? MARGINS{-1, -1, -1, -1} : MARGINS{0, 0, 0, 0};
-    const HRESULT frame_result =
-        ::DwmExtendFrameIntoClientArea(hwnd_, &margins);
-    const DWM_SYSTEMBACKDROP_TYPE backdrop =
-        enable ? DWMSBT_TRANSIENTWINDOW : DWMSBT_NONE;
-    const HRESULT backdrop_result = ::DwmSetWindowAttribute(
-        hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
-    if (enable && (FAILED(frame_result) || FAILED(backdrop_result))) {
+  if (enable && !backdrop_) {
+    auto backdrop = std::make_unique<NativePanelBackdrop>();
+    if (backdrop->Initialize(views::HWNDForWidget(parent_))) {
+      backdrop_ = std::move(backdrop);
+    } else {
       enable = false;
-      material_fallback_reason_ = "dwm-unavailable";
-      const MARGINS reset = {};
-      ::DwmExtendFrameIntoClientArea(hwnd_, &reset);
-      const DWM_SYSTEMBACKDROP_TYPE none = DWMSBT_NONE;
-      ::DwmSetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &none,
-                              sizeof(none));
+      material_fallback_reason_ = "composition-backdrop-unavailable";
     }
-    // The panel supplies its own outline. DWM must not add a caption strip or
-    // a second colored border to this frameless, separately shadowed popup.
-    const COLORREF color = enable ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
-    ::DwmSetWindowAttribute(hwnd_, DWMWA_CAPTION_COLOR, &color, sizeof(color));
-    ::DwmSetWindowAttribute(hwnd_, DWMWA_BORDER_COLOR, &color, sizeof(color));
-    if (enable)
-      ::DefWindowProc(hwnd_, WM_NCACTIVATE, TRUE, -1);
-    material_system_configuration_ =
-        std::string(enable ? "acrylic:" : "none:") + (dark ? "dark" : "light");
   }
+  if (!enable)
+    backdrop_.reset();
   acrylic_applied_ = enable;
   surface_->SetAcrylicApplied(enable,
                               options_.background_material == "acrylic");
   UpdateInputRegion();
+  UpdateBackdropBounds();
+}
+
+void NativePanelHost::UpdateBackdropBounds() {
+  if (!backdrop_ || !hwnd_ || !surface_ || surface_->width() == 0)
+    return;
+  RECT client;
+  ::GetClientRect(hwnd_, &client);
+  const double scale = static_cast<double>(client.right) / surface_->width();
+  backdrop_->SetBounds(
+      hwnd_,
+      shadow_widget_ ? views::HWNDForWidget(shadow_widget_.get()) : nullptr,
+      std::round((options_.shadow ? kShadowInset : 0) * scale),
+      std::round(options_.radius * scale), visible_);
 }
 
 void NativePanelHost::ApplyTheme() {
@@ -1837,19 +2299,38 @@ void NativePanelHost::ApplyTheme() {
   int font_size = Integer(options_.theme, "fontSize", 13);
   std::string family = String(options_.theme, "fontFamily", "Segoe UI");
   for (auto& [id, entry] : entries_) {
-    const base::DictValue empty_style;
-    const auto* style = entry->properties.FindDict("style");
-    if (!style)
-      style = &empty_style;
+    const base::DictValue effective = EffectiveStyle(*entry);
+    const auto* style = &effective;
     const auto weight = String(*style, "fontWeight");
-    gfx::FontList font(std::vector<std::string>{family}, gfx::Font::NORMAL,
-                       Integer(entry->properties, "fontSize", font_size),
-                       weight == "bold"     ? gfx::Font::Weight::BOLD
-                       : weight == "medium" ? gfx::Font::Weight::MEDIUM
-                                            : gfx::Font::Weight::NORMAL);
+    const auto decoration = String(*style, "textDecoration");
+    const int font_style = decoration == "line-through"
+                               ? gfx::Font::STRIKE_THROUGH
+                           : decoration == "underline" ? gfx::Font::UNDERLINE
+                                                       : gfx::Font::NORMAL;
+    gfx::FontList font(
+        std::vector<std::string>{String(*style, "fontFamily", family)},
+        font_style,
+        Integer(entry->properties, "fontSize",
+                Integer(*style, "fontSize", font_size)),
+        weight == "bold"     ? gfx::Font::Weight::BOLD
+        : weight == "medium" ? gfx::Font::Weight::MEDIUM
+                             : gfx::Font::Weight::NORMAL);
     if (entry->label) {
       entry->label->SetTextStyle(views::style::STYLE_PRIMARY);
       entry->label->SetFontList(font);
+      const int line_height = Integer(*style, "lineHeight", 0);
+      entry->label->SetLineHeight(
+          line_height > 0
+              ? line_height
+              : std::max(font.GetHeight(),
+                         views::TypographyProvider::Get().GetLineHeight(
+                             views::style::CONTEXT_LABEL,
+                             views::style::STYLE_PRIMARY)));
+      const auto vertical = String(*style, "verticalAlign", "middle");
+      entry->label->SetVerticalAlignment(vertical == "top" ? gfx::ALIGN_TOP
+                                         : vertical == "bottom"
+                                             ? gfx::ALIGN_BOTTOM
+                                             : gfx::ALIGN_MIDDLE);
       entry->label->SetEnabledColor(Color(
           *style, "color",
           entry->properties.FindBool("muted").value_or(false) ? muted : text));
@@ -1871,33 +2352,70 @@ void NativePanelHost::ApplyTheme() {
     }
     if (entry->linked_label) {
       auto appearance = entry->properties.Clone();
+      appearance.Set("effectiveStyle", style->Clone());
       appearance.Set("theme", options_.theme.Clone());
       if (appearance != entry->linked_appearance) {
         entry->linked_appearance = std::move(appearance);
         auto* label = entry->linked_label.get();
         label->ClearStyleRanges();
-        const auto* range = entry->properties.FindDict("linkRange");
-        const int start = Integer(*range, "start", 0);
-        const int end = Integer(*range, "end", 0);
         const int length = label->GetText().size();
         views::StyledLabel::RangeStyleInfo normal;
         normal.custom_font = font;
-        normal.override_color = Color(
-            *style, "color",
-            entry->properties.FindBool("muted").value_or(false) ? muted : text);
-        if (start > 0)
-          label->AddStyleRange(gfx::Range(0, start), normal);
-        auto link = views::StyledLabel::RangeStyleInfo::CreateForLink(
-            base::BindRepeating(&NativePanelHost::SendAction,
-                                weak_factory_.GetWeakPtr(), id, "click"));
-        link.custom_font = font;
-        label->AddStyleRange(gfx::Range(start, end), link);
-        if (end < length)
-          label->AddStyleRange(gfx::Range(end, length), normal);
+        normal.override_color = Color(*style, "color", text);
+        int previous_end = 0;
+        base::ListValue ranges;
+        if (const auto* one = entry->properties.FindDict("linkRange"))
+          ranges.Append(one->Clone());
+        if (const auto* many = entry->properties.FindList("links"))
+          ranges = many->Clone();
+        for (const auto& value : ranges) {
+          const auto& range = value.GetDict();
+          const int start = Integer(range, "start", 0);
+          const int end = Integer(range, "end", 0);
+          if (start > previous_end)
+            label->AddStyleRange(gfx::Range(previous_end, start), normal);
+          const std::string link_id = String(range, "id", id);
+          auto link = views::StyledLabel::RangeStyleInfo::CreateForLink(
+              base::BindRepeating(
+                  [](base::WeakPtr<NativePanelHost> host, std::string id,
+                     std::string link_id) {
+                    if (!host || !host->visible_ ||
+                        !host->entries_.contains(id))
+                      return;
+                    host->action_.Run(base::DictValue()
+                                          .Set("id", id)
+                                          .Set("type", "click")
+                                          .Set("linkId", link_id));
+                  },
+                  weak_factory_.GetWeakPtr(), id, link_id));
+          link.custom_font = font;
+          link.override_color = Color(*style, "linkColor", accent);
+          label->AddStyleRange(gfx::Range(start, end), link);
+          previous_end = end;
+        }
+        if (previous_end < length)
+          label->AddStyleRange(gfx::Range(previous_end, length), normal);
+        const int line_height = Integer(*style, "lineHeight", 0);
+        label->SetLineHeight(
+            line_height > 0
+                ? line_height
+                : std::max(font.GetHeight(),
+                           views::TypographyProvider::Get().GetLineHeight(
+                               views::style::CONTEXT_LABEL,
+                               views::style::STYLE_PRIMARY)));
       }
     }
     if (entry->type == "button") {
       auto* button = static_cast<views::MdTextButton*>(entry->view.get());
+      static_cast<PanelButton*>(button)->SetPlain(
+          String(entry->properties, "variant") == "plain", *style);
+      if (String(entry->properties, "variant") == "outlined") {
+        button->SetBgColorOverrideDeprecated(
+            Color(*style, "background", SK_ColorTRANSPARENT));
+        button->SetStrokeColorOverrideDeprecated(
+            Color(*style, "borderColor",
+                  provider->GetColor(ui::kColorFocusableBorderUnfocused)));
+      }
       button->SetEnabledTextColors(Color(*style, "color", text));
       static_cast<PanelButton*>(button)->SetPanelFont(font);
       const auto alignment = String(*style, "align", "center");
@@ -1905,9 +2423,43 @@ void NativePanelHost::ApplyTheme() {
                                      : alignment == "end" ? gfx::ALIGN_RIGHT
                                                           : gfx::ALIGN_CENTER);
     } else if (IsTextControl(entry->type)) {
-      static_cast<views::Textfield*>(entry->view.get())->SetFontList(font);
+      auto* editor = static_cast<views::Textfield*>(entry->view.get());
+      editor->SetFontList(font);
+      editor->SetColor(Color(*style, "color", text));
       if (entry->type == "textarea")
         static_cast<PanelTextarea*>(entry->view.get())->SetAppearance(*style);
+      else if (style->contains("background") ||
+               style->contains("borderColor") || style->contains("radius") ||
+               style->contains("paddingTop") ||
+               style->contains("paddingRight") ||
+               style->contains("paddingBottom") ||
+               style->contains("paddingLeft") ||
+               style->FindBool("borderless").value_or(false)) {
+        const bool borderless = style->FindBool("borderless").value_or(false);
+        const int stroke = borderless ? 0 : Integer(*style, "borderWidth", 1);
+        const auto padding = ControlInsets(*style, borderless ? 2 : 6);
+        editor->SetBackgroundEnabled(true);
+        const SkColor background = Color(
+            *style, "background",
+            borderless ? SK_ColorTRANSPARENT
+                       : provider->GetColor(ui::kColorTextfieldBackground));
+        editor->SetCornerRadius(Integer(*style, "radius", 4));
+        editor->SetBackgroundColor(background);
+        editor->SetBorder(stroke
+                              ? views::CreatePaddedBorder(
+                                    views::CreateRoundedRectBorder(
+                                        stroke, Integer(*style, "radius", 4),
+                                        Color(*style, "borderColor",
+                                              provider->GetColor(
+                                                  ui::kColorTextfieldOutline))),
+                                    padding)
+                              : views::CreateEmptyBorder(padding));
+        editor->SetBackground(views::CreateRoundedRectBackground(
+            background, Integer(*style, "radius", 4)));
+      } else {
+        editor->SetBackgroundEnabled(true);
+        editor->SetBackgroundColor(std::nullopt);
+      }
     } else if (entry->type == "toggle") {
       static_cast<views::ToggleButton*>(entry->control.get())
           ->SetTrackOnColor(accent);
@@ -1920,6 +2472,8 @@ void NativePanelHost::ApplyTheme() {
           ->SetAppearance(
               *style, entry->properties.FindBool("selected").value_or(false),
               SkColorSetARGB(18, 128, 128, 128));
+      static_cast<PanelAction*>(entry->view.get())
+          ->SetInteraction(entry->hovered, active_id_ == id);
     } else if (entry->type != "button" && !IsTextControl(entry->type)) {
       entry->view->SetBackground(views::CreateRoundedRectBackground(
           Color(*style, "background", SK_ColorTRANSPARENT),
@@ -2000,8 +2554,14 @@ void NativePanelHost::Show(const gfx::Rect& anchor,
         views::HWNDForWidget(shadow_widget_.get()), hwnd_, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
   }
+  UpdateBackdropBounds();
   event_monitor_ = views::EventMonitor::CreateApplicationMonitor(
-      this, parent_->GetNativeWindow(), {ui::EventType::kKeyPressed});
+      this, parent_->GetNativeWindow(),
+      {ui::EventType::kKeyPressed, ui::EventType::kKeyReleased,
+       ui::EventType::kMouseMoved, ui::EventType::kMouseEntered,
+       ui::EventType::kMouseExited, ui::EventType::kMousePressed,
+       ui::EventType::kMouseReleased, ui::EventType::kMousewheel});
+  ScheduleInteractionUpdate();
 }
 
 void NativePanelHost::UpdateAnchor(const gfx::Rect& anchor) {
@@ -2073,6 +2633,7 @@ void NativePanelHost::LayoutAtAnchor() {
           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     }
   }
+  UpdateBackdropBounds();
 }
 
 void NativePanelHost::Hide(bool restore_focus) {
@@ -2090,6 +2651,8 @@ void NativePanelHost::Hide(bool restore_focus) {
   }
   RemoveMouseMonitor(this);
   event_monitor_.reset();
+  if (backdrop_)
+    backdrop_->Hide();
   if (shadow_widget_)
     shadow_widget_->Hide();
   if (widget_)
@@ -2102,6 +2665,15 @@ void NativePanelHost::RestoreFocus() {
   if (!parent_ || !parent_->IsVisible() || parent_->IsClosed() ||
       parent_->IsMinimized())
     return;
+  if (restore_panel_hwnd_ && ::IsWindow(restore_panel_hwnd_)) {
+    auto* panel = reinterpret_cast<NativePanelHost*>(
+        ::GetProp(restore_panel_hwnd_, kPanelProperty));
+    if (panel && panel != this && panel->parent_ == parent_ &&
+        panel->visible_ && !panel->destroying_ && panel->widget_) {
+      panel->widget_->Activate();
+      return;
+    }
+  }
   parent_->Activate();
   if (restore_focus_->view())
     restore_focus_->view()->RequestFocus();
@@ -2121,14 +2693,15 @@ void NativePanelHost::Destroy() {
   destroying_ = true;
   weak_factory_.InvalidateWeakPtrs();
   Hide(false);
+  backdrop_.reset();
   RemoveMouseMonitor(this);
   event_monitor_.reset();
   if (parent_) {
     parent_->RemoveObserver(this);
     parent_ = nullptr;
   }
-  if (surface_)
-    surface_->RemovePreTargetHandler(this);
+  if (widget_ && widget_->GetRootView())
+    widget_->GetRootView()->RemovePreTargetHandler(this);
   RemoveWindowHook();
   if (widget_)
     widget_->RemoveObserver(this);
@@ -2166,11 +2739,18 @@ bool NativePanelHost::IsRelatedWindow(HWND target) const {
     if (current == hwnd_ || ::IsChild(hwnd_, current))
       return true;
   }
+  if (menu_open_ && parent_ &&
+      (target == views::HWNDForWidget(parent_) ||
+       ::GetWindow(target, GW_OWNER) == views::HWNDForWidget(parent_)))
+    return true;
+  for (HWND related : related_windows_)
+    if (target == related || ::IsChild(related, target))
+      return true;
   return IsComposing() && IsImeWindow(target);
 }
 
 void NativePanelHost::OnGlobalMouseDown(gfx::Point point, HWND target) {
-  if (!visible_ || !options_.dismiss_on_outside_click)
+  if (!visible_ || !options_.dismiss_on_outside_click || menu_open_)
     return;
   if ((IsRelatedWindow(target) && target != hwnd_) || HitTestScreenPoint(point))
     return;
@@ -2213,7 +2793,7 @@ void NativePanelHost::OnWidgetThemeChanged(views::Widget* widget) {
 void NativePanelHost::OnWidgetActivationChanged(views::Widget* widget,
                                                 bool active) {
   if (widget != widget_.get() || active || !visible_ ||
-      !options_.dismiss_on_outside_click)
+      !options_.dismiss_on_outside_click || menu_open_)
     return;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
@@ -2246,9 +2826,19 @@ void NativePanelHost::SendAction(const std::string& id,
   if (found == entries_.end())
     return;
   Entry& entry = *found->second;
+  if (!entry.view->IsDrawn() || !entry.view->GetEnabledInViewsSubtree())
+    return;
   base::DictValue detail;
   detail.Set("id", id);
   detail.Set("type", type);
+  if (entry.type == "item" || entry.type == "iconButton") {
+    const gfx::Rect bounds = entry.view->GetBoundsInScreen();
+    detail.Set("anchor", base::DictValue()
+                             .Set("x", bounds.right())
+                             .Set("y", bounds.bottom())
+                             .Set("width", 1)
+                             .Set("height", 1));
+  }
   if (IsTextControl(entry.type)) {
     detail.Set(
         "value",
@@ -2283,7 +2873,22 @@ void NativePanelHost::ContentsChanged(views::Textfield* sender,
       sender->SetText(contents.substr(0, limit));
       sender->SetSelectedRange(gfx::Range(limit));
     }
+    const bool auto_grow =
+        entry->properties.FindBool("autoGrow").value_or(false);
+    auto weak = weak_factory_.GetWeakPtr();
     SendAction(id, "change");
+    if (!weak)
+      return;
+    if (auto_grow) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<NativePanelHost> self) {
+                if (self)
+                  self->UpdateContent(CopyNode(self->options_.content));
+              },
+              weak_factory_.GetWeakPtr()));
+    }
     return;
   }
 }
@@ -2350,7 +2955,10 @@ bool NativePanelHost::HandleKeyEvent(views::Textfield* sender,
            event.IsShiftDown() || event.IsControlDown() || event.IsAltDown() ||
            event.IsCommandDown() || event.IsAltGrDown()))
         return false;
-      SendAction(id, "submit");
+      if (entry->properties.contains("navigationTarget") && !active_id_.empty())
+        SendAction(active_id_, "click");
+      else
+        SendAction(id, "submit");
       return true;
     }
   }
@@ -2358,66 +2966,483 @@ bool NativePanelHost::HandleKeyEvent(views::Textfield* sender,
 }
 
 void NativePanelHost::OnKeyEvent(ui::KeyEvent* event) {
-  if (visible_ && !IsComposing() &&
-      event->type() == ui::EventType::kKeyPressed &&
-      (event->key_code() == ui::VKEY_UP ||
-       event->key_code() == ui::VKEY_DOWN)) {
-    auto* focused = widget_->GetFocusManager()->GetFocusedView();
-    for (const auto& [id, entry] : entries_)
+  ScheduleInteractionUpdate();
+  if (!visible_ || IsComposing() || menu_open_)
+    return;
+  auto* focused = widget_->GetFocusManager()->GetFocusedView();
+  if (event->key_code() == ui::VKEY_APPS ||
+      (event->key_code() == ui::VKEY_F10 && event->IsShiftDown())) {
+    // RootView otherwise invokes context menus on both down and up. Consume
+    // both transitions and dispatch one request on the initial press.
+    event->StopPropagation();
+    if (focused && event->type() == ui::EventType::kKeyPressed &&
+        !event->is_repeat())
+      focused->ShowContextMenu(focused->GetKeyboardContextMenuLocation(),
+                               ui::mojom::MenuSourceType::kKeyboard);
+    return;
+  }
+  if (event->type() != ui::EventType::kKeyPressed)
+    return;
+  // Dismissal applies to editors without a navigation target too. Composition
+  // and open native menus were already excluded above.
+  if (options_.dismiss_on_escape && event->key_code() == ui::VKEY_ESCAPE) {
+    event->StopPropagation();
+    Dismiss("escape");
+    return;
+  }
+  // Owned popup widgets can share their owner's menu accelerators. Native
+  // editing commands must reach the editor before an application menu role
+  // redirects the same shortcut to its window/WebContents.
+  if (focused && event->IsControlDown() && !event->IsAltDown() &&
+      (event->key_code() == ui::VKEY_A || event->key_code() == ui::VKEY_C ||
+       event->key_code() == ui::VKEY_X || event->key_code() == ui::VKEY_V ||
+       event->key_code() == ui::VKEY_Z || event->key_code() == ui::VKEY_Y)) {
+    for (const auto& [id, entry] : entries_) {
       if (entry->view == focused &&
-          (IsTextControl(entry->type) || entry->type == "option"))
+          (IsTextControl(entry->type) ||
+           entry->properties.FindBool("selectable").value_or(false))) {
+        event->StopPropagation();
+        focused->OnKeyPressed(*event);
         return;
-    std::vector<Entry*> rows;
-    auto collect = [&](auto&& self, const NativePanelNode& node) -> void {
-      auto found = entries_.find(node.id);
-      if (found != entries_.end() && node.type == "item" &&
-          found->second->view->GetVisible() &&
-          found->second->view->GetEnabled())
-        rows.push_back(found->second.get());
-      for (const auto& child : node.children)
-        self(self, child);
-    };
-    collect(collect, options_.content);
-    auto current = std::find_if(rows.begin(), rows.end(), [&](Entry* row) {
-      return row->view == focused || (focused && row->view->Contains(focused));
-    });
-    if (current != rows.end() || (!focused && !rows.empty())) {
-      int index = current == rows.end()
-                      ? (event->key_code() == ui::VKEY_DOWN
-                             ? -1
-                             : static_cast<int>(rows.size()))
-                      : static_cast<int>(current - rows.begin());
-      index = std::clamp(index + (event->key_code() == ui::VKEY_DOWN ? 1 : -1),
-                         0, static_cast<int>(rows.size()) - 1);
-      rows[index]->view->RequestFocus();
-      rows[index]->view->ScrollViewToVisible();
-      event->SetHandled();
-      return;
+      }
     }
   }
-  if (visible_ && options_.dismiss_on_escape &&
-      event->type() == ui::EventType::kKeyPressed &&
-      event->key_code() == ui::VKEY_ESCAPE && !IsComposing()) {
-    event->SetHandled();
-    Dismiss("escape");
+  std::string list;
+  bool keep_focus = false;
+  for (const auto& [id, entry] : entries_) {
+    if (entry->view != focused)
+      continue;
+    if (IsTextControl(entry->type) || entry->type == "option") {
+      list = String(entry->properties, "navigationTarget");
+      if (list.empty())
+        return;
+      keep_focus = true;
+    }
+  }
+  if (!event->IsControlDown() && !event->IsAltDown() && !event->IsShiftDown() &&
+      Navigate(event->key_code(), list, keep_focus)) {
+    event->StopPropagation();
+    return;
   }
 }
 
 void NativePanelHost::OnEvent(const ui::Event& event) {
-  if (options_.focus_mode == "none" && visible_ && options_.dismiss_on_escape &&
+  ScheduleInteractionUpdate();
+  if (options_.focus_mode == "none" && visible_ && !menu_open_ &&
+      options_.dismiss_on_escape &&
       event.type() == ui::EventType::kKeyPressed &&
       event.AsKeyEvent()->key_code() == ui::VKEY_ESCAPE && !IsComposing())
     Dismiss("escape");
+}
+
+void NativePanelHost::ShowContextMenuForViewImpl(
+    views::View* source,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type) {
+  if (source_type == ui::mojom::MenuSourceType::kMouse && widget_) {
+    gfx::Point local = point;
+    views::View::ConvertPointFromScreen(widget_->GetRootView(), &local);
+    source = widget_->GetRootView()->GetEventHandlerForPoint(local);
+  }
+  if (!visible_ || applying_ || menu_open_ || !source || !source->IsDrawn() ||
+      !source->GetEnabledInViewsSubtree())
+    return;
+  for (views::View* view = source; view; view = view->parent()) {
+    for (const auto& [id, entry] : entries_) {
+      if (entry->view != view)
+        continue;
+      if (auto enabled = entry->properties.FindBool("contextMenu");
+          enabled && !*enabled)
+        return;
+      if (!entry->properties.FindBool("contextMenu")
+               .value_or(entry->type == "item"))
+        continue;
+      if (!entry->view->GetEnabledInViewsSubtree())
+        return;
+      base::DictValue detail;
+      detail.Set("id", id);
+      detail.Set("type", "context-menu");
+      detail.Set("sourceType",
+                 source_type == ui::mojom::MenuSourceType::kKeyboard
+                     ? "keyboard"
+                     : "mouse");
+      detail.Set("anchor", RectValue(gfx::Rect(point, gfx::Size(1, 1))));
+      action_.Run(std::move(detail));
+      return;
+    }
+  }
+}
+
+void NativePanelHost::ScheduleInteractionUpdate() {
+  if (interaction_pending_ || destroying_)
+    return;
+  interaction_pending_ = true;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&NativePanelHost::RefreshInteractions,
+                                weak_factory_.GetWeakPtr()));
+}
+
+void NativePanelHost::RefreshInteractions() {
+  interaction_pending_ = false;
+  if (!widget_ || destroying_ || applying_)
+    return;
+  const auto point = display::Screen::Get()->GetCursorScreenPoint();
+  POINT physical;
+  ::GetCursorPos(&physical);
+  HWND hit = ::WindowFromPoint(physical);
+  const bool inside =
+      visible_ && !menu_open_ && (hit == hwnd_ || ::IsChild(hwnd_, hit));
+  auto* focused = widget_->GetFocusManager()->GetFocusedView();
+  bool changed = false;
+  for (auto& [id, entry] : entries_) {
+    gfx::Point local = point;
+    views::View::ConvertPointFromScreen(entry->view, &local);
+    const bool hover = inside && entry->view->IsDrawn() &&
+                       entry->view->GetEnabledInViewsSubtree() &&
+                       entry->view->GetVisibleBounds().Contains(local);
+    const bool focus =
+        focused && (entry->view == focused || entry->view->Contains(focused));
+    auto* button = views::Button::AsButton(entry->control);
+    const bool pressed =
+        button && button->GetState() == views::Button::STATE_PRESSED;
+    changed |= entry->hovered != hover || entry->focused != focus ||
+               entry->pressed != pressed;
+    entry->hovered = hover;
+    entry->focused = focus;
+    entry->pressed = pressed;
+  }
+  if (changed)
+    ApplyTheme();
+}
+
+base::DictValue NativePanelHost::EffectiveStyle(const Entry& entry) const {
+  base::DictValue effective;
+  auto parent = entries_.find(entry.parent_id);
+  if (parent != entries_.end()) {
+    const auto inherited = EffectiveStyle(*parent->second);
+    for (const char* key :
+         {"fontFamily", "fontSize", "fontWeight", "color", "textDecoration"})
+      if (const auto* value = inherited.Find(key))
+        effective.Set(key, value->Clone());
+  }
+  const auto* own = entry.properties.FindDict("style");
+  if (options_.background_material == "acrylic") {
+    const bool dark =
+        color_utils::GetRelativeLuminance(
+            surface_->GetColorProvider()->GetColor(ui::kColorMenuBackground)) <
+        0.5;
+    if (entry.type == "item" || entry.type == "iconButton" ||
+        (entry.type == "button" &&
+         String(entry.properties, "variant") == "plain")) {
+      effective.Set("hoverBackground", dark ? "#12FFFFFF" : "#0C000000");
+      effective.Set("pressedBackground", dark ? "#1FFFFFFF" : "#14000000");
+      effective.Set("selectedBackground", dark ? "#24FFFFFF" : "#16000000");
+      effective.Set("activeBackground", dark ? "#24FFFFFF" : "#16000000");
+    }
+    if (IsTextControl(entry.type)) {
+      effective.Set("background", dark ? "#30000000" : "#88FFFFFF");
+      effective.Set("borderColor", dark ? "#20FFFFFF" : "#18000000");
+      effective.Set("radius", 6);
+      effective.Set("paddingLeft", 8);
+      effective.Set("paddingRight", 8);
+    }
+  }
+  if (own)
+    effective.Merge(own->Clone());
+  auto apply = [&](const char* state, bool enabled) {
+    if (!enabled)
+      return;
+    const auto* override_style = own ? own->FindDict(state) : nullptr;
+    if (override_style)
+      effective.Merge(override_style->Clone());
+    for (const auto* suffix : {"Background", "Color", "BorderColor"}) {
+      std::string flat = std::string(state) + suffix;
+      std::string property = suffix;
+      property[0] = base::ToLowerASCII(property[0]);
+      const auto* value = own ? own->Find(flat) : nullptr;
+      if (!value && (!override_style || !override_style->contains(property)))
+        value = effective.Find(flat);
+      if (value) {
+        effective.Set(property, value->Clone());
+      }
+    }
+  };
+  apply("selected", entry.properties.FindBool("selected").value_or(false));
+  apply("active", entry.id == active_id_);
+  apply("hover", entry.hovered);
+  apply("pressed", entry.pressed);
+  apply("focused", entry.focused);
+  apply("invalid", entry.properties.FindBool("invalid").value_or(false));
+  apply("busy", entry.properties.FindBool("busy").value_or(false));
+  apply("disabled", !entry.view->GetEnabledInViewsSubtree());
+  if (ui::NativeTheme::GetInstanceForNativeUi()->forced_colors() !=
+      ui::ColorProviderKey::ForcedColors::kNone) {
+    const auto* provider = surface_->GetColorProvider();
+    effective.Set("color",
+                  base::StringPrintf(
+                      "#%08X", provider->GetColor(ui::kColorLabelForeground)));
+    for (const auto* key :
+         {"background", "hoverBackground", "selectedBackground",
+          "activeBackground", "pressedBackground", "focusedBackground"})
+      effective.Set(key,
+                    base::StringPrintf(
+                        "#%08X", provider->GetColor(ui::kColorMenuBackground)));
+    effective.Set(
+        "borderColor",
+        base::StringPrintf(
+            "#%08X", provider->GetColor(ui::kColorFocusableBorderFocused)));
+  }
+  return effective;
+}
+
+NativePanelNode NativePanelHost::Materialize(const NativePanelNode& node) {
+  NativePanelNode result;
+  result.id = node.id;
+  result.type = node.type;
+  result.properties = node.properties.Clone();
+  result.image = node.image;
+  const auto* config = node.properties.FindDict("virtual");
+  if (!config) {
+    for (const auto& child : node.children)
+      result.children.push_back(Materialize(child));
+    return result;
+  }
+  const int height = Integer(*config, "itemHeight", 32);
+  const int extra = Integer(*config, "overscan", 3);
+  auto existing = entries_.find(node.id);
+  const int offset =
+      virtual_offsets_.contains(node.id) ? virtual_offsets_[node.id]
+      : existing != entries_.end() ? ScrollPosition(existing->second->scroll)
+                                   : 0;
+  const int start = std::clamp(offset / height - extra, 0,
+                               static_cast<int>(node.children.size()));
+  const int end = std::min(
+      static_cast<int>(node.children.size()),
+      (offset + Integer(node.properties, "height", 240) + height - 1) / height +
+          extra);
+  auto spacer = [&](int size, const char* suffix) {
+    NativePanelNode gap;
+    gap.id = "__native_panel_virtual__:" + node.id + suffix;
+    gap.type = "column";
+    gap.properties.Set("height", size);
+    gap.properties.Set("gap", 0);
+    gap.properties.Set("padding", 0);
+    return gap;
+  };
+  if (start)
+    result.children.push_back(spacer(start * height, ":top"));
+  for (int i = start; i < end; ++i) {
+    auto row = Materialize(node.children[i]);
+    row.properties.Set("height", height);
+    result.children.push_back(std::move(row));
+  }
+  if (end < static_cast<int>(node.children.size()))
+    result.children.push_back(
+        spacer((node.children.size() - end) * height, ":bottom"));
+  result.properties.Set("gap", 0);
+  result.properties.Set("padding", 0);
+  result.properties.Set("virtualStart", start);
+  result.properties.Set("virtualEnd", end);
+  return result;
+}
+
+void NativePanelHost::OnListScrolled(const std::string& id) {
+  ScheduleInteractionUpdate();
+  if (applying_ || virtual_pending_)
+    return;
+  auto found = entries_.find(id);
+  if (found == entries_.end() || !found->second->properties.contains("virtual"))
+    return;
+  const auto* config = found->second->properties.FindDict("virtual");
+  const int start = std::max(0, ScrollPosition(found->second->scroll) /
+                                        Integer(*config, "itemHeight", 32) -
+                                    Integer(*config, "overscan", 3));
+  if (start == Integer(found->second->properties, "virtualStart", -1))
+    return;
+  virtual_pending_ = true;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<NativePanelHost> self) {
+                       if (!self)
+                         return;
+                       self->virtual_pending_ = false;
+                       self->UpdateContent(CopyNode(self->options_.content));
+                     },
+                     weak_factory_.GetWeakPtr()));
+}
+
+bool NativePanelHost::Reveal(const std::string& id) {
+  bool virtual_item = false;
+  auto scan = [&](auto&& self, const NativePanelNode& node) -> void {
+    if (const auto* config = node.properties.FindDict("virtual")) {
+      for (size_t i = 0; i < node.children.size(); ++i)
+        if (node.children[i].id == id) {
+          virtual_offsets_[node.id] = i * Integer(*config, "itemHeight", 32);
+          virtual_item = true;
+        }
+    }
+    for (const auto& child : node.children)
+      self(self, child);
+  };
+  scan(scan, options_.content);
+  if (virtual_item) {
+    const auto offsets = virtual_offsets_;
+    UpdateContent(CopyNode(options_.content));
+    for (const auto& [list, offset] : offsets) {
+      auto entry = entries_.find(list);
+      if (entry != entries_.end())
+        entry->second->scroll->ScrollToOffset(gfx::PointF(0, offset));
+    }
+    virtual_offsets_.clear();
+  }
+  auto found = entries_.find(id);
+  if (found == entries_.end() || !found->second->view->IsDrawn() ||
+      !found->second->view->GetEnabledInViewsSubtree())
+    return false;
+  found->second->view->ScrollViewToVisible();
+  return true;
+}
+
+bool NativePanelHost::Navigate(int key,
+                               const std::string& list,
+                               bool keep_focus) {
+  if (key != ui::VKEY_UP && key != ui::VKEY_DOWN && key != ui::VKEY_HOME &&
+      key != ui::VKEY_END && key != ui::VKEY_PRIOR && key != ui::VKEY_NEXT)
+    return false;
+  std::vector<std::string> rows;
+  auto* focused = widget_->GetFocusManager()->GetFocusedView();
+  std::string current = keep_focus ? active_id_ : "";
+  auto collect = [&](auto&& self, const NativePanelNode& node, bool within,
+                     bool enabled) -> void {
+    within |= node.id == list;
+    enabled &= !node.properties.FindBool("disabled").value_or(false) &&
+               node.properties.FindBool("visible").value_or(true) &&
+               !node.properties.FindBool("busy").value_or(false);
+    if (!enabled)
+      return;
+    if (within && node.type == "item") {
+      rows.push_back(node.id);
+      auto entry = entries_.find(node.id);
+      if (!keep_focus && entry != entries_.end() && focused &&
+          (focused == entry->second->view ||
+           entry->second->view->Contains(focused)))
+        current = node.id;
+    }
+    for (const auto& child : node.children)
+      self(self, child, within, enabled);
+  };
+  collect(collect, options_.content, list.empty(), true);
+  if (rows.empty() || (!keep_focus && focused && current.empty()))
+    return false;
+  auto it = std::find(rows.begin(), rows.end(), current);
+  int index = it == rows.end() ? -1 : static_cast<int>(it - rows.begin());
+  int page = 8;
+  auto container = entries_.find(list);
+  if (container != entries_.end() && container->second->scroll) {
+    const auto* config = container->second->properties.FindDict("virtual");
+    page = std::max(1, container->second->scroll->height() /
+                           (config ? Integer(*config, "itemHeight", 32) : 32));
+  }
+  if (key == ui::VKEY_HOME)
+    index = 0;
+  else if (key == ui::VKEY_END)
+    index = rows.size() - 1;
+  else if (key == ui::VKEY_PRIOR)
+    index -= page;
+  else if (key == ui::VKEY_NEXT)
+    index += page;
+  else
+    index += key == ui::VKEY_UP ? -1 : 1;
+  index = std::clamp(index, 0, static_cast<int>(rows.size()) - 1);
+  if (!Reveal(rows[index]))
+    return false;
+  active_id_ = rows[index];
+  if (!keep_focus)
+    entries_[active_id_]->view->RequestFocus();
+  else if (focused)
+    focused->GetViewAccessibility().SetActiveDescendant(
+        *entries_[active_id_]->view);
+  ApplyTheme();
+  return true;
+}
+
+base::DictValue NativePanelHost::Command(const base::DictValue& command) {
+  const auto type = String(command, "type");
+  const auto id = String(command, "id");
+  bool ok = false;
+  if (type == "menu") {
+    menu_open_ = command.FindBool("open").value_or(false);
+    menu_target_ = menu_open_ ? id : "";
+    if (!menu_open_ && visible_ && parent_ &&
+        (::GetForegroundWindow() == views::HWNDForWidget(parent_) ||
+         ::GetForegroundWindow() == hwnd_))
+      widget_->Activate();
+    ok = true;
+  } else if (type == "related") {
+    related_windows_.clear();
+    uint64_t restore_handle = 0;
+    base::StringToUint64(String(command, "restoreHandle"), &restore_handle);
+    restore_panel_hwnd_ = reinterpret_cast<HWND>(restore_handle);
+    if (const auto* handles = command.FindList("handles"))
+      for (const auto& value : *handles) {
+        uint64_t handle;
+        if (value.is_string() &&
+            base::StringToUint64(value.GetString(), &handle))
+          related_windows_.push_back(reinterpret_cast<HWND>(handle));
+      }
+    ok = true;
+  } else if (type == "announce") {
+    const auto message = base::UTF8ToUTF16(String(command, "text"));
+    if (command.FindBool("assertive").value_or(false))
+      surface_->GetViewAccessibility().AnnounceAlert(message);
+    else
+      surface_->GetViewAccessibility().AnnouncePolitely(message);
+    ok = true;
+  } else if (type == "active" && id.empty()) {
+    active_id_.clear();
+    ApplyTheme();
+    ok = true;
+  } else if (type == "scroll-offset") {
+    auto found = entries_.find(id);
+    if (found != entries_.end() && found->second->scroll) {
+      found->second->scroll->ScrollToOffset(
+          gfx::PointF(0, Integer(command, "offset", 0)));
+      ok = true;
+    }
+  } else if ((type == "focus" || type == "scroll" || type == "active") &&
+             Reveal(id)) {
+    auto* entry = entries_[id].get();
+    if (type == "focus" && options_.focus_mode != "none") {
+      widget_->Activate();
+      entry->FocusTarget()->RequestFocus();
+      ok = entry->FocusTarget()->HasFocus();
+    } else if (type == "active" && entry->type == "item") {
+      active_id_ = id;
+      ApplyTheme();
+      ok = true;
+    } else if (type == "scroll")
+      ok = true;
+  }
+  ScheduleInteractionUpdate();
+  return base::DictValue().Set("ok", ok);
 }
 
 base::DictValue NativePanelHost::GetState() const {
   base::DictValue result;
   result.Set("destroyed", destroying_);
   result.Set("visible", visible_);
+  result.Set("activeId", active_id_);
+  result.Set("menuOpen", menu_open_);
   result.Set("backgroundMaterial", options_.background_material);
   result.Set("backgroundMaterialApplied",
              acrylic_applied_ ? "acrylic" : "none");
   result.Set("materialFallbackReason", material_fallback_reason_);
+  result.Set("materialBackend",
+             backdrop_ ? "composition-host-backdrop" : "none");
+  if (backdrop_)
+    result.Set(
+        "backdropWindowHandle",
+        std::to_string(reinterpret_cast<uintptr_t>(backdrop_->window())));
   if (hwnd_) {
     DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_AUTO;
     if (SUCCEEDED(::DwmGetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE,
@@ -2460,6 +3485,18 @@ base::DictValue NativePanelHost::GetState() const {
     base::DictValue control;
     control.Set("id", id);
     control.Set("type", entry->type);
+    control.Set("parentId", entry->parent_id);
+    control.Set("visible", entry->view->IsDrawn());
+    control.Set("enabled", entry->view->GetEnabledInViewsSubtree());
+    control.Set("hovered", entry->hovered);
+    control.Set("pressed", entry->pressed);
+    control.Set("focused", entry->focused);
+    control.Set("active", active_id_ == id);
+    control.Set("style", EffectiveStyle(*entry));
+    control.Set("role", String(entry->properties, "role"));
+    control.Set("accessibleDescription",
+                String(entry->properties, "accessibleDescription"));
+    control.Set("busy", entry->properties.FindBool("busy").value_or(false));
     control.Set("bounds", RectValue(entry->control->GetBoundsInScreen()));
     if (entry->type == "item" || entry->type == "iconButton") {
       const auto* ring = views::FocusRing::Get(entry->view);
@@ -2495,7 +3532,14 @@ base::DictValue NativePanelHost::GetState() const {
       result.Set("focusedId", id);
     if (IsTextControl(entry->type)) {
       auto* input = static_cast<views::Textfield*>(entry->view.get());
-      control.Set("value", base::UTF16ToUTF8(input->GetText()));
+      control.Set("value",
+                  entry->properties.FindBool("password").value_or(false)
+                      ? ""
+                      : base::UTF16ToUTF8(input->GetText()));
+      control.Set("readOnly",
+                  entry->properties.FindBool("readOnly").value_or(false));
+      control.Set("invalid",
+                  entry->properties.FindBool("invalid").value_or(false));
       control.Set("composing", input->IsIMEComposing());
       const gfx::Range selection = input->GetSelectedRange();
       control.Set("selection",
@@ -2521,6 +3565,11 @@ base::DictValue NativePanelHost::GetState() const {
     }
     if (entry->scroll) {
       control.Set("scrollOffset", ScrollPosition(entry->scroll));
+      if (entry->properties.contains("virtual")) {
+        control.Set("virtualStart",
+                    Integer(entry->properties, "virtualStart", 0));
+        control.Set("virtualEnd", Integer(entry->properties, "virtualEnd", 0));
+      }
       auto* scrollbar =
           static_cast<PanelScrollBar*>(entry->scroll->vertical_scroll_bar());
       control.Set("scrollbar", scrollbar->GetState());

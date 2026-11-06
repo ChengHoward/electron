@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -26,34 +27,44 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/image/image_skia_rep.h"
+#include "ui/gfx/image/image_skia_source.h"
 
 namespace electron {
 namespace {
+class ArrowSource final : public gfx::ImageSkiaSource {
+ public:
+  gfx::ImageSkiaRep GetImageForScale(float scale) override {
+    SkBitmap bitmap;
+    bitmap.allocN32Pixels(std::ceil(24 * scale), std::ceil(30 * scale));
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(bitmap);
+    canvas.scale(scale, scale);
+    SkPathBuilder path;
+    path.moveTo(2, 2)
+        .lineTo(2, 23)
+        .lineTo(8, 18)
+        .lineTo(12, 27)
+        .lineTo(16, 25)
+        .lineTo(12, 16)
+        .lineTo(20, 16)
+        .close();
+    const auto arrow = path.detach();
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SK_ColorWHITE);
+    canvas.drawPath(arrow, paint);
+    paint.setColor(SK_ColorBLACK);
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(1.5f);
+    canvas.drawPath(arrow, paint);
+    bitmap.setImmutable();
+    return gfx::ImageSkiaRep(bitmap, scale);
+  }
+  bool HasRepresentationAtAllScales() const override { return true; }
+};
+
 gfx::ImageSkia Arrow() {
-  SkBitmap bitmap;
-  bitmap.allocN32Pixels(24, 30);
-  bitmap.eraseColor(SK_ColorTRANSPARENT);
-  SkCanvas canvas(bitmap);
-  SkPathBuilder path;
-  path.moveTo(2, 2)
-      .lineTo(2, 23)
-      .lineTo(8, 18)
-      .lineTo(12, 27)
-      .lineTo(16, 25)
-      .lineTo(12, 16)
-      .lineTo(20, 16)
-      .close();
-  const auto arrow = path.detach();
-  SkPaint paint;
-  paint.setAntiAlias(true);
-  paint.setColor(SK_ColorWHITE);
-  canvas.drawPath(arrow, paint);
-  paint.setColor(SK_ColorBLACK);
-  paint.setStyle(SkPaint::kStroke_Style);
-  paint.setStrokeWidth(1.5f);
-  canvas.drawPath(arrow, paint);
-  bitmap.setImmutable();
-  return gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+  return gfx::ImageSkia(std::make_unique<ArrowSource>(), gfx::Size(24, 30));
 }
 }  // namespace
 
@@ -125,13 +136,29 @@ std::string VirtualCursor::SnapshotImage(const gfx::ImageSkia& image,
       hotspot.x() < 0 || hotspot.y() < 0 ||
       hotspot.x() >= replacement.width() || hotspot.y() >= replacement.height())
     return "INVALID_CURSOR_IMAGE_OR_HOTSPOT";
-  const SkBitmap& source = replacement.GetRepresentation(1.f).GetBitmap();
-  SkBitmap snapshot;
-  if (!snapshot.tryAllocPixels(source.info()) ||
-      !source.readPixels(snapshot.pixmap(), 0, 0))
-    return "CURSOR_IMAGE_SNAPSHOT_FAILED";
-  snapshot.setImmutable();
-  *result = gfx::ImageSkia::CreateFrom1xBitmap(snapshot);
+  if (image.isNull()) {
+    // The immutable built-in vector source can rasterize at the current DPI.
+    *result = Arrow();
+    return {};
+  }
+  replacement.GetRepresentation(1.f);
+  gfx::ImageSkia copies;
+  size_t bytes = 0;
+  for (const auto& representation : replacement.image_reps()) {
+    const SkBitmap& source = representation.GetBitmap();
+    bytes += source.computeByteSize();
+    if (source.width() > 4096 || source.height() > 4096 ||
+        bytes > 64 * 1024 * 1024)
+      return "INVALID_CURSOR_IMAGE_OR_HOTSPOT";
+    SkBitmap snapshot;
+    if (!snapshot.tryAllocPixels(source.info()) ||
+        !source.readPixels(snapshot.pixmap(), 0, 0))
+      return "CURSOR_IMAGE_SNAPSHOT_FAILED";
+    snapshot.setImmutable();
+    copies.AddRepresentation(
+        gfx::ImageSkiaRep(snapshot, representation.scale()));
+  }
+  *result = std::move(copies);
   return {};
 }
 
@@ -156,6 +183,7 @@ std::string VirtualCursor::SetImage(const gfx::ImageSkia& image,
 
 void VirtualCursor::SetFrameRate(int fps) {
   fps_ = fps;
+  next_draw_ = base::TimeTicks();
   StopFrame();
   Schedule();
 }
@@ -323,9 +351,11 @@ void VirtualCursor::Schedule() {
   if (!dirty_ || !Visible() || timer_.IsRunning() || observing_)
     return;
   const float refresh = window_->layer()->GetCompositor()->refresh_rate();
-  const double rate = fps_ ? std::min<double>(fps_, refresh) : refresh;
-  const auto wait = last_draw_ + base::Seconds(1.0 / std::max(1.0, rate)) -
-                    base::TimeTicks::Now();
+  // Wake one display frame before the continuous rate deadline. Waiting a
+  // whole period after every actual draw quantizes 30 fps on a 32 Hz display
+  // to roughly 16 fps. The animation callback checks the exact deadline.
+  const auto wait = next_draw_ - base::TimeTicks::Now() -
+                    base::Seconds(1.0 / std::max(1.f, refresh));
   if (wait.is_positive()) {
     timer_.Start(FROM_HERE, wait, this, &VirtualCursor::RequestFrame);
   } else {
@@ -341,24 +371,33 @@ void VirtualCursor::RequestFrame() {
 }
 
 void VirtualCursor::OnAnimationStep(base::TimeTicks timestamp) {
-  StopFrame();
-  if (!Visible() || !sprite_)
+  if (!Visible() || !sprite_ || !dirty_) {
+    StopFrame();
     return;
+  }
+  if (fps_ && !next_draw_.is_null() && timestamp < next_draw_)
+    return;
+  StopFrame();
   if (image_dirty_) {
     sprite_->SetBounds(gfx::Rect(image_.size()));
     sprite_->SchedulePaint(gfx::Rect(image_.size()));
     image_dirty_ = false;
   }
   gfx::Transform transform;
-  transform.Translate(position_.x() - hotspot_.x(),
-                      position_.y() - hotspot_.y());
+  const float scale = std::max(0.01f, sprite_->device_scale_factor());
+  transform.Translate(
+      std::round((position_.x() - hotspot_.x()) * scale) / scale,
+      std::round((position_.y() - hotspot_.y()) * scale) / scale);
   sprite_->SetTransform(transform);
   sprite_->SetOpacity(buttons_ ? 0.65f : 1.f);
   clip_->SetVisible(true);
-  // Use the compositor's frame clock. Callback delivery can occur after the
-  // frame timestamp; using wall time here would miss the next refresh when
-  // the requested rate equals the display rate.
-  last_draw_ = timestamp;
+  const float refresh = window_->layer()->GetCompositor()->refresh_rate();
+  const double rate = fps_ ? std::min<double>(fps_, refresh) : refresh;
+  const auto interval = base::Seconds(1.0 / std::max(1.0, rate));
+  if (next_draw_.is_null() || timestamp >= next_draw_ + interval)
+    next_draw_ = timestamp + interval;
+  else
+    next_draw_ += interval;
   dirty_ = false;
   ++draws_;
 }
@@ -491,7 +530,21 @@ void VirtualCursor::WebContentsDestroyed() {
 }
 
 base::DictValue VirtualCursor::GetState() const {
+  base::ListValue representations;
+  for (const auto& rep : image_.image_reps())
+    representations.Append(base::DictValue()
+                               .Set("scaleFactor", rep.scale())
+                               .Set("pixelWidth", rep.GetBitmap().width())
+                               .Set("pixelHeight", rep.GetBitmap().height()));
+  const auto translation =
+      sprite_ ? sprite_->transform().To2dTranslation() : gfx::Vector2dF();
   return base::DictValue()
+      .Set("imageWidth", image_.width())
+      .Set("imageHeight", image_.height())
+      .Set("imageRepresentations", std::move(representations))
+      .Set("deviceScaleFactor", sprite_ ? sprite_->device_scale_factor() : 0)
+      .Set("visualX", translation.x())
+      .Set("visualY", translation.y())
       .Set("enabled", enabled_)
       .Set("blockRealPointer", block_pointer())
       .Set("blockRealKeyboard", block_keyboard())

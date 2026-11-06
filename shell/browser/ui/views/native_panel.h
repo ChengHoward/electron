@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -20,6 +21,7 @@
 #include "ui/events/event_observer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -65,11 +67,13 @@ struct NativePanelOptions {
 };
 
 class NativePanelSurface;
+class NativePanelBackdrop;
 
 class NativePanelHost final : private views::WidgetObserver,
                               private views::TextfieldController,
                               private ui::EventHandler,
-                              private ui::EventObserver {
+                              private ui::EventObserver,
+                              private views::ContextMenuController {
  public:
   using ActionCallback = base::RepeatingCallback<void(base::DictValue)>;
   using DismissCallback = base::RepeatingCallback<void(const std::string&)>;
@@ -96,6 +100,7 @@ class NativePanelHost final : private views::WidgetObserver,
   void Destroy();
   bool IsValid() const { return native_windows_valid_; }
   base::DictValue GetState() const;
+  base::DictValue Command(const base::DictValue& command);
 
   // Called from the process-wide, non-consuming mouse hook. Posting the check
   // lets the original OS click finish dispatching before JS can change state.
@@ -110,8 +115,20 @@ class NativePanelHost final : private views::WidgetObserver,
                                              Entry* entry);
   void ApplyProperties(const NativePanelNode& node, Entry* entry);
   void ApplyTheme();
+  base::DictValue EffectiveStyle(const Entry& entry) const;
+  void ScheduleInteractionUpdate();
+  void RefreshInteractions();
+  NativePanelNode Materialize(const NativePanelNode& node);
+  void OnListScrolled(const std::string& id);
+  bool Reveal(const std::string& id);
+  bool Navigate(int key, const std::string& list, bool keep_focus);
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
   void UpdateBackgroundMaterial();
   void EnsureShadowWindow();
+  void UpdateBackdropBounds();
   void UpdateInputRegion();
   void RemoveSubtree(views::View* root);
   void LayoutAtAnchor();
@@ -154,6 +171,7 @@ class NativePanelHost final : private views::WidgetObserver,
   std::unique_ptr<views::Widget> widget_;
   std::unique_ptr<views::WidgetDelegate> shadow_delegate_;
   std::unique_ptr<views::Widget> shadow_widget_;
+  std::unique_ptr<NativePanelBackdrop> backdrop_;
   raw_ptr<NativePanelSurface> shadow_surface_ = nullptr;
   raw_ptr<NativePanelSurface> surface_ = nullptr;
   raw_ptr<views::ScrollView> outer_scroll_ = nullptr;
@@ -161,6 +179,14 @@ class NativePanelHost final : private views::WidgetObserver,
   std::map<std::string, std::unique_ptr<Entry>> entries_;
   std::map<std::string, std::unique_ptr<views::View>> detached_;
   std::string reveal_selection_;
+  std::string active_id_;
+  std::string menu_target_;
+  std::map<std::string, int> virtual_offsets_;
+  std::vector<HWND> related_windows_;
+  HWND restore_panel_hwnd_ = nullptr;
+  bool menu_open_ = false;
+  bool interaction_pending_ = false;
+  bool virtual_pending_ = false;
   std::unique_ptr<views::ViewTracker> restore_focus_;
   std::unique_ptr<views::EventMonitor> event_monitor_;
   NativePanelOptions options_;
@@ -175,7 +201,6 @@ class NativePanelHost final : private views::WidgetObserver,
   bool acrylic_applied_ = false;
   bool applying_material_ = false;
   std::string material_fallback_reason_;
-  std::string material_system_configuration_;
   HWND hwnd_ = nullptr;
   bool applying_input_region_ = false;
   using WindowProc = LRESULT(CALLBACK*)(HWND, UINT, WPARAM, LPARAM);

@@ -1,7 +1,11 @@
 # NativePanelAction Object
 
 * `id` string - Stable ID of the native control that produced the action.
-* `type` string - `click`, `change`, or `submit`.
+* `type` string - click, change, submit, or context-menu.
+* `revision` number - Content revision when delivered.
+* `anchor` [Rectangle](rectangle.md) (optional) - Screen-DIP anchor for row, icon, or context actions.
+* `sourceType` string (optional) - mouse or keyboard for a context action.
+* `linkId` string (optional) - Activated entry in the text node's links array.
 * `value` (string | boolean) (optional) - A toggle's new checked state, an option's
   selected value, or an `input` or `textarea` control's current text. Buttons do
   not supply a value.

@@ -78,8 +78,8 @@ bool ParseTheme(v8::Isolate* isolate,
     return false;
   gin::Dictionary dictionary(isolate, value.As<v8::Object>());
   theme->Set("mode", "system");
-  for (const char* key : {"mode", "background", "text", "muted", "accent",
-                          "border", "fontFamily"}) {
+  for (const char* key : {"mode", "background", "materialTint", "text", "muted",
+                          "accent", "border", "fontFamily"}) {
     v8::Local<v8::Value> field;
     if (!HasValue(&dictionary, key, &field))
       continue;
@@ -117,7 +117,7 @@ bool ParseNode(v8::Isolate* isolate,
                NativePanelNode* node,
                std::set<std::string>* ids,
                int depth = 0) {
-  if (depth > 64 || ids->size() >= 10000 || !value->IsObject() ||
+  if (depth > 32 || ids->size() >= 100000 || !value->IsObject() ||
       value->IsArray())
     return false;
   gin::Dictionary dictionary(isolate, value.As<v8::Object>());
@@ -146,10 +146,33 @@ bool ParseNode(v8::Isolate* isolate,
   }
   if (node->type == "textarea") {
     static const base::NoDestructor<std::set<std::string>> fields(
-        std::set<std::string>{"type", "id", "disabled", "visible", "width",
-                              "height", "maxWidth", "flex", "tooltip", "style",
-                              "value", "placeholder", "maxLength",
-                              "submitOnEnter", "scrollbarPlacement"});
+        std::set<std::string>{"type",
+                              "id",
+                              "disabled",
+                              "visible",
+                              "width",
+                              "height",
+                              "maxWidth",
+                              "flex",
+                              "tooltip",
+                              "style",
+                              "value",
+                              "placeholder",
+                              "maxLength",
+                              "submitOnEnter",
+                              "scrollbarPlacement",
+                              "minWidth",
+                              "minHeight",
+                              "maxHeight",
+                              "contextMenu",
+                              "accessibleName",
+                              "accessibleDescription",
+                              "role",
+                              "expanded",
+                              "busy",
+                              "readOnly",
+                              "invalid",
+                              "autoGrow"});
     auto context = isolate->GetCurrentContext();
     v8::Local<v8::Array> names;
     if (!value.As<v8::Object>()->GetOwnPropertyNames(context).ToLocal(&names))
@@ -163,12 +186,15 @@ bool ParseNode(v8::Isolate* isolate,
         return false;
       if (key == "type" || key == "id" || key == "value" ||
           key == "placeholder" || key == "tooltip" ||
-          key == "scrollbarPlacement") {
+          key == "scrollbarPlacement" || key == "accessibleName" ||
+          key == "accessibleDescription" || key == "role") {
         if (!field->IsString() ||
             field.As<v8::String>()->Length() > (key == "id" ? 256 : 65536))
           return false;
       } else if (key == "disabled" || key == "visible" ||
-                 key == "submitOnEnter") {
+                 key == "submitOnEnter" || key == "contextMenu" ||
+                 key == "expanded" || key == "busy" || key == "readOnly" ||
+                 key == "invalid" || key == "autoGrow") {
         if (!field->IsBoolean())
           return false;
       } else if (key != "style") {
@@ -183,6 +209,35 @@ bool ParseNode(v8::Isolate* isolate,
       }
     }
   }
+  // Public JS validates these additional native fields before entering Views.
+  for (const char* key : {"minWidth",
+                          "minHeight",
+                          "maxHeight",
+                          "contextMenu",
+                          "accessibleDescription",
+                          "role",
+                          "expanded",
+                          "busy",
+                          "readOnly",
+                          "password",
+                          "invalid",
+                          "autoGrow",
+                          "navigationTarget",
+                          "selectable",
+                          "maxLines",
+                          "links",
+                          "virtual",
+                          "wrap",
+                          "justify",
+                          "iconSize"}) {
+    v8::Local<v8::Value> field;
+    if (!HasValue(&dictionary, key, &field))
+      continue;
+    base::Value parsed;
+    if (!gin::ConvertFromV8(isolate, field, &parsed))
+      return false;
+    node->properties.Set(key, std::move(parsed));
+  }
   for (const char* key : {"text", "value", "placeholder", "tooltip",
                           "accessibleName", "variant"}) {
     if (std::string_view(key) == "value" && node->type == "progress")
@@ -195,8 +250,9 @@ bool ParseNode(v8::Isolate* isolate,
       return false;
     node->properties.Set(key, text);
   }
-  for (const char* key : {"disabled", "visible", "muted", "checked",
-                          "singleLine", "selected", "submitOnEnter"}) {
+  for (const char* key :
+       {"disabled", "visible", "muted", "checked", "singleLine", "selected",
+        "submitOnEnter", "hoverOnly"}) {
     v8::Local<v8::Value> field;
     if (!HasValue(&dictionary, key, &field))
       continue;
@@ -546,7 +602,20 @@ base::DictValue NativePanel::GetState() const {
       .Set("controls", base::ListValue());
 }
 
+base::DictValue NativePanel::Command(const base::DictValue& command) {
+#if BUILDFLAG(IS_WIN)
+  if (host_ && !destroyed_)
+    return host_->Command(command);
+#endif
+  return base::DictValue().Set("ok", false);
+}
+
 void NativePanel::OnAction(base::DictValue details) {
+  if (const auto* type = details.FindString("type");
+      type && *type == "_close-menu") {
+    EmitWithoutEvent("_close-menu");
+    return;
+  }
   EmitWithoutEvent("action", std::move(details));
 }
 
@@ -585,6 +654,7 @@ void NativePanel::BuildPrototype(v8::Isolate* isolate,
       .SetMethod<&NativePanel::Hide>("hide")
       .SetMethod<&NativePanel::Destroy>("destroy")
       .SetMethod<&NativePanel::IsDestroyed>("isDestroyed")
+      .SetMethod<&NativePanel::Command>("_command")
       .SetMethod<&NativePanel::GetState>("_getState");
 }
 

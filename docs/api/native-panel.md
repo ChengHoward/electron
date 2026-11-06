@@ -48,8 +48,8 @@ scrollbar with a 12 DIP gutter and no arrow buttons. Its gray rounded thumb is
 transparent normally and lightly tinted during interaction. It follows the
 panel's light or dark theme, supports native dragging and scrolling, and
 disappears when all content fits. Its geometry is built in, with no per-panel
-CSS or process-wide scrollbar changes. This scrollbar appearance is an
-unreleased source change and is not included in `45.0.0-cloudbypass.6`.
+CSS or process-wide scrollbar changes. This appearance is included in
+`45.0.0-cloudbypass.11`.
 
 `scrollbarPlacement: 'gutter'` is the default and reserves a separate 12 DIP
 strip beside the viewport while scrolling is needed. `'overlay'` draws over
@@ -60,11 +60,14 @@ allocated bounds or visual border. Text padding does not move the scrollbar
 away from the border; hosts can reserve right padding to keep overlay text clear.
 
 On supported Windows versions, `backgroundMaterial: 'acrylic'` requests a
-system-drawn panel backdrop. The default is `none`. Windows controls the
-material's opacity and may use a solid fallback based on system settings,
-power state, or activation. `theme.background` supplies the fallback color;
-opaque child backgrounds cover the material. This source-preview option does
-not change `Menu` and is not included in `45.0.0-cloudbypass.6`.
+native blurred panel backdrop. The default is `none`. Windows controls backdrop
+availability based on system transparency, contrast and power policy.
+`theme.background` supplies the opaque fallback; `theme.materialTint` controls
+the foreground tint over the blur. The default tint is neutral and follows
+the panel theme. Opaque child backgrounds cover the material. The material
+uses a rounded geometric clip, with the shadow outside that clip in its own
+input-transparent native window. This option is included in
+`45.0.0-cloudbypass.11` and does not change `Menu`.
 
 A `textarea` node provides a native multiline editor with automatic wrapping
 and internal scrolling when its fixed height is exceeded. Enter submits its
@@ -74,8 +77,8 @@ values in the host when a separate Save button uses the draft. The existing `inp
 and submits on Enter. See [NativePanelContent](structures/native-panel-content.md)
 for editor fields and sizing.
 
-The `textarea` control and its `submitOnEnter` option are source-preview
-additions and are not included in the published `45.0.0-cloudbypass.6` package.
+The `textarea` control and its `submitOnEnter` option are included in
+`45.0.0-cloudbypass.11`.
 
 ## Class: NativePanel
 
@@ -107,6 +110,21 @@ Returns `boolean` - Whether this platform and runtime implement native panels.
 The initial supported target is Windows x64; other targets return `false`.
 Use this check instead of inferring support from the Electron version.
 
+#### `NativePanel.getCapabilities()`
+
+Returns [`NativePanelCapabilities`](structures/native-panel-capabilities.md) - Runtime
+features and limits. Does not create a native window.
+
+#### `NativePanel.createElement(type, properties, ...children)`
+
+* `type` string - Native node type.
+* `properties` Record\<string, any\> - Properties including a stable ID.
+* `...children` [NativePanelContent[]](structures/native-panel-content.md) - Container children.
+
+Returns [`NativePanelContent`](structures/native-panel-content.md) - Validated native
+description. Use as a JSX factory or in reusable component functions. This helper
+creates data, without a DOM or a React/Vue runtime.
+
 ### Instance Methods
 
 #### `panel.show(options)`
@@ -126,6 +144,8 @@ Calling this method after destruction or page invalidation throws.
 
 * `patch` [NativePanelUpdateOptions](structures/native-panel-update-options.md)
 
+Returns `boolean` - True when applied; false when a revision guard is stale.
+
 Updates only the supplied fields. Content replaces the control description;
 stable control IDs of the same type retain native focus, unsubmitted input, and
 scroll position. Update existing IDs instead of assigning new IDs on each
@@ -135,6 +155,70 @@ The complete patch is validated before any changes are applied. An invalid
 field throws and leaves the previous content, theme, anchor, and appearance
 unchanged. Content and theme updates do not recreate the whole panel. Calling
 this method after destruction or page invalidation throws.
+
+#### `panel.applyPatch(operations[, options])`
+
+* `operations` [NativePanelNodePatch[]](structures/native-panel-node-patch.md) - Ordered transactions.
+* `options` [NativePanelTransactionOptions](structures/native-panel-transaction-options.md) (optional)
+
+Returns `boolean` - Whether the complete transaction was applied. Validates the
+candidate tree atomically. Stable native controls retain their drafts and state.
+
+#### `panel.focus(id)`
+
+* `id` string - Node to reveal and focus.
+
+Returns `boolean` - Whether native focus reached this node. False for a missing,
+hidden, disabled or nonfocusable node, and for focusMode none.
+
+#### `panel.setActiveItem(id)`
+
+* `id` string | null - Item to reveal and highlight; null clears it.
+
+Returns `boolean` - Whether the active item was set. Retains editor focus and does
+not select or execute the item.
+
+#### `panel.scrollTo(id)`
+
+* `id` string - Node to reveal, including an offscreen virtual row.
+
+Returns `boolean` - Whether an enabled visible node could be revealed.
+
+#### `panel.scrollListTo(id, offset)`
+
+* `id` string - Scrollable list ID.
+* `offset` number - Non-negative vertical position in DIP, clamped to the list range.
+
+Returns `boolean` - Whether the list was found and scrolled.
+
+#### `panel.getBounds([id])`
+
+* `id` string (optional) - Materialized node ID; omit for panel bounds.
+
+Returns `Rectangle | null` - Actual screen-DIP [Rectangle](structures/rectangle.md) bounds.
+An offscreen virtual data node returns null; reading does not reveal it.
+
+#### `panel.getDiagnostics()`
+
+Returns [`NativePanelDiagnostics`](structures/native-panel-diagnostics.md) - Read-only
+native state snapshot. Password values are redacted.
+
+#### `panel.popupMenu(menu[, options])`
+
+* `menu` [Menu](menu.md) - Native menu.
+* `options` [NativePanelMenuOptions](structures/native-panel-menu-options.md) (optional)
+
+Displays a menu associated with this panel. The panel stays open during menu
+interaction. Removing the menu target, hiding or destroying the panel closes
+the menu. Escape closes the menu first. Use this method to coordinate native
+menu lifetime and screen-DIP positioning.
+
+#### `panel.announce(text[, assertive])`
+
+* `text` string - Screen-reader announcement.
+* `assertive` boolean (optional) - Alert priority. Default is false (polite).
+
+Announces through native accessibility. Spoken output requires active assistive technology.
 
 #### `panel.hide()`
 
@@ -148,6 +232,13 @@ request an Agent takeover. Programmatic hiding does not emit `dismissed`.
 Destroys the native window, controls, and listeners. Repeated calls are safe.
 The `closed` event is emitted once. `show()` and `update()` cannot reuse a
 destroyed instance.
+
+### Instance Properties
+
+#### `panel.revision` _Readonly_
+
+A `number` containing the content revision. Initially zero. Successful content
+updates increment it unless a newer explicit revision was supplied.
 
 ### Instance Events
 
@@ -165,6 +256,17 @@ Enter emits `submit` with its current text and Shift+Enter inserts a line break.
 With `submitOnEnter: false`, Enter inserts a line break instead of submitting.
 The application performs the requested operation. Opening, focusing, hovering,
 or dismissing a panel does not implicitly perform a business action.
+
+#### Event: 'context-menu'
+
+Returns:
+
+* `action` [NativePanelAction](structures/native-panel-action.md)
+
+Emitted for right-click, the menu key or Shift+F10. The nearest opted-in node
+handles it; false contextMenu stops ancestor lookup. The same request is also
+an action with type context-menu. Handle one event form to avoid opening two
+menus. Native editors keep their editing menus unless explicitly opted in.
 
 #### Event: 'dismissed'
 
