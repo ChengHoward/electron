@@ -857,3 +857,6 @@ Compact desktop.3 refinement: use native ink clearance at the circular host boun
 
 
 2026-11-07 desktop API refinement (Windows x64): `view.setBorderRadius(radius, { scrollbarInset: pixels })` configures exact integer DIP avoidance, with zero disabling avoidance and omission/null restoring the default automatic compact calculation. No separate method is added. Existing one-argument calls stay compatible. Runtime fallback takes priority. Generated public types, option validation, same-radius relayout, attachment/navigation/resize/transfer and packaged installation must be verified for the final desktop.3 binary. The previous staging bundles were not publicly released and are superseded. See the scrollbar corner-avoidance document and final option-aware release manifest.
+
+
+2026-11-07 publication: [desktop 45.0.0-desktop.3](https://github.com/ChengHoward/edist/releases/tag/v45.0.0-desktop.3), Windows x64 only. WebContentsView-only compact scrollbar corner avoidance and optional `setBorderRadius(radius, { scrollbarInset })` configuration. Source/package runtime 39/39, fallback 3/3, offline Agent 4/4, native-mask 12/12 and public types passed. GitHub public downloads and local mirror were verified; cloudbypass.2 remains unchanged. [Publication receipt](https://github.com/ChengHoward/edist/releases/download/v45.0.0-desktop.3/publication-verification.json).
