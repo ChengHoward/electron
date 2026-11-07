@@ -35,7 +35,7 @@ async function load({horizontal=true,vertical=true,custom=false,nested=false,rtl
   await view.webContents.loadURL('data:text/html,'+encodeURIComponent(html));
   await delay(350);
 }
-async function reset(x=200,y=200) { await read(`scrollTo(${x},${y})`); await delay(100); }
+async function reset(x=200,y=200) { await read(`scrollTo({left:${x},top:${y},behavior:'instant'})`); await delay(350); }
 async function changedAt(name,x,y,axis,direction,arrow=true) {
   await test(name,async()=>{
     await reset();const before=await read(axis==='x'?'scrollX':'scrollY');
