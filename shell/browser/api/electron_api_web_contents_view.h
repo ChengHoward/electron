@@ -45,7 +45,7 @@ class WebContentsView : public View,
   // Public APIs.
   gin_helper::Handle<WebContents> GetWebContents(v8::Isolate* isolate);
   void SetBackgroundColor(std::optional<WrappedSkColor> color);
-  void SetBorderRadius(int radius);
+  void SetBorderRadius(int radius, gin::Arguments* args);
 
   int NonClientHitTest(const gfx::Point& point) override;
 
@@ -81,6 +81,7 @@ class WebContentsView : public View,
   base::WeakPtr<api::WebContents> api_web_contents_;
   base::WeakPtr<NativeWindow> observed_window_;
   bool window_controls_overlay_update_pending_ = false;
+  std::optional<int> scrollbar_corner_inset_;
 
   base::WeakPtrFactory<WebContentsView> weak_factory_{this};
 };

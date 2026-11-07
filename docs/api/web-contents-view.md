@@ -58,6 +58,30 @@ Process: [Main](../glossary.md#main-process)
 
 Creates a WebContentsView.
 
+### Instance Methods
+
+Methods inherited from [View](view.md) are available, with this desktop extension:
+
+#### `view.setBorderRadius(radius[, options])`
+
+* `radius` Integer - Host corner radius in DIP, clamped to the view size.
+* `options` Object (optional)
+  * `scrollbarInset` Integer | null (optional) - Exact scrollbar clearance at both ends in DIP. Accepts integers from 0 to 1000000; available frame length limits the result. Zero disables avoidance. Omit this property or use `null` for automatic compact clearance.
+
+Updates the rounded host mask and the main document's default scrollbar geometry.
+Existing calls with only `radius` remain supported and select automatic clearance.
+Each call replaces the previous options. This option is effective only in Windows
+**desktop** builds while corner avoidance is enabled; the runtime disable switch
+also overrides explicit insets. Manual values replace the automatic ink clearance;
+the host rounded mask still applies. The native scrollbar style is unchanged.
+
+```js
+view.setBorderRadius(12) // automatic compact clearance
+view.setBorderRadius(12, { scrollbarInset: 6 }) // explicit DIP clearance
+view.setBorderRadius(12, { scrollbarInset: 0 }) // disable avoidance
+view.setBorderRadius(12, { scrollbarInset: null }) // automatic again
+```
+
 ### Instance Properties
 
 Objects created with `new WebContentsView` have the following properties, in

@@ -1,14 +1,16 @@
 {
   "compilerOptions": {
-      "module": "commonjs",
-      "lib": [
-          "es6",
-          "dom"
-      ],
-      "typeRoots" : ["../../node_modules/@types"],
-      "strict": true,
-      "noEmit": true,
-      "forceConsistentCasingInFileNames": true
+    "module": "commonjs",
+    "lib": [
+      "es6",
+      "dom"
+    ],
+    "typeRoots": [
+      "../../node_modules/@types"
+    ],
+    "strict": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true
   },
   "files": [
     "electron/main.ts",
@@ -16,6 +18,7 @@
     "electron/native-panel.ts",
     "electron/renderer.ts",
     "electron/utility.ts",
+    "electron/web-contents-view-corners.ts",
     "../../electron.d.ts"
   ]
 }

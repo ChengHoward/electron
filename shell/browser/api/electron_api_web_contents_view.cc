@@ -83,7 +83,30 @@ void WebContentsView::SetBackgroundColor(std::optional<WrappedSkColor> color) {
   }
 }
 
-void WebContentsView::SetBorderRadius(int radius) {
+void WebContentsView::SetBorderRadius(int radius, gin::Arguments* args) {
+  std::optional<int> scrollbar_inset;
+  v8::Local<v8::Value> options_value;
+  if (args->GetNext(&options_value) && !options_value->IsUndefined()) {
+    gin_helper::Dictionary options;
+    if (!gin::ConvertFromV8(args->isolate(), options_value, &options)) {
+      args->ThrowTypeError("options must be an object");
+      return;
+    }
+    v8::Local<v8::Value> inset_value;
+    if (options.Get("scrollbarInset", &inset_value) &&
+        !inset_value->IsNullOrUndefined()) {
+      if (!inset_value->IsInt32() ||
+          inset_value.As<v8::Int32>()->Value() < 0 ||
+          inset_value.As<v8::Int32>()->Value() > 1000000) {
+        args->ThrowTypeError(
+            "options.scrollbarInset must be an integer from 0 to 1000000, "
+            "or null for automatic clearance");
+        return;
+      }
+      scrollbar_inset = inset_value.As<v8::Int32>()->Value();
+    }
+  }
+  scrollbar_corner_inset_ = scrollbar_inset;
   View::SetBorderRadius(radius);
   ApplyBorderRadius();
 }
@@ -104,8 +127,11 @@ void WebContentsView::ApplyBorderRadius() {
     view->SetCornerRadii(gfx::RoundedCornersF(radius));
     auto* contents = api_web_contents_->web_contents();
     auto* preferences = contents->GetMutableRendererPrefs();
-    if (preferences->desktop_scrollbar_corner_radius != radius) {
+    const int scrollbar_inset = scrollbar_corner_inset_.value_or(-1);
+    if (preferences->desktop_scrollbar_corner_radius != radius ||
+        preferences->desktop_scrollbar_corner_inset != scrollbar_inset) {
       preferences->desktop_scrollbar_corner_radius = radius;
+      preferences->desktop_scrollbar_corner_inset = scrollbar_inset;
       contents->SyncRendererPrefs();
     }
   }

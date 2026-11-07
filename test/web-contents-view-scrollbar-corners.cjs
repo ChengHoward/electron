@@ -31,7 +31,7 @@ async function load({horizontal=true,vertical=true,custom=false,nested=false,rtl
     body{margin:0;width:${horizontal?1800:400}px;height:${vertical?1800:200}px}
     ${custom?'::-webkit-scrollbar{width:24px;height:24px}::-webkit-scrollbar-track{background:#ffff00}::-webkit-scrollbar-thumb{background:#0000ff}':''}
     #nested{width:220px;height:180px;overflow:scroll;background:white}#inside{width:600px;height:700px}
-    </style>${nested?'<div id="nested"><div id="inside"></div></div>':''}`;
+    </style><div style="position:fixed;left:80px;top:220px;max-width:380px;pointer-events:none;font:12px sans-serif;color:white">${app.commandLine.hasSwitch('disable-desktop-scrollbar-corner-avoidance')?'Runtime fallback test / no avoidance expected':'Corner avoidance / interaction tests'}</div>${nested?'<div id="nested"><div id="inside"></div></div>':''}`;
   await view.webContents.loadURL('data:text/html,'+encodeURIComponent(html));
   await delay(350);
 }
@@ -74,6 +74,8 @@ app.whenReady().then(async()=>{
       await reset();const before=await read('scrollY');await click(595,57);
       assert(before-await read('scrollY')>60);
     });
+    view.setBorderRadius(12,{scrollbarInset:32});await delay(250);
+    await changedAt('disable switch overrides explicit scrollbar inset',595,9,'y',-1);
     await capture('avoidance-disabled');finish();return;
   }
   async function compactChecks() {
@@ -88,6 +90,46 @@ app.whenReady().then(async()=>{
     view.setBorderRadius(16); await delay(200);
     await changedAt('16 DIP radius protects arrow without full radius gap',595,11,'y',-1);
   }
+  async function optionChecks() {
+    view.setBorderRadius(12,{scrollbarInset:32});await load({horizontal:false});
+    await changedAt('manual 32 DIP inset moves top arrow',595,41,'y',-1);
+    await changedAt('manual 32 DIP inset moves bottom arrow',595,439,'y',1);
+    view.setBorderRadius(12,{scrollbarInset:4});await delay(250);
+    await changedAt('same-radius option update relayouts scrollbar',595,9,'y',-1);
+    view.setBorderRadius(12,{scrollbarInset:32});view.setBorderRadius(12,{scrollbarInset:null});await delay(250);
+    await changedAt('null inset restores automatic compact clearance',595,9,'y',-1);
+    view.setBorderRadius(12,{scrollbarInset:32});view.setBorderRadius(12);await delay(250);
+    await changedAt('omitted options restore automatic clearance',595,9,'y',-1);
+    view.setBorderRadius(12,{scrollbarInset:32});await load({vertical:false});
+    await changedAt('manual inset moves horizontal back arrow',41,475,'x',-1);
+    await changedAt('manual inset moves horizontal forward arrow',559,475,'x',1);
+    await load();
+    await changedAt('manual inset accounts for shared scrollbar corner',595,439,'y',1);
+    view.setBorderRadius(0,{scrollbarInset:32});await load({horizontal:false});
+    await changedAt('explicit inset also applies with zero host radius',595,41,'y',-1);
+    view.setBorderRadius(0,{scrollbarInset:0});await delay(250);
+    await changedAt('zero inset restores original arrow position',595,9,'y',-1);
+    view.setBorderRadius(12,{scrollbarInset:32});view.setBounds({x:40,y:40,width:520,height:400});await delay(250);
+    await changedAt('manual inset survives resize',515,41,'y',-1);
+    view.setBounds({x:40,y:40,width:600,height:480});
+    await test('invalid inset options throw without changing live geometry',async()=>{
+      for(const value of [-1,1.5,NaN,Infinity,1000001,'6',true,{}])assert.throws(()=>view.setBorderRadius(99,{scrollbarInset:value}),TypeError);
+      assert.throws(()=>view.setBorderRadius(99,'6'),TypeError);
+      await reset();const before=await read('scrollY');await click(595,41);const after=await read('scrollY');assert(after<before&&before-after<=60);
+    });
+    await test('manual inset survives cross-window transfer',async()=>{
+      const other=new BaseWindow({width:680,height:560,frame:false});
+      try{other.contentView.addChildView(view);other.show();other.focus();await delay(250);await reset();const before=await read('scrollY');await click(595,41);const after=await read('scrollY');assert(after<before&&before-after<=60);}
+      finally{win.contentView.addChildView(view);win.focus();other.destroy();}
+    });
+    await test('inset configured before attachment survives navigation',async()=>{
+      const saved=view;const extra=new WebContentsView();
+      try{extra.setBorderRadius(12,{scrollbarInset:32});extra.setBounds({x:40,y:40,width:600,height:480});win.contentView.addChildView(extra);view=extra;await load({horizontal:false});await reset();const before=await read('scrollY');await click(595,41);const after=await read('scrollY');assert(after<before&&before-after<=60);}
+      finally{view=saved;win.contentView.removeChildView(extra);extra.webContents.close();}
+    });
+    view.setBorderRadius(48);
+  }
+  if(process.env.SCROLLBAR_CORNERS_OPTIONS_ONLY==='1') {await optionChecks();finish();return;}
   if (process.env.SCROLLBAR_CORNERS_COMPACT_ONLY === '1') {
     await compactChecks(); finish(); return;
   }
@@ -145,12 +187,19 @@ app.whenReady().then(async()=>{
       frame.srcdoc='<body style="margin:0;height:900px;background:white">';
       document.body.appendChild(frame);
     })`);
+    // load fires before the embedded surface/hit-test data is necessarily
+    // submitted. Wait for child frames and a compositor copy before input.
+    await read('new Promise(resolve=>{const child=document.querySelector("#child").contentWindow;child.requestAnimationFrame(()=>child.requestAnimationFrame(resolve))})');
+    await view.webContents.capturePage();
     await delay(200);await click(333,89);
     const after=await read('document.querySelector("#child").contentWindow.scrollY');
     assert(after<200&&after>=140,`iframe arrow scroll: ${after}`);
   });
   await compactChecks();
+  await optionChecks();
   await load();view.setBorderRadius(999999);view.setBounds({x:40,y:40,width:40,height:40});await delay(200);
   await test('tiny view with excessive radius remains responsive',async()=>assert.equal(await read('1+1'),2));
+  view.setBorderRadius(20,{scrollbarInset:1000000});await delay(200);
+  await test('maximum manual inset on tiny view remains responsive',async()=>assert.equal(await read('1+1'),2));
   finish();
 }).catch(error=>{console.error(error);app.exit(1)});

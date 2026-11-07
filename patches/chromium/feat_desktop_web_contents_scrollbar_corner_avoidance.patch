@@ -10,15 +10,18 @@ when the host radius changes. This is a desktop-edition enhancement.
 diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 --- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 +++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
-@@ -78,6 +78,13 @@
+@@ -78,6 +78,16 @@
      return false;
  
    out->hide_chrome = data.hide_chrome();
 +  out->desktop_scrollbar_corner_avoidance =
 +      data.desktop_scrollbar_corner_avoidance();
 +  out->desktop_scrollbar_corner_radius = data.desktop_scrollbar_corner_radius();
++  out->desktop_scrollbar_corner_inset = data.desktop_scrollbar_corner_inset();
 +  if (out->desktop_scrollbar_corner_radius < 0 ||
-+      out->desktop_scrollbar_corner_radius > 1000000) {
++      out->desktop_scrollbar_corner_radius > 1000000 ||
++      out->desktop_scrollbar_corner_inset < -1 ||
++      out->desktop_scrollbar_corner_inset > 1000000) {
 +    return false;
 +  }
  
@@ -27,20 +30,22 @@ diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
-@@ -70,6 +70,9 @@
+@@ -70,6 +70,11 @@
    std::string navigator_platform_override;
    // When true, webpage script contexts must not expose window.chrome.
    bool hide_chrome{false};
 +  // Host desktop edition UI. Off for Chromium and foundation-only builds.
 +  bool desktop_scrollbar_corner_avoidance{false};
 +  int32_t desktop_scrollbar_corner_radius{0};
++  // -1 selects automatic clearance; nonnegative values are explicit DIP.
++  int32_t desktop_scrollbar_corner_inset{-1};
    std::string accept_languages;
    bool send_subresource_notification{false};
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
-@@ -178,6 +178,16 @@
+@@ -178,6 +178,21 @@
      return data.navigator_platform_override;
    }
  
@@ -54,31 +59,39 @@ diff --git a/third_party/blink/public/common/renderer_preferences/renderer_prefe
 +    return data.desktop_scrollbar_corner_radius;
 +  }
 +
++  static int32_t desktop_scrollbar_corner_inset(
++      const ::blink::RendererPreferences& data) {
++    return data.desktop_scrollbar_corner_inset;
++  }
++
    static bool hide_chrome(const ::blink::RendererPreferences& data) {
      return data.hide_chrome;
    }
 diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
 --- a/third_party/blink/public/mojom/renderer_preferences.mojom
 +++ b/third_party/blink/public/mojom/renderer_preferences.mojom
-@@ -129,6 +129,8 @@
+@@ -129,6 +129,9 @@
    // When true, webpage script contexts must not expose window.chrome
    // (Electron setUserAgent hideChrome option).
    bool hide_chrome = false;
 +  bool desktop_scrollbar_corner_avoidance = false;
 +  int32 desktop_scrollbar_corner_radius = 0;
++  int32 desktop_scrollbar_corner_inset = -1;
  
    // The accept-languages of the browser, comma-separated.
    string accept_languages;
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
 --- a/third_party/blink/renderer/core/exported/web_view_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
-@@ -3818,11 +3818,18 @@
+@@ -3818,11 +3818,20 @@
  
  void WebViewImpl::UpdateRendererPreferences(
      const RendererPreferences& preferences) {
 +  const bool scrollbar_geometry_changed =
 +      renderer_preferences_.desktop_scrollbar_corner_radius !=
-+      preferences.desktop_scrollbar_corner_radius;
++          preferences.desktop_scrollbar_corner_radius ||
++      renderer_preferences_.desktop_scrollbar_corner_inset !=
++          preferences.desktop_scrollbar_corner_inset;
    std::string old_accept_languages = renderer_preferences_.accept_languages;
    renderer_preferences_ = preferences;
  
@@ -107,7 +120,7 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
  #include "base/task/single_thread_task_runner.h"
  #include "cc/animation/animation_timeline.h"
  #include "cc/base/features.h"
-@@ -1512,6 +1514,69 @@
+@@ -1512,6 +1514,73 @@
    UpdateScrollableAreaSet();
  }
  
@@ -126,6 +139,10 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
 +  const auto& prefs = frame->GetPage()->GetRendererPreferences();
 +  if (!prefs.desktop_scrollbar_corner_avoidance) {
 +    return 0;
++  }
++  if (prefs.desktop_scrollbar_corner_inset >= 0) {
++    return base::ClampCeil(prefs.desktop_scrollbar_corner_inset *
++                           scrollbar.ScaleFromDIP());
 +  }
 +  // Layout scrollbar coordinates include device scale, not CSS page zoom.
 +  const int radius = base::ClampCeil(
@@ -177,7 +194,7 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
  gfx::Rect PaintLayerScrollableArea::RectForHorizontalScrollbar() const {
    if (!HasHorizontalScrollbar())
      return gfx::Rect();
-@@ -1527,12 +1592,17 @@
+@@ -1527,12 +1596,17 @@
                  : ResizerCornerRect(kResizerForPointer).width();
    }
  
@@ -201,7 +218,7 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
  }
  
  gfx::Rect PaintLayerScrollableArea::RectForVerticalScrollbar() const {
-@@ -1549,10 +1619,14 @@
+@@ -1549,10 +1623,14 @@
            : (border_box_size.width() - border.right.ToInt() -
               VerticalScrollbar()->ScrollbarThickness());
  
