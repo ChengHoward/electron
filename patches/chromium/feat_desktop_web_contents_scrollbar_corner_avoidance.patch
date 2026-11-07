@@ -94,7 +94,12 @@ diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_p
 diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
 --- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
 +++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
-@@ -48,6 +48,7 @@
+@@ -44,10 +44,12 @@
+ 
+ #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+ 
++#include <cmath>
+ #include <optional>
  #include <utility>
  
  #include "base/numerics/checked_math.h"
@@ -102,7 +107,7 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
  #include "base/task/single_thread_task_runner.h"
  #include "cc/animation/animation_timeline.h"
  #include "cc/base/features.h"
-@@ -1512,6 +1513,48 @@
+@@ -1512,6 +1514,69 @@
    UpdateScrollableAreaSet();
  }
  
@@ -111,7 +116,8 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
 +// dragging and hit testing then share one source of truth. Author scrollbars,
 +// subframes and nested overflow boxes are intentionally left alone.
 +int DesktopScrollbarCornerInset(const LayoutBox& box,
-+                                const Scrollbar& scrollbar) {
++                                const Scrollbar& scrollbar,
++                                int thickness) {
 +  const auto* frame = box.GetFrame();
 +  if (!box.IsLayoutView() || !frame || !frame->IsMainFrame() ||
 +      !frame->GetPage() || scrollbar.IsCustomScrollbar()) {
@@ -122,8 +128,28 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
 +    return 0;
 +  }
 +  // Layout scrollbar coordinates include device scale, not CSS page zoom.
-+  return base::ClampCeil(prefs.desktop_scrollbar_corner_radius *
-+                         scrollbar.ScaleFromDIP());
++  const int radius = base::ClampCeil(
++      prefs.desktop_scrollbar_corner_radius * scrollbar.ScaleFromDIP());
++  if (radius <= 0 || !scrollbar.GetTheme().UsesFluentScrollbars()) {
++    return radius;
++  }
++  // Protect the expanded native thumb and arrow ink, not the rectangular
++  // track background (which follows the host's rounded mask). Fluent arrows
++  // fit inside the thumb's cross-axis envelope; reserve one DIP for glyph
++  // rounding, fallback arrows and anti-aliasing. Solve the circular boundary
++  // at that edge clearance instead of leaving a full-radius gap.
++  const gfx::Rect thumb = scrollbar.GetTheme().ThumbRect(scrollbar);
++  const int painted_thickness = scrollbar.Orientation() == kVerticalScrollbar
++                                    ? thumb.width()
++                                    : thumb.height();
++  if (painted_thickness <= 0 || painted_thickness >= thickness) {
++    return radius;
++  }
++  const double clearance = std::clamp(
++      (thickness - painted_thickness) / 2.0 - scrollbar.ScaleFromDIP(),
++      0.0, static_cast<double>(radius));
++  return base::ClampCeil(
++      radius - std::sqrt(clearance * (2.0 * radius - clearance)));
 +}
 +
 +gfx::Rect AvoidDesktopScrollbarCorners(gfx::Rect rect,
@@ -151,7 +177,7 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
  gfx::Rect PaintLayerScrollableArea::RectForHorizontalScrollbar() const {
    if (!HasHorizontalScrollbar())
      return gfx::Rect();
-@@ -1527,12 +1570,16 @@
+@@ -1527,12 +1592,17 @@
                  : ResizerCornerRect(kResizerForPointer).width();
    }
  
@@ -169,12 +195,13 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
 +                 HorizontalScrollbar()->ScrollbarThickness());
 +  return AvoidDesktopScrollbarCorners(
 +      rect,
-+      DesktopScrollbarCornerInset(*GetLayoutBox(), *HorizontalScrollbar()),
++      DesktopScrollbarCornerInset(*GetLayoutBox(), *HorizontalScrollbar(),
++                                  rect.height()),
 +      scroll_corner.width(), false);
  }
  
  gfx::Rect PaintLayerScrollableArea::RectForVerticalScrollbar() const {
-@@ -1549,10 +1596,13 @@
+@@ -1549,10 +1619,14 @@
            : (border_box_size.width() - border.right.ToInt() -
               VerticalScrollbar()->ScrollbarThickness());
  
@@ -187,7 +214,8 @@ diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.c
 +                 border_box_size.height() - border.VerticalSum().ToInt() -
 +                     scroll_corner.height());
 +  return AvoidDesktopScrollbarCorners(
-+      rect, DesktopScrollbarCornerInset(*GetLayoutBox(), *VerticalScrollbar()),
++      rect, DesktopScrollbarCornerInset(*GetLayoutBox(), *VerticalScrollbar(),
++                                       rect.width()),
 +      scroll_corner.height(), true);
  }
  

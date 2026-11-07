@@ -3,8 +3,10 @@
 > A View that displays a WebContents.
 
 In this fork's Windows desktop builds, `view.setBorderRadius(radius)` also
-insets the main document's default scrollbars so their arrows and track avoid
-the rounded corners. The native scrollbar appearance is unchanged. Setting
+insets the main document's default scrollbars using compact curve-aware
+clearance so their native arrows and thumb remain inside the rounded host
+mask. Track/button backgrounds follow that mask. Native appearance is
+unchanged. Setting
 the radius to zero restores the original scrollbar layout. Author-styled
 scrollbars, nested overflow elements and iframe scrollbars retain their layout.
 This addition can be disabled before app ready with

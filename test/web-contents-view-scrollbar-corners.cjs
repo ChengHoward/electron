@@ -76,14 +76,29 @@ app.whenReady().then(async()=>{
     });
     await capture('avoidance-disabled');finish();return;
   }
+  async function compactChecks() {
+    view.setBorderRadius(12); await load({horizontal:false});
+    await changedAt('12 DIP radius keeps top arrow close to edge',595,9,'y',-1);
+    await changedAt('12 DIP radius keeps bottom arrow close to edge',595,471,'y',1);
+    await load({vertical:false});
+    await changedAt('12 DIP radius keeps left arrow close to edge',9,475,'x',-1);
+    await changedAt('12 DIP radius keeps right arrow close to edge',591,475,'x',1);
+    view.setBorderRadius(8); await load({horizontal:false});
+    await changedAt('8 DIP radius retains compact top arrow',595,9,'y',-1);
+    view.setBorderRadius(16); await delay(200);
+    await changedAt('16 DIP radius protects arrow without full radius gap',595,11,'y',-1);
+  }
+  if (process.env.SCROLLBAR_CORNERS_COMPACT_ONLY === '1') {
+    await compactChecks(); finish(); return;
+  }
   await load();await capture('radius48-top');
   await test('initial native scrollbar width retained',async()=>{
     const gap=await read('innerWidth-document.documentElement.clientWidth');assert(gap>0&&gap<20,`width ${gap}`);
   });
-  await changedAt('vertical back arrow moved below upper corner',595,57,'y',-1);
-  await changedAt('vertical forward arrow moved above lower corner',595,423,'y',1);
-  await changedAt('horizontal back arrow moved past left corner',57,475,'x',-1);
-  await changedAt('horizontal forward arrow moved before right corner',543,475,'x',1);
+  await changedAt('vertical back arrow moved below upper corner',595,44,'y',-1);
+  await changedAt('vertical forward arrow moved above lower corner',595,436,'y',1);
+  await changedAt('horizontal back arrow moved past left corner',44,475,'x',-1);
+  await changedAt('horizontal forward arrow moved before right corner',556,475,'x',1);
   await test('old top arrow area is no longer interactive',async()=>{
     await reset();const before=await read('scrollY');await click(595,9);assert.equal(await read('scrollY'),before);
   });
@@ -96,15 +111,15 @@ app.whenReady().then(async()=>{
   });
   await read('scrollTo(1800,1800)');await capture('radius48-bottom');
   view.setBorderRadius(24);await delay(200);
-  await changedAt('radius updates relayout native arrow',595,33,'y',-1);
+  await changedAt('radius updates relayout native arrow',595,24,'y',-1);
   view.setBorderRadius(0);await delay(200);
   await changedAt('zero radius restores original arrow',595,9,'y',-1);
   view.setBorderRadius(48);await load({vertical:false});
-  await changedAt('horizontal-only forward arrow avoids right corner',543,475,'x',1);
+  await changedAt('horizontal-only forward arrow avoids right corner',556,475,'x',1);
   await load({horizontal:false});
-  await changedAt('vertical-only forward arrow avoids bottom corner',595,423,'y',1);
+  await changedAt('vertical-only forward arrow avoids bottom corner',595,436,'y',1);
   view.webContents.setZoomFactor(1.25);await delay(200);await capture('zoom125');
-  await changedAt('page zoom preserves physical arrow clearance',595,57,'y',-1);
+  await changedAt('page zoom preserves physical arrow clearance',595,44,'y',-1);
   view.webContents.setZoomFactor(1);await load({custom:true});
   await changedAt('author custom scrollbar retains original top track',588,25,'y',-1,false);
   await capture('author-scrollbar-unchanged');
@@ -114,12 +129,12 @@ app.whenReady().then(async()=>{
     assert(await read('document.querySelector("#nested").scrollTop')<200);
   });
   await load();view.setBounds({x:40,y:40,width:520,height:400});await delay(200);
-  await changedAt('resize updates arrow geometry',515,57,'y',-1);
+  await changedAt('resize updates arrow geometry',515,44,'y',-1);
   view.setBounds({x:40,y:40,width:600,height:480});
   await test('cross-window transfer retains avoidance',async()=>{
     const other=new BaseWindow({width:680,height:560,frame:false,backgroundColor:'#ff00ff',alwaysOnTop:true});
     other.contentView.addChildView(view);other.show();other.focus();await delay(250);
-    await reset();const before=await read('scrollY');await click(595,57);
+    await reset();const before=await read('scrollY');await click(595,44);
     assert(await read('scrollY')<before);win.contentView.addChildView(view);win.focus();other.destroy();
   });
   await test('iframe scrollbar retains its original arrow position',async()=>{
@@ -134,6 +149,7 @@ app.whenReady().then(async()=>{
     const after=await read('document.querySelector("#child").contentWindow.scrollY');
     assert(after<200&&after>=140,`iframe arrow scroll: ${after}`);
   });
+  await compactChecks();
   await load();view.setBorderRadius(999999);view.setBounds({x:40,y:40,width:40,height:40});await delay(200);
   await test('tiny view with excessive radius remains responsive',async()=>assert.equal(await read('1+1'),2));
   finish();

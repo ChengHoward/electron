@@ -1,36 +1,41 @@
 # WebContentsView scrollbar corner avoidance
 
-Date: 2026-11-07. Edition: **desktop**. Release target: **45.0.0-desktop.3**. Windows x64 runtime validation passed; installation/publication state is recorded in the matching release manifest. Published desktop.2 and cloudbypass.2 are unchanged.
+Date: 2026-11-07. Edition: **desktop**. Release target: **45.0.0-desktop.3**, Windows x64 only. The compact-clearance runtime is rebuilt and validated; package installation/publication state belongs to the matching release manifest. cloudbypass.2 and desktop.2 remain unchanged.
 
-## Scope
+## Required behavior
 
-- Windows x64 desktop builds only. `enable_desktop_customizations = false` disables the new default in a foundation build. `--disable-desktop-scrollbar-corner-avoidance` restores the original scrollbar layout at runtime.
-- Reuse upstream Fluent scrollbar appearance: width/height, rounded thumbs, arrows, colors, transparency and hover behavior are unchanged.
-- `WebContentsView.setBorderRadius(radius)` supplies a nonnegative, view-size-clamped host radius to the renderer. Default main-document scrollbar frames are shortened at both ends, including horizontal bars and the shared corner allowance.
-- The scrollbar frame controls rendering, arrow and track hit testing, thumb dragging and compositor geometry. The implementation must not merely shift the painted arrow icon.
-- Do not change author `::-webkit-scrollbar` controls, nested overflow boxes, iframe scrollbars, web page styles, or non-Windows UI defaults. CSS scrollbar colors and widths retain the upstream behavior.
-- Resetting the radius to zero restores the original frame geometry. Radius changes, view resizing, zoom, navigation and transfer between host windows need runtime regression coverage.
-- Tiny viewports may have too little length for buttons or a thumb; retain Chromium's small-scrollbar behavior rather than creating negative rectangles.
+Keep the upstream Fluent scrollbar appearance, width/height, rounded thumb, arrows, colors, transparency and hover behavior. Small host radii such as 8, 12 and 16 DIP should keep the arrow and thumb complete with a compact gap resembling the native scrollbar next to a rounded container.
 
-## Source and evidence
+`WebContentsView.setBorderRadius(radius)` supplies a nonnegative radius clamped to half the view size. Host-owned renderer preferences update the main document's default scrollbar frame. Rendering, button/track hit testing, dragging and compositor geometry share that frame. No page CSS or JavaScript is injected.
 
-Electron: `shell/browser/api/electron_api_web_contents_view.*`, `electron_api_web_contents.cc`, and desktop build flags. Chromium: renderer preferences serialization, `WebViewImpl` relayout notification, and `PaintLayerScrollableArea` scrollbar frame geometry. A focused Chromium patch must be registered in `.patches`.
+The compact refinement solves the host circular boundary at the expanded native thumb's outer edge, reserving one DIP for arrow glyph rounding, fallback glyphs and anti-aliasing. This shortens the frame only by the clearance needed for the native ink rather than by the entire corner radius. The track/button background continues to follow the host rounded mask; background clipping at the arc is expected. Other native themes conservatively retain full-radius clearance.
 
-Local build and runtime evidence is collected under `D:/electron/edist-publish/desktop-scrollbars`. The old desktop.2 screenshots prove only the pre-change clipping behavior. They are not acceptance evidence for this feature.
+Both orientations, a single scrollbar and the shared scrollbar corner are supported. Author `::-webkit-scrollbar` styles, nested overflow boxes and iframe scrollbars keep their original geometry. CSS scrollbar widths and colors retain upstream behavior. Radius zero restores the original geometry. Tiny viewports retain Chromium's existing behavior when there is too little space for buttons or a thumb.
 
+## Edition and fallback
 
-## Local validation (2026-11-07)
+This is desktop UI customization. `enable_desktop_customizations = false` disables the new default in a foundation build. That build argument gates this addition; it does not isolate all historical desktop patches. Windows desktop enables it by default. Before app ready, `app.commandLine.appendSwitch('disable-desktop-scrollbar-corner-avoidance')` restores the original scrollbar layout.
 
-- New preview: **18/18** corner-avoidance checks passed. The unchanged desktop.2 baseline passes 8/18 and fails the 10 checks that require the new avoidance behavior.
-- Runtime disable switch: **2/2** fallback checks passed. Existing offline Agent style/render-process-exit regression: **4/4** passed.
-- Coverage includes both scrollbar orientations, a single scrollbar, arrow-sized scroll steps, unused corner hit areas, thumb dragging, live radius changes, radius zero, view resizing, 125% page zoom, cross-window transfer, author scrollbars, nested overflow, iframe exclusion and a tiny view with an excessive radius.
-- Environment: Windows x64, system scale 175%. Screenshots are OS window captures. Other DPI values, mixed-DPI multi-monitor movement, hardware input devices and other operating systems were not validated by this run.
-- Executable SHA-256: `2a7142cd5136e257676832f9c4cc08f756b8aaa8c10ca02d804b6e6cbb252b1a`. Full report: `D:/electron/edist-publish/desktop-scrollbars/verification.json`; individual results and screenshots are in `runtime/`, `disabled/` and `baseline/` below that directory.
-- This accepted executable is used for desktop.3. desktop.2 and cloudbypass.2 remain unchanged. The separate desktop.3 release manifest records archive/npm checksums, isolated installation, packaged-runtime validation and publication verification.
+## Source and patch
 
+Electron: `shell/browser/api/electron_api_web_contents_view.*`, `electron_api_web_contents.cc`, and desktop build flags. Chromium: renderer preferences serialization, `WebViewImpl` relayout notification, and `PaintLayerScrollableArea` scrollbar geometry. The focused Chromium patch is `patches/chromium/feat_desktop_web_contents_scrollbar_corner_avoidance.patch`, registered in `.patches`.
 
-## Packaged installation validation
+Every new customization and refinement must be classified and recorded in the feature guide, short log, detailed log and development guide as applicable. Keep `main/docs` and `src/electron/docs/zh` synchronized. The edition/developer requirements at the top of `定制开发编译与更新.md` are mandatory reading for new customization developers.
 
-The desktop.3 package was installed from an isolated mirror. Executable, archive, npm integrity and public-type hashes matched; packaged-runtime input checks passed 18/18 and the public TypeScript smoke check passed. During release validation, Windows native occlusion classified the test page as hidden even though its host window was visible and focused. This affected the source executable too. The initial package run passed 3/18 (input was ignored). The successful release input checks used the test-only launch argument `--disable-features=CalculateNativeWinOcclusion`; product defaults and executable bytes were unchanged. Reports include the first failed attempt and the launch conditions. Desktop screenshots captured while the window was occluded are excluded from published assets; this release rerun does not claim a new visual screenshot acceptance.
+## Validation and evidence
 
-Final input checks use instant scroll resets and 350ms settling to avoid sampling an in-flight native scroll animation. Both source and installed executables passed 18/18 with these conditions. The source reset-timing attempt (17/18) is retained in release diagnostics. Renderer-only comparison images (`renderer-scrollbar-avoidance-on.png` and `renderer-scrollbar-avoidance-off.png`) show the real scrollbar frame shortening with a 48-DIP host radius; these are not OS captures and do not by themselves verify host-window clipping.
+Evidence root: `D:/electron/edist-publish/desktop-scrollbars`. Matching executable/archive/npm hashes, final reports, installation checks and publication status belong to the desktop.3 release manifest.
+
+- The earlier full-radius preview passed 18/18 interaction checks, 2/2 disable checks and 4/4 existing offline Agent regressions. It was not publicly released. The user requested tighter small-radius geometry before publication; the previous staging bundle is marked superseded and cannot be published.
+- Before the compact refinement, the six new small-radius interaction checks passed 1/6. This confirms that the old preview leaves too much space for the requested compact arrow positions.
+- Native Windows occlusion classified a visible/focused test window as hidden during release testing. Both source and packaged runtimes were affected. Test launchers disable `CalculateNativeWinOcclusion`; product defaults are unchanged. Initial diagnostic failures are retained separately.
+- Test scroll resets are instant and allow 350ms settling. A prior 100ms reset sampled an in-flight native scroll animation; its 17/18 result is retained in diagnostics.
+- Native-window screenshots are accepted only after verifying the fixture's magenta surrounding margin. Captures use HWND client coordinates and physical DPI. Pixels from other applications are not published. Renderer-only captures demonstrate layout but do not prove the host mask preserves native ink.
+- Native mask verification compares scrollbar ink in renderer captures with the fixture screenshot, checking that no ink falls into the host's cutout. Include both small radii and a large-radius regression, both orientations, and top/bottom thumb positions.
+- Environment: Windows x64, 175% system scale; interaction checks include 125% page zoom. Other DPI values, mixed-DPI monitor movement, physical input-device matrices and other operating systems are outside this run's validation scope.
+
+## Final compact runtime acceptance
+
+Executable SHA-256: `ed383b6bc913e89110de401c2a3757a7e763ea824bc9e747d45496ec147bbda4`. Interaction checks: **24/24**. Runtime fallback: **2/2**. Existing offline Agent regressions: **4/4**. Native-mask image comparisons: **7/7**, with **0** native ink pixels outside the host mask. Includes radii 8/12/16/48 DIP, vertical and horizontal scrollbars, both bars, and the bottom thumb position. The isolated npm installation must use this exact executable and pass the same 24 interaction checks plus public TypeScript validation before publication.
+
+Final isolated npm installation passed: package version 45.0.0-desktop.3, executable/types/embedded checksum hashes matched, **24/24** packaged-runtime interaction checks passed, and public TypeScript smoke validation passed. ZIP SHA-256: `f1e7aa70eea8f23a616f006053c902751d7aeff477e76f80423756f1f7fea520`. Matching package/publication manifest: `D:/electron/edist-publish/desktop-release-45.0.0-desktop.3-compact/desktop-build-manifest.json`.

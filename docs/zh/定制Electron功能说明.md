@@ -851,3 +851,6 @@ NativePanel 在原有入口上增加 `item`、`iconButton`、`button.variant`、
 同一冻结测试分别运行于首次 `.9` 和修正版：基线 **15/18**，三个失败均为查看器自身标题没有 `HTCAPTION`；修正版 **18/18**。覆盖有框 BrowserWindow、无框 BrowserWindow、无框 BaseWindow + WebContentsView，使用网站信息公开入口真实点击打开证书，再执行来源与查看器的真实标题栏拖动，核对原生坐标、owner、中文标题、渲染隔离、缩放/最大化/还原、最小化/层级和导航/销毁关闭。
 
 来源拖动时查看器保持原位，在基线和修正版中都成立；原反馈“随来源窗口移动”尚未复现，不能把本次标题栏修正描述成该现象的根因修复。仅有一块 175% 缩放显示器，跨屏与混合 DPI 明确未覆盖；DevTools 的系统证书对话框属于另一实现。本次未重复执行历史核心 55 项和跨 frame 7 项，历史报告仍绑定原可执行文件。实际运行报告及对应源码随 `certificate-window-reports.zip` 提供；安装和发布另见当前 manifest。
+
+
+Compact desktop.3 refinement: use native ink clearance at the circular host boundary, preserving the upstream appearance and minimizing gaps for 8/12/16-DIP corners. Track/button backgrounds follow the rounded host mask. The previous full-radius staging bundle was superseded before public release; final verification belongs to the rebuilt package manifest.
