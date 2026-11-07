@@ -9,6 +9,7 @@ buildflag_header("buildflags") {
   header = "buildflags.h"
 
   flags = [
+    "ENABLE_DESKTOP_CUSTOMIZATIONS=$enable_desktop_customizations",
     "ENABLE_PDF_VIEWER=$enable_pdf_viewer",
     "ENABLE_ELECTRON_EXTENSIONS=$enable_electron_extensions",
     "ENABLE_BUILTIN_SPELLCHECKER=$enable_builtin_spellchecker",

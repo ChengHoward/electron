@@ -4,6 +4,8 @@
 
 #include "shell/browser/api/electron_api_web_contents_view.h"
 
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
@@ -25,6 +27,7 @@
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
 #include "shell/common/options_switches.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/hit_test.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -85,10 +88,26 @@ void WebContentsView::SetBorderRadius(int radius) {
   ApplyBorderRadius();
 }
 
+void WebContentsView::OnViewBoundsChanged(views::View* observed_view) {
+  View::OnViewBoundsChanged(observed_view);
+  ApplyBorderRadius();
+}
+
 void WebContentsView::ApplyBorderRadius() {
-  if (border_radius().has_value() && api_web_contents_ && view()->GetWidget()) {
+  if (border_radius().has_value() && api_web_contents_ && view() &&
+      view()->GetWidget()) {
     auto* view = api_web_contents_->inspectable_web_contents()->GetView();
-    view->SetCornerRadii(gfx::RoundedCornersF(border_radius().value()));
+    const auto bounds = GetBounds();
+    const int radius =
+        std::clamp(border_radius().value(), 0,
+                   std::min(bounds.width(), bounds.height()) / 2);
+    view->SetCornerRadii(gfx::RoundedCornersF(radius));
+    auto* contents = api_web_contents_->web_contents();
+    auto* preferences = contents->GetMutableRendererPrefs();
+    if (preferences->desktop_scrollbar_corner_radius != radius) {
+      preferences->desktop_scrollbar_corner_radius = radius;
+      contents->SyncRendererPrefs();
+    }
   }
 }
 

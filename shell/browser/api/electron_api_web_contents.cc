@@ -1252,6 +1252,11 @@ void WebContents::InitWithSessionAndOptions(
   inspectable_web_contents_->GetView()->SetDelegate(this);
 
   auto* prefs = web_contents()->GetMutableRendererPrefs();
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_DESKTOP_CUSTOMIZATIONS)
+  prefs->desktop_scrollbar_corner_avoidance =
+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
+          "disable-desktop-scrollbar-corner-avoidance");
+#endif
 
   // Collect preferred languages from OS and browser process. accept_languages
   // effects HTTP header, navigator.languages, and CJK fallback font selection.

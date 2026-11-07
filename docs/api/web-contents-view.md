@@ -2,6 +2,17 @@
 
 > A View that displays a WebContents.
 
+In this fork's Windows desktop builds, `view.setBorderRadius(radius)` also
+insets the main document's default scrollbars so their arrows and track avoid
+the rounded corners. The native scrollbar appearance is unchanged. Setting
+the radius to zero restores the original scrollbar layout. Author-styled
+scrollbars, nested overflow elements and iframe scrollbars retain their layout.
+This addition can be disabled before app ready with
+`app.commandLine.appendSwitch('disable-desktop-scrollbar-corner-avoidance')`;
+foundation builds must set `enable_desktop_customizations = false` in GN args.
+See the [customization development guide](../zh/定制开发编译与更新.md) for edition
+classification and required change records.
+
 Process: [Main](../glossary.md#main-process)
 
 This module cannot be used until the `ready` event of the `app`

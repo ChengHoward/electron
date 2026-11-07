@@ -1,5 +1,8 @@
 # CloudBypass Electron 定制功能说明
 
+Current editions: **cloudbypass 45.0.0-cloudbypass.2** (foundation) and **desktop 45.0.0-desktop.3** (foundation + desktop UI, Windows x64 only). Historical version sections below retain their original identifiers. New developers must read the [edition classification and mandatory change-record rules](./定制开发编译与更新.md) before changing this fork. desktop.3 addition: [WebContentsView scrollbar corner avoidance](./WebContentsView-scrollbar-corner-avoidance.md); upstream scrollbar appearance is unchanged.
+
+
 <!-- cloudbypass.11-current-start -->
 当前 Windows x64 分发目标为 `45.0.0-cloudbypass.11`。NativePanel 补齐整行 hover、原生右键菜单、活动项与输入焦点分离、原子节点更新、版本保护、布局约束与换行、固定行高虚拟列表、共享状态样式、增强编辑与文本、可访问性及运行时诊断。Acrylic 使用圆角几何裁剪，阴影独立绘制，并提供配套半透明组件表面及 `materialTint`。接口、范围、示例和验证边界见 [原生浮层](./原生浮层.md#nativepanel-11-通用能力)。本次二进制与安装验收结果记录在 `.11` 发行附件中。
 <!-- cloudbypass.11-current-end -->

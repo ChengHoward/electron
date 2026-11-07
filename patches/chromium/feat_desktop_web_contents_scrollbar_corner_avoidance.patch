@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Electron Customizations <customizations@example.invalid>
+Date: Sat, 7 Nov 2026 00:00:00 +0800
+Subject: feat: inset desktop viewport scrollbars around host corners
+
+Host-owned renderer preferences default off. Preserve upstream Fluent
+appearance; adjust native main-frame scrollbar geometry and relayout
+when the host radius changes. This is a desktop-edition enhancement.
+
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -78,6 +78,13 @@
+     return false;
+ 
+   out->hide_chrome = data.hide_chrome();
++  out->desktop_scrollbar_corner_avoidance =
++      data.desktop_scrollbar_corner_avoidance();
++  out->desktop_scrollbar_corner_radius = data.desktop_scrollbar_corner_radius();
++  if (out->desktop_scrollbar_corner_radius < 0 ||
++      out->desktop_scrollbar_corner_radius > 1000000) {
++    return false;
++  }
+ 
+   if (!data.ReadAcceptLanguages(&out->accept_languages))
+     return false;
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -70,6 +70,9 @@
+   std::string navigator_platform_override;
+   // When true, webpage script contexts must not expose window.chrome.
+   bool hide_chrome{false};
++  // Host desktop edition UI. Off for Chromium and foundation-only builds.
++  bool desktop_scrollbar_corner_avoidance{false};
++  int32_t desktop_scrollbar_corner_radius{0};
+   std::string accept_languages;
+   bool send_subresource_notification{false};
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -178,6 +178,16 @@
+     return data.navigator_platform_override;
+   }
+ 
++  static bool desktop_scrollbar_corner_avoidance(
++      const ::blink::RendererPreferences& data) {
++    return data.desktop_scrollbar_corner_avoidance;
++  }
++
++  static int32_t desktop_scrollbar_corner_radius(
++      const ::blink::RendererPreferences& data) {
++    return data.desktop_scrollbar_corner_radius;
++  }
++
+   static bool hide_chrome(const ::blink::RendererPreferences& data) {
+     return data.hide_chrome;
+   }
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -129,6 +129,8 @@
+   // When true, webpage script contexts must not expose window.chrome
+   // (Electron setUserAgent hideChrome option).
+   bool hide_chrome = false;
++  bool desktop_scrollbar_corner_avoidance = false;
++  int32 desktop_scrollbar_corner_radius = 0;
+ 
+   // The accept-languages of the browser, comma-separated.
+   string accept_languages;
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -3818,11 +3818,18 @@
+ 
+ void WebViewImpl::UpdateRendererPreferences(
+     const RendererPreferences& preferences) {
++  const bool scrollbar_geometry_changed =
++      renderer_preferences_.desktop_scrollbar_corner_radius !=
++      preferences.desktop_scrollbar_corner_radius;
+   std::string old_accept_languages = renderer_preferences_.accept_languages;
+   renderer_preferences_ = preferences;
+ 
+   if (GetPage()) {
+     GetPage()->SetRendererPreferences(preferences);
++    if (scrollbar_geometry_changed && MainFrameImpl() &&
++        MainFrameImpl()->GetFrameView()) {
++      MainFrameImpl()->GetFrameView()->SetNeedsLayout();
++    }
+   }
+ 
+   for (auto& watcher : renderer_preference_watchers_) {
+diff --git a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+--- a/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
++++ b/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+@@ -48,6 +48,7 @@
+ #include <utility>
+ 
+ #include "base/numerics/checked_math.h"
++#include "base/numerics/safe_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "cc/animation/animation_timeline.h"
+ #include "cc/base/features.h"
+@@ -1512,6 +1513,48 @@
+   UpdateScrollableAreaSet();
+ }
+ 
++namespace {
++// Use the scrollbar frame itself for avoidance: paint, compositor geometry,
++// dragging and hit testing then share one source of truth. Author scrollbars,
++// subframes and nested overflow boxes are intentionally left alone.
++int DesktopScrollbarCornerInset(const LayoutBox& box,
++                                const Scrollbar& scrollbar) {
++  const auto* frame = box.GetFrame();
++  if (!box.IsLayoutView() || !frame || !frame->IsMainFrame() ||
++      !frame->GetPage() || scrollbar.IsCustomScrollbar()) {
++    return 0;
++  }
++  const auto& prefs = frame->GetPage()->GetRendererPreferences();
++  if (!prefs.desktop_scrollbar_corner_avoidance) {
++    return 0;
++  }
++  // Layout scrollbar coordinates include device scale, not CSS page zoom.
++  return base::ClampCeil(prefs.desktop_scrollbar_corner_radius *
++                         scrollbar.ScaleFromDIP());
++}
++
++gfx::Rect AvoidDesktopScrollbarCorners(gfx::Rect rect,
++                                       int radius,
++                                       int adjacent_scrollbar,
++                                       bool vertical) {
++  if (radius <= 0) {
++    return rect;
++  }
++  const int length = vertical ? rect.height() : rect.width();
++  const int start = std::min(radius, length / 2);
++  const int end =
++      std::min(std::max(0, radius - adjacent_scrollbar), length - start);
++  if (vertical) {
++    rect.set_y(rect.y() + start);
++    rect.set_height(length - start - end);
++  } else {
++    rect.set_x(rect.x() + start);
++    rect.set_width(length - start - end);
++  }
++  return rect;
++}
++}  // namespace
++
+ gfx::Rect PaintLayerScrollableArea::RectForHorizontalScrollbar() const {
+   if (!HasHorizontalScrollbar())
+     return gfx::Rect();
+@@ -1527,12 +1570,16 @@
+                 : ResizerCornerRect(kResizerForPointer).width();
+   }
+ 
+-  return gfx::Rect(left,
+-                   border_box_size.height() - border.bottom.ToInt() -
+-                       HorizontalScrollbar()->ScrollbarThickness(),
+-                   border_box_size.width() - border.HorizontalSum().ToInt() -
+-                       scroll_corner.width(),
+-                   HorizontalScrollbar()->ScrollbarThickness());
++  gfx::Rect rect(left,
++                 border_box_size.height() - border.bottom.ToInt() -
++                     HorizontalScrollbar()->ScrollbarThickness(),
++                 border_box_size.width() - border.HorizontalSum().ToInt() -
++                     scroll_corner.width(),
++                 HorizontalScrollbar()->ScrollbarThickness());
++  return AvoidDesktopScrollbarCorners(
++      rect,
++      DesktopScrollbarCornerInset(*GetLayoutBox(), *HorizontalScrollbar()),
++      scroll_corner.width(), false);
+ }
+ 
+ gfx::Rect PaintLayerScrollableArea::RectForVerticalScrollbar() const {
+@@ -1549,10 +1596,13 @@
+           : (border_box_size.width() - border.right.ToInt() -
+              VerticalScrollbar()->ScrollbarThickness());
+ 
+-  return gfx::Rect(left, border.top.ToInt(),
+-                   VerticalScrollbar()->ScrollbarThickness(),
+-                   border_box_size.height() - border.VerticalSum().ToInt() -
+-                       scroll_corner.height());
++  gfx::Rect rect(left, border.top.ToInt(),
++                 VerticalScrollbar()->ScrollbarThickness(),
++                 border_box_size.height() - border.VerticalSum().ToInt() -
++                     scroll_corner.height());
++  return AvoidDesktopScrollbarCorners(
++      rect, DesktopScrollbarCornerInset(*GetLayoutBox(), *VerticalScrollbar()),
++      scroll_corner.height(), true);
+ }
+ 
+ gfx::Vector2d PaintLayerScrollableArea::ScrollbarOffset(

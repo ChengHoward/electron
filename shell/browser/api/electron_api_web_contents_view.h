@@ -61,6 +61,7 @@ class WebContentsView : public View,
   // views::ViewObserver
   void OnViewAddedToWidget(views::View* view) override;
   void OnViewRemovedFromWidget(views::View* view) override;
+  void OnViewBoundsChanged(views::View* view) override;
 
   // NativeWindowObserver
   void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) override;
